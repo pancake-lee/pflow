@@ -212,10 +212,9 @@ bin/pflow  (Go 二进制，内含前端静态资源)
 | Claude | `busy` | 🟢 | true |
 | Claude | `waiting` | 🟡 | true |
 | Claude | `idle` | ⚪ | true |
-| Claude | `unknown` | ⚫ | false |
+| Claude | `inactive` | ⚫ | false |
 | Hermes | running | 🟢 | true |
-| Hermes | suspended | 🟡 | false |
-| Hermes | completed (dump-only) | ⚫ | false |
+| Hermes | inactive | ⚫ | false |
 
 **CLI 子命令**：
 

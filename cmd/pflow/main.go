@@ -63,7 +63,7 @@ Run 'pflow <command> -h' for detailed flags.`)
 func runStatusCmd(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	windowStr := fs.String("window", "1d", "Time window (e.g. 1h, 3h, 1d, 2d)")
-	maxInactive := fs.Int("max-inactive", 0, "Max inactive (unknown/completed) sessions per project (0=all)")
+	maxInactive := fs.Int("max-inactive", 1, "Max inactive sessions per project (0=all)")
 	fs.Parse(args)
 
 	window, err := config.ParseWindow(*windowStr)
@@ -207,7 +207,7 @@ func runStatus(window time.Duration, maxInactive int) {
 	// Footer
 	fmt.Println(strings.Repeat("─", 70))
 	fmt.Printf("%d sessions\n", totalSessions)
-	fmt.Println("🟢 busy  🟡 waiting  ⚪ idle  ⚫ completed/unknown")
+	fmt.Println("🟢 busy  🟡 waiting  ⚪ idle  ⚫ inactive")
 	if maxInactive > 0 {
 		fmt.Printf("(inactive limited to %d per project)\n", maxInactive)
 	}

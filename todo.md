@@ -44,6 +44,14 @@
 - [x] 空状态设计：无 session 时的引导提示
 - [x] 错误状态：API 不可用时的 NAlert 提示
 - [x] Loading 状态：NSpin 包裹
+- [x] Go embed：`//go:embed web/dist/*` 将前端打包进 Go binary，`pflow serve` 单文件部署
+- [x] `max_inactive` 排序稳定性：inactive session 按 LastActive 降序排列后再截断，确保输出稳定
+- [x] Hermes 红绿灯修复：API `status` 字段使用纯文本（不再含 emoji 前缀），前端统一拼接 `traffic_light + status`
+- [x] 状态统一：Claude `unknown` + Hermes `suspended`/`completed` → 统一为 `inactive`（⚫）
+- [x] 侧边栏可调宽度：拖拽手柄调整，min 1/4 屏幕、max 3/4 屏幕
+- [x] 侧边栏完整内容：新增 `last_req_full`/`last_resp_full` 字段贯穿全链路，抽屉展示完整文本；表格保持 15 字截断
+- [x] `max_inactive` 默认值改为 1（CLI + Web 同步）
+- [x] `CLAUDE.md` 规则：禁止直接 `go build`，必须通过 `make build`
 - [ ] 响应式布局：桌面端为主，平板可用（暂未严格测试）
 
 ## P2 — 锦上添花

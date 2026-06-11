@@ -23,8 +23,10 @@ type DashboardEntry struct {
 	TrafficLight string    `json:"traffic_light"`
 	Name         string    `json:"name"`
 	LastActive   time.Time `json:"last_active"`
-	LastReq      string    `json:"last_req"`
-	LastResp     string    `json:"last_resp"`
+	LastReq      string    `json:"last_req"`       // truncated ~15 chars for table
+	LastResp     string    `json:"last_resp"`       // truncated ~15 chars for table
+	LastReqFull  string    `json:"last_req_full"`   // full text for detail view
+	LastRespFull string    `json:"last_resp_full"`  // full text for detail view
 	Platform     string    `json:"platform,omitempty"` // Hermes only
 }
 
@@ -122,6 +124,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				LastActive:   s.LastActive,
 				LastReq:      s.LastReq,
 				LastResp:     s.LastResp,
+				LastReqFull:  s.LastReqFull,
+				LastRespFull: s.LastRespFull,
 			})
 		}
 	}
@@ -136,13 +140,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				SessionID:    s.SessionID,
 				AgentType:    "hermes",
 				Project:      s.Project,
-				Status:       s.StatusLabel(),
+				Status:       hermesRawStatus(s),
 				IsActive:     s.IsActive(),
 				TrafficLight: s.TrafficLight(),
 				Name:         s.Name,
 				LastActive:   s.LastActive,
 				LastReq:      s.LastReq,
 				LastResp:     s.LastResp,
+				LastReqFull:  s.LastReqFull,
+				LastRespFull: s.LastRespFull,
 				Platform:     s.Platform,
 			})
 		}
@@ -178,4 +184,17 @@ func parseQueryParams(r *http.Request) config.ScanOptions {
 	}
 
 	return opts
+}
+
+// hermesRawStatus returns a raw status string for a Hermes session,
+// without the traffic-light emoji prefix. The frontend constructs the
+// display from the separate traffic_light + status fields.
+func hermesRawStatus(s hermes.SessionSummary) string {
+	if !s.IsGatewayTracked {
+		return "inactive"
+	}
+	if s.IsSuspended {
+		return "inactive"
+	}
+	return "running"
 }

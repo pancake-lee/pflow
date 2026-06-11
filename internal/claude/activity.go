@@ -46,12 +46,14 @@ type SessionSummary struct {
 	FirstActive  time.Time
 	LastActive   time.Time
 	Name         string // session title or first user message (first ~15 chars)
-	LastReq      string // first ~15 chars of latest user message
-	LastResp     string // first ~15 chars of latest assistant text response
+	LastReq      string // first ~15 chars of latest user message (for table)
+	LastResp     string // first ~15 chars of latest assistant text response (for table)
+	LastReqFull  string // full text of latest user message (for detail view)
+	LastRespFull string // full text of latest assistant response (for detail view)
 }
 
 // IsActive returns true if the session is in an active state (busy, waiting, or idle).
-// Unknown sessions (no metadata file) are considered inactive.
+// All other states (unknown / no metadata) are considered inactive.
 func (s SessionSummary) IsActive() bool {
 	switch s.Status {
 	case "busy", "waiting", "idle":
@@ -86,7 +88,7 @@ func (s SessionSummary) StatusLabel() string {
 	case "idle":
 		return light + " idle"
 	default:
-		return light + " " + s.Status
+		return light + " inactive"
 	}
 }
 
@@ -136,6 +138,8 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 		if t, ok := transcripts[agg[i].SessionID]; ok {
 			agg[i].LastReq = t.lastReq
 			agg[i].LastResp = t.lastResp
+			agg[i].LastReqFull = t.lastReqFull
+			agg[i].LastRespFull = t.lastRespFull
 		}
 	}
 
@@ -311,8 +315,10 @@ func aggregate(metas map[string]*SessionMeta, history []HistoryEntry) []SessionS
 // transcriptInfo holds the last user request and assistant response extracted
 // from a Claude Code transcript file (~/.claude/projects/.../<session>.jsonl).
 type transcriptInfo struct {
-	lastReq  string
-	lastResp string
+	lastReq     string // truncated (15 chars) for table display
+	lastResp    string // truncated (15 chars) for table display
+	lastReqFull string // full text for detail view
+	lastRespFull string // full text for detail view
 }
 
 // readTranscripts scans ~/.claude/projects/ for transcript files and extracts
@@ -354,7 +360,7 @@ func parseTranscriptFile(path string) *transcriptInfo {
 	}
 	defer f.Close()
 
-	var lastUser, lastAssistant string
+	var lastUser, lastUserFull, lastAssistant, lastAssistantFull string
 
 	for ev := range ParseEvents(f) {
 		switch ev.Type {
@@ -366,6 +372,7 @@ func parseTranscriptFile(path string) *transcriptInfo {
 			text := ue.Text()
 			if text != "" {
 				lastUser = truncateText(text, 15)
+				lastUserFull = text
 			}
 		case "assistant":
 			ae, err := ev.ParseAssistant()
@@ -375,6 +382,7 @@ func parseTranscriptFile(path string) *transcriptInfo {
 			text := ae.Text()
 			if text != "" {
 				lastAssistant = truncateText(text, 15)
+				lastAssistantFull = text
 			}
 		}
 	}
@@ -384,8 +392,10 @@ func parseTranscriptFile(path string) *transcriptInfo {
 	}
 
 	return &transcriptInfo{
-		lastReq:  lastUser,
-		lastResp: lastAssistant,
+		lastReq:      lastUser,
+		lastResp:     lastAssistant,
+		lastReqFull:  lastUserFull,
+		lastRespFull: lastAssistantFull,
 	}
 }
 
@@ -434,7 +444,11 @@ func applyMaxInactive(summaries []SessionSummary, maxInactive int) []SessionSumm
 		g := groups[proj]
 		// Keep all active sessions
 		result = append(result, g.active...)
-		// Keep at most maxInactive inactive sessions (already sorted by LastActive desc)
+		// Sort inactive by LastActive descending, then keep only maxInactive most recent.
+		// Without sorting, map iteration order makes the truncated result non-deterministic.
+		sort.Slice(g.inactive, func(i, j int) bool {
+			return g.inactive[i].LastActive.After(g.inactive[j].LastActive)
+		})
 		if len(g.inactive) > maxInactive {
 			g.inactive = g.inactive[:maxInactive]
 		}

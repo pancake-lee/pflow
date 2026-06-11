@@ -10,8 +10,10 @@ export interface DashboardEntry {
   traffic_light: string
   name: string
   last_active: string // ISO 8601
-  last_req: string
-  last_resp: string
+  last_req: string        // truncated ~15 chars for table
+  last_resp: string       // truncated ~15 chars for table
+  last_req_full?: string  // full text for detail view
+  last_resp_full?: string // full text for detail view
   platform?: string // Hermes only
 }
 

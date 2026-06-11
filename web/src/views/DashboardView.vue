@@ -53,7 +53,7 @@ const windowOptions = [
   { label: '7 days', value: '7d' },
 ]
 const selectedWindow = ref('1d')
-const maxInactive = ref(0)
+const maxInactive = ref(1)
 const agentFilter = ref<AgentFilter>('all')
 const refreshInterval = ref<RefreshInterval>(30)
 
@@ -74,6 +74,35 @@ const refreshOptions = [
 const showDetail = ref(false)
 const selectedSession = ref<DashboardEntry | null>(null)
 
+// Resizable drawer: min 1/4 screen, max 3/4 screen
+const drawerWidth = ref(Math.max(480, Math.floor(window.innerWidth / 4)))
+const minDrawerWidth = computed(() => Math.floor(window.innerWidth / 4))
+const maxDrawerWidth = computed(() => Math.floor(window.innerWidth * 3 / 4))
+
+function startResize(e: MouseEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startWidth = drawerWidth.value
+
+  function onMove(ev: MouseEvent) {
+    const delta = startX - ev.clientX // moving left = wider drawer
+    const newWidth = startWidth + delta
+    drawerWidth.value = Math.min(maxDrawerWidth.value, Math.max(minDrawerWidth.value, newWidth))
+  }
+
+  function onUp() {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
 // ── Derived ──────────────────────────────────────────────────────
 
 const scanOpts = computed<ScanOptions>(() => ({
@@ -92,7 +121,7 @@ const stats = computed(() => {
   return {
     total: sessions.length,
     active: sessions.filter((s) => s.is_active).length,
-    waiting: sessions.filter((s) => s.status === 'waiting' || s.status === 'suspended').length,
+    waiting: sessions.filter((s) => s.status === 'waiting').length,
     idle: sessions.filter((s) => s.status === 'idle').length,
   }
 })
@@ -202,7 +231,7 @@ const columns: DataTableColumns<DashboardEntry> = [
     width: 180,
     ellipsis: { tooltip: true },
     render(row) {
-      return h('span', escapeNewlines(truncate(row.last_req, 30)) || '—')
+      return h('span', escapeNewlines(truncate(row.last_req, 15)) || '—')
     },
   },
   {
@@ -211,7 +240,7 @@ const columns: DataTableColumns<DashboardEntry> = [
     width: 180,
     ellipsis: { tooltip: true },
     render(row) {
-      return h('span', escapeNewlines(truncate(row.last_resp, 30)) || '—')
+      return h('span', escapeNewlines(truncate(row.last_resp, 15)) || '—')
     },
   },
 ]
@@ -301,7 +330,7 @@ function rowProps(row: DashboardEntry) {
               @update:value="refresh"
             />
 
-            <span class="filter-label">Max Inactive:</span>
+            <span class="filter-label">Inactive:</span>
             <NInputNumber
               v-model:value="maxInactive"
               size="small"
@@ -359,14 +388,16 @@ function rowProps(row: DashboardEntry) {
     <NLayoutFooter bordered>
       <div class="footer">
         <span>{{ stats.total }} sessions</span>
-        <span>🟢 busy/running &nbsp; 🟡 waiting/suspended &nbsp; ⚪ idle &nbsp; ⚫ completed/unknown</span>
+        <span>🟢 busy/running &nbsp; 🟡 waiting &nbsp; ⚪ idle &nbsp; ⚫ inactive</span>
         <span v-if="maxInactive > 0">(inactive limited to {{ maxInactive }} per project)</span>
       </div>
     </NLayoutFooter>
 
     <!-- Session Detail Drawer -->
-    <NDrawer v-model:show="showDetail" width="480" placement="right">
+    <NDrawer v-model:show="showDetail" :width="drawerWidth" placement="right">
       <NDrawerContent v-if="selectedSession" title="Session Detail" closable>
+        <!-- Resize handle on left edge -->
+        <div class="resize-handle" @mousedown="startResize"></div>
         <NDescriptions label-placement="left" :column="1" bordered size="small">
           <NDescriptionsItem label="Session ID">
             <code>{{ selectedSession.session_id }}</code>
@@ -404,10 +435,10 @@ function rowProps(row: DashboardEntry) {
             &nbsp;({{ formatSince(selectedSession.last_active) }})
           </NDescriptionsItem>
           <NDescriptionsItem label="Last Req">
-            <div class="detail-text">{{ selectedSession.last_req || '—' }}</div>
+            <div class="detail-text">{{ selectedSession.last_req_full || selectedSession.last_req || '—' }}</div>
           </NDescriptionsItem>
           <NDescriptionsItem label="Last Resp">
-            <div class="detail-text">{{ selectedSession.last_resp || '—' }}</div>
+            <div class="detail-text">{{ selectedSession.last_resp_full || selectedSession.last_resp || '—' }}</div>
           </NDescriptionsItem>
           <NDescriptionsItem v-if="selectedSession.platform" label="Platform">
             {{ selectedSession.platform }}
@@ -519,12 +550,28 @@ function rowProps(row: DashboardEntry) {
 
 /* Detail drawer text */
 .detail-text {
-  max-height: 120px;
+  max-height: 200px;
   overflow-y: auto;
   white-space: pre-wrap;
   font-size: 13px;
   line-height: 1.5;
   color: var(--n-text-color-2);
   word-break: break-all;
+}
+
+/* Resizable drawer handle */
+.resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 10;
+  transition: background-color 0.15s;
+}
+
+.resize-handle:hover {
+  background: var(--n-color-target);
 }
 </style>

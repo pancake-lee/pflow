@@ -77,8 +77,10 @@ type SessionSummary struct {
 	FirstActive      time.Time
 	LastActive       time.Time
 	Name             string // session title or first user message (first ~15 chars)
-	LastReq          string // first ~15 chars of latest user message
-	LastResp         string // first ~15 chars of latest assistant response
+	LastReq          string // first ~15 chars of latest user message (for table)
+	LastResp         string // first ~15 chars of latest assistant response (for table)
+	LastReqFull      string // full text of latest user message (for detail view)
+	LastRespFull     string // full text of latest assistant response (for detail view)
 }
 
 // ScanResult holds the full scan output for Hermes.
@@ -210,6 +212,7 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 			LastActive:  ds.LastActive,
 			Name:        dumpName,
 			LastReq:     ds.LastReq,
+			LastReqFull: ds.LastReqFull,
 		})
 	}
 
@@ -268,7 +271,8 @@ type dumpFileInfo struct {
 	Platform    string // "cli" or "cron"
 	FirstActive time.Time
 	LastActive  time.Time
-	LastReq     string // first ~15 chars of user message extracted from body
+	LastReq     string // first ~15 chars of user message (for table)
+	LastReqFull string // full text of user message (for detail view)
 	Project     string // working directory from system prompt
 }
 
@@ -309,6 +313,7 @@ func scanDumpFiles(hd string, cutoff time.Time) []dumpFileInfo {
 		meta := readDumpMeta(filepath.Join(dir, e.Name()))
 		if meta != nil {
 			di.LastReq = truncateRunes(meta.userMsg, 15)
+				di.LastReqFull = meta.userMsg
 			if meta.cwd != "" && meta.cwd != "/" {
 				di.Project = meta.cwd
 			}
@@ -450,7 +455,7 @@ func parseDumpFilename(name string, modTime time.Time) *dumpFileInfo {
 }
 
 // IsActive returns true if the session is actively tracked by the gateway and running.
-// Suspended and completed (dump-only) sessions are considered inactive.
+// Suspended and dump-only sessions are both mapped to inactive.
 func (s SessionSummary) IsActive() bool {
 	return s.IsGatewayTracked && !s.IsSuspended
 }
@@ -461,7 +466,7 @@ func (s SessionSummary) TrafficLight() string {
 		return "⚫"
 	}
 	if s.IsSuspended {
-		return "🟡"
+		return "⚫"
 	}
 	return "🟢"
 }
@@ -470,10 +475,10 @@ func (s SessionSummary) TrafficLight() string {
 func (s SessionSummary) StatusLabel() string {
 	light := s.TrafficLight()
 	if !s.IsGatewayTracked {
-		return light + " completed"
+		return light + " inactive"
 	}
 	if s.IsSuspended {
-		return light + " suspended"
+		return light + " inactive"
 	}
 	return light + " running"
 }
@@ -588,6 +593,11 @@ func applyHermesMaxInactive(summaries []SessionSummary, maxInactive int) []Sessi
 	for _, proj := range projOrder {
 		g := groups[proj]
 		result = append(result, g.active...)
+		// Sort inactive by LastActive descending, then keep only maxInactive most recent.
+		// Without sorting, map iteration order makes the truncated result non-deterministic.
+		sort.Slice(g.inactive, func(i, j int) bool {
+			return g.inactive[i].LastActive.After(g.inactive[j].LastActive)
+		})
 		if len(g.inactive) > maxInactive {
 			g.inactive = g.inactive[:maxInactive]
 		}

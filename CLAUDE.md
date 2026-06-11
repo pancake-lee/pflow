@@ -20,6 +20,7 @@ make run          # 构建并启动完整服务
 - `//go:embed` 指令在项目根 `embed.go`，由 `cmd/pflow/main.go` 引用
 - `make build` 会先 `npm run build` 生成 `web/dist/`，再 `go build` 嵌入二进制
 - 编译产物只输出到 `bin/` 目录，不污染项目根
+- **禁止直接使用 `go build` 编译**，必须通过 `make build`，因为前端构建是编译的前置步骤，直接 `go build` 会嵌入过时的前端资源
 
 ## 工作规则
 
