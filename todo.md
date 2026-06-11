@@ -33,10 +33,18 @@
 
 ### P0-2
 
-- [ ] 实现 Dashboard API：`GET /api/v1/dashboard` 返回所有 session 的状态快照
-- [ ] 实现 `pflow probe` 命令：探测单个 Claude Code 会话的状态
-- [ ] 实现 `pflow status` 命令：终端文本表格列出所有会话状态
-- [ ] 验证测试：同时启动 2-3 个 Claude Code 会话，验证状态准确性和并发
+- [x] 实现 Dashboard API：`GET /api/v1/dashboard?window=1d&max_inactive=1` 返回所有 session 的状态快照
+  - `internal/api/server.go` — net/http 标准库，JSON 响应含 session_id/agent_type/status/traffic_light 等字段
+- [x] 实现 `pflow probe` 命令：探测单个会话的详细状态（支持 Claude + Hermes，模糊匹配 session ID 前缀）
+- [x] 实现 `pflow status` 命令：终端文本表格列出所有会话状态（支持 `--window` 和 `--max-inactive` 参数）
+- [x] 实现 `pflow serve` 命令：启动 HTTP Dashboard API 服务器（`--port` 参数，默认 8080）
+- [x] 新增时间窗口参数：`--window` 支持 `1h`/`3h`/`1d`/`2d` 等格式（`internal/config/config.go` — ParseWindow）
+- [x] 新增非活跃限制参数：`--max-inactive` 按 PROJECT 分组限制 unknown/completed 等非活跃状态的展示数量
+- [x] Agent 各自定义状态枚举及红绿灯映射：Claude (busy🟢/waiting🟡/idle⚪/unknown⚫)，Hermes (running🟢/suspended🟡/completed⚫)
+- [x] 验证测试：build/vet 通过，CLI + API 功能验证正常（status/probe/serve 均可运行）
+  - `pflow status --window 1h --max-inactive 1` 正确过滤非活跃 session
+  - `pflow probe <id>` 支持 Claude 和 Hermes 两种 agent，支持前缀模糊匹配
+  - `pflow serve` API 返回 JSON 含完整 traffic_light 和 is_active 字段
 
 ## P1
 

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pancake-lee/pflow/internal/config"
 )
 
 // SessionMeta is the JSON structure in ~/.claude/sessions/<pid>.json.
@@ -37,7 +39,7 @@ type HistoryEntry struct {
 type SessionSummary struct {
 	SessionID    string
 	Project      string
-	Status       string // from session metadata (busy/waiting/idle)
+	Status       string // from session metadata (busy/waiting/idle/unknown)
 	PID          int    // 0 if session file not present or process not found
 	IsRunning    bool   // whether the PID from session metadata is alive
 	MessageCount int    // number of history entries in the active window
@@ -46,6 +48,46 @@ type SessionSummary struct {
 	Name         string // session title or first user message (first ~15 chars)
 	LastReq      string // first ~15 chars of latest user message
 	LastResp     string // first ~15 chars of latest assistant text response
+}
+
+// IsActive returns true if the session is in an active state (busy, waiting, or idle).
+// Unknown sessions (no metadata file) are considered inactive.
+func (s SessionSummary) IsActive() bool {
+	switch s.Status {
+	case "busy", "waiting", "idle":
+		return true
+	default:
+		return false
+	}
+}
+
+// TrafficLight returns the traffic-light icon for the session's status.
+func (s SessionSummary) TrafficLight() string {
+	switch s.Status {
+	case "busy":
+		return "🟢"
+	case "waiting":
+		return "🟡"
+	case "idle":
+		return "⚪"
+	default:
+		return "⚫"
+	}
+}
+
+// StatusLabel returns a human-readable status with traffic light.
+func (s SessionSummary) StatusLabel() string {
+	light := s.TrafficLight()
+	switch s.Status {
+	case "busy":
+		return light + " busy"
+	case "waiting":
+		return light + " waiting"
+	case "idle":
+		return light + " idle"
+	default:
+		return light + " " + s.Status
+	}
 }
 
 // ScanResult holds the full scan output.
@@ -66,15 +108,15 @@ func claudeDir() (string, error) {
 }
 
 // Scan reads Claude Code's local data and returns summaries for sessions
-// that were active within the given window (e.g. 24 hours).
-func Scan(activeWindow time.Duration) (*ScanResult, error) {
+// that were active within the configured window.
+func Scan(opts config.ScanOptions) (*ScanResult, error) {
 	cd, err := claudeDir()
 	if err != nil {
 		return nil, err
 	}
 
 	now := time.Now()
-	cutoff := now.Add(-activeWindow)
+	cutoff := now.Add(-opts.Window)
 
 	// Read session metadata files
 	sessionMetas := readSessionMetas(cd)
@@ -97,13 +139,16 @@ func Scan(activeWindow time.Duration) (*ScanResult, error) {
 		}
 	}
 
+	// Apply max-inactive filter per project
+	agg = applyMaxInactive(agg, opts.MaxInactive)
+
 	// Sort by last active time (most recent first)
 	sort.Slice(agg, func(i, j int) bool {
 		return agg[i].LastActive.After(agg[j].LastActive)
 	})
 
 	return &ScanResult{
-		ActiveWindow: activeWindow,
+		ActiveWindow: opts.Window,
 		Cutoff:       cutoff,
 		Now:          now,
 		Sessions:     agg,
@@ -352,4 +397,49 @@ func isProcessAlive(pid int) bool {
 	}
 	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
 	return err == nil
+}
+
+// applyMaxInactive limits the number of inactive sessions per project.
+// Active sessions are always kept; inactive (unknown) sessions are limited
+// to maxInactive per project (the most recent ones). If maxInactive is 0,
+// all sessions are kept.
+func applyMaxInactive(summaries []SessionSummary, maxInactive int) []SessionSummary {
+	if maxInactive <= 0 {
+		return summaries
+	}
+
+	// Group by project
+	type group struct {
+		active   []SessionSummary
+		inactive []SessionSummary
+	}
+	groups := make(map[string]*group)
+	var projOrder []string
+
+	for _, s := range summaries {
+		proj := s.Project
+		if _, ok := groups[proj]; !ok {
+			groups[proj] = &group{}
+			projOrder = append(projOrder, proj)
+		}
+		if s.IsActive() {
+			groups[proj].active = append(groups[proj].active, s)
+		} else {
+			groups[proj].inactive = append(groups[proj].inactive, s)
+		}
+	}
+
+	var result []SessionSummary
+	for _, proj := range projOrder {
+		g := groups[proj]
+		// Keep all active sessions
+		result = append(result, g.active...)
+		// Keep at most maxInactive inactive sessions (already sorted by LastActive desc)
+		if len(g.inactive) > maxInactive {
+			g.inactive = g.inactive[:maxInactive]
+		}
+		result = append(result, g.inactive...)
+	}
+
+	return result
 }

@@ -128,3 +128,43 @@
   - weixin/cron session → `/`（无意义，回退 platform 名）✅ 已实现
 - cron job 配置中 `workdir` 字段为 `null`（当前未使用），后续若 cron 配置了 workdir 可优先使用
 - assistant 回复内容在 `state.db` SQLite 中（`messages` 表），Last Resp 暂未接入（见 backlog P2）
+
+### P0-2 实现：Dashboard API + CLI 子命令 + 参数化查询（2026-06-11）
+
+**新增/修改文件**：
+
+| 文件 | 功能 |
+|------|------|
+| `internal/config/config.go` | `ScanOptions` 配置类型、`ParseWindow()` 解析 `1h`/`3h`/`1d` 等时间窗口 |
+| `internal/api/server.go` | HTTP API 服务器，`GET /api/v1/dashboard?window=1d&max_inactive=1` |
+| `cmd/pflow/main.go` | CLI 子命令重构：`status`/`probe`/`serve` + flags |
+| `internal/claude/activity.go` | 新增 `IsActive()`/`TrafficLight()`/`StatusLabel()` 方法，`Scan()` 接受 `ScanOptions` |
+| `internal/hermes/activity.go` | 同上，字段 `IsActive` → `IsGatewayTracked`（避免与方法名冲突） |
+
+**状态枚举与红绿灯映射**：
+
+| Agent | 状态 | 红绿灯 | IsActive |
+|-------|------|--------|----------|
+| Claude | `busy` | 🟢 | true |
+| Claude | `waiting` | 🟡 | true |
+| Claude | `idle` | ⚪ | true |
+| Claude | `unknown` | ⚫ | false |
+| Hermes | running | 🟢 | true |
+| Hermes | suspended | 🟡 | false |
+| Hermes | completed (dump-only) | ⚫ | false |
+
+**CLI 子命令**：
+
+| 命令 | 说明 | 参数 |
+|------|------|------|
+| `pflow` (无参数) | 等同于 `pflow status`，使用默认值 | — |
+| `pflow status` | 终端表格展示所有 session | `--window 1d`、`--max-inactive 0` |
+| `pflow probe <id>` | 探测单个 session 详细状态 | session ID 或前缀（支持 Claude + Hermes） |
+| `pflow serve` | 启动 HTTP API 服务器 | `--port 8080` |
+
+**max_inactive 过滤逻辑**：
+- 按 PROJECT 分组，active session 全部保留，inactive 仅保留最近 N 个
+- `max_inactive=0` 表示不限制（展示全部）
+- 适用于两个 agent 类型，各自使用自己的 `IsActive()` 判断
+
+**ParseWindow 支持格式**：`30s`、`90m`、`3h`、`1d`、`2d6h`、`1w`、`90`（裸数字=小时），以及 Go 标准 `time.ParseDuration` 格式

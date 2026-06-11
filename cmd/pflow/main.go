@@ -1,23 +1,85 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
+	"github.com/pancake-lee/pflow/internal/api"
 	"github.com/pancake-lee/pflow/internal/claude"
+	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
 )
 
 func main() {
-	window := 24 * time.Hour
+	if len(os.Args) < 2 {
+		// Default: status with defaults
+		runStatus(config.DefaultWindow, config.DefaultMaxInactive)
+		return
+	}
+
+	switch os.Args[1] {
+	case "status":
+		runStatusCmd(os.Args[2:])
+	case "probe":
+		runProbeCmd(os.Args[2:])
+	case "serve":
+		runServeCmd(os.Args[2:])
+	case "help", "-h", "--help":
+		printUsage()
+	default:
+		fmt.Fprintf(os.Stderr, "pflow: unknown command %q\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "Run 'pflow help' for usage.\n")
+		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Println(`pflow — Multi-Agent Attention Manager
+
+Usage:
+  pflow [command] [flags]
+
+Commands:
+  status   Show agent activity dashboard (default if no command given)
+  probe    Probe a single session's detailed state
+  serve    Start HTTP Dashboard API server
+  help     Show this help
+
+Run 'pflow <command> -h' for detailed flags.`)
+}
+
+// ── status ──────────────────────────────────────────────────────────
+
+func runStatusCmd(args []string) {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	windowStr := fs.String("window", "1d", "Time window (e.g. 1h, 3h, 1d, 2d)")
+	maxInactive := fs.Int("max-inactive", 0, "Max inactive (unknown/completed) sessions per project (0=all)")
+	fs.Parse(args)
+
+	window, err := config.ParseWindow(*windowStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pflow: invalid window: %v\n", err)
+		os.Exit(1)
+	}
+
+	runStatus(window, *maxInactive)
+}
+
+func runStatus(window time.Duration, maxInactive int) {
+	opts := config.ScanOptions{Window: window, MaxInactive: maxInactive}
 
 	// Scan Claude Code sessions
-	claudeResult, claudeErr := claude.Scan(window)
+	claudeResult, claudeErr := claude.Scan(opts)
 	// Scan Hermes sessions
-	hermesResult, hermesErr := hermes.Scan(window)
+	hermesResult, hermesErr := hermes.Scan(opts)
 
 	// Handle total failure
 	if claudeErr != nil && hermesErr != nil {
@@ -39,7 +101,7 @@ func main() {
 		fmt.Fprintln(w, "SESSION ID\tPROJECT\tSTATUS\tNAME\tLAST ACTIVE\tLAST REQ\tLAST RESP")
 
 		for _, s := range claudeResult.Sessions {
-			status := formatClaudeStatus(s)
+			status := s.StatusLabel()
 			project := s.Project
 			if project == "" {
 				project = "?"
@@ -84,7 +146,7 @@ func main() {
 	} else if claudeErr != nil {
 		fmt.Printf("── Claude Code: %v ──────────────────────────────\n\n", claudeErr)
 	} else {
-		fmt.Println("── Claude Code: no active sessions ─────────────────────────────────")
+		fmt.Println("── Claude Code: no recent sessions ─────────────────────────────────")
 	}
 
 	// ── Hermes Agent ──────────────────────────────────────────────
@@ -137,32 +199,126 @@ func main() {
 	} else if hermesErr != nil {
 		fmt.Printf("── Hermes Agent: %v ─────────────────────────────────\n\n", hermesErr)
 	} else {
-		fmt.Println("── Hermes Agent: no active sessions ─────────────────────────────────")
+		fmt.Println("── Hermes Agent: no recent sessions ─────────────────────────────────")
 	}
 
 	// Footer
 	fmt.Println(strings.Repeat("─", 70))
-	fmt.Printf("%d active sessions total\n", totalSessions)
-	fmt.Println("🟢 busy  🟡 waiting  ⚪ idle  ▶ running  ⏸ suspended")
+	fmt.Printf("%d sessions\n", totalSessions)
+	fmt.Println("🟢 busy  🟡 waiting  ⚪ idle  ⚫ completed/unknown")
+	if maxInactive > 0 {
+		fmt.Printf("(inactive limited to %d per project)\n", maxInactive)
+	}
 }
 
-func formatClaudeStatus(s claude.SessionSummary) string {
-	icon := "?"
-	switch s.Status {
-	case "busy":
-		icon = "🟢 busy"
-	case "waiting":
-		icon = "🟡 waiting"
-	case "idle":
-		icon = "⚪ idle"
-	default:
-		icon = "? " + s.Status
+// ── probe ───────────────────────────────────────────────────────────
+
+func runProbeCmd(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "pflow probe: missing session ID")
+		fmt.Fprintln(os.Stderr, "Usage: pflow probe <session-id>")
+		os.Exit(1)
 	}
-	if s.IsRunning {
-		icon += " ●"
+	sessionID := args[0]
+
+	// Scan both agents with a wide window to find the session
+	opts := config.ScanOptions{Window: 30 * 24 * time.Hour, MaxInactive: 0}
+
+	found := false
+
+	// Check Claude Code
+	claudeResult, _ := claude.Scan(opts)
+	for _, s := range claudeResult.Sessions {
+		if s.SessionID == sessionID || strings.HasPrefix(s.SessionID, sessionID) {
+			printClaudeProbe(s)
+			found = true
+		}
 	}
-	return icon
+
+	// Check Hermes
+	hermesResult, _ := hermes.Scan(opts)
+	for _, s := range hermesResult.Sessions {
+		if s.SessionID == sessionID || strings.HasPrefix(s.SessionID, sessionID) {
+			printHermesProbe(s, hermesResult.GatewayAlive)
+			found = true
+		}
+	}
+
+	if !found {
+		fmt.Printf("Session %q not found.\n", sessionID)
+		os.Exit(1)
+	}
 }
+
+func printClaudeProbe(s claude.SessionSummary) {
+	fmt.Println("── Claude Code Session ──────────────────────────────────────────────")
+	fmt.Printf("  Session ID:  %s\n", s.SessionID)
+	fmt.Printf("  Project:     %s\n", s.Project)
+	fmt.Printf("  Status:      %s\n", s.StatusLabel())
+	fmt.Printf("  PID:         %d", s.PID)
+	if s.IsRunning {
+		fmt.Print(" (alive)")
+	} else if s.PID > 0 {
+		fmt.Print(" (dead)")
+	}
+	fmt.Println()
+	fmt.Printf("  Name:        %s\n", s.Name)
+	fmt.Printf("  Messages:    %d (in window)\n", s.MessageCount)
+	fmt.Printf("  First:       %s\n", formatTime(s.FirstActive))
+	fmt.Printf("  Last:        %s (%s)\n", formatTime(s.LastActive), formatSince(s.LastActive))
+	fmt.Printf("  Last Req:    %s\n", s.LastReq)
+	fmt.Printf("  Last Resp:   %s\n", s.LastResp)
+	fmt.Println()
+}
+
+func printHermesProbe(s hermes.SessionSummary, gatewayAlive bool) {
+	fmt.Println("── Hermes Session ───────────────────────────────────────────────────")
+	fmt.Printf("  Session ID:  %s\n", s.SessionID)
+	fmt.Printf("  Platform:    %s %s\n", s.PlatformIcon(), s.Platform)
+	fmt.Printf("  Project:     %s\n", s.Project)
+	fmt.Printf("  Status:      %s (gateway: %v)\n", s.StatusLabel(), gatewayAlive)
+	fmt.Printf("  Name:        %s\n", s.Name)
+	if s.DisplayName != "" && s.DisplayName != s.Name {
+		fmt.Printf("  Display:     %s\n", s.DisplayName)
+	}
+	fmt.Printf("  ChatType:    %s\n", s.ChatType)
+	fmt.Printf("  Tokens:      in=%d out=%d total=%d\n", s.InputTokens, s.OutputTokens, s.InputTokens+s.OutputTokens)
+	fmt.Printf("  First:       %s\n", formatTime(s.FirstActive))
+	fmt.Printf("  Last:        %s (%s)\n", formatTime(s.LastActive), formatSince(s.LastActive))
+	fmt.Printf("  Last Req:    %s\n", s.LastReq)
+	fmt.Printf("  Last Resp:   %s\n", s.LastResp)
+	fmt.Println()
+}
+
+// ── serve ────────────────────────────────────────────────────────────
+
+func runServeCmd(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	port := fs.Int("port", 8080, "HTTP server port")
+	fs.Parse(args)
+
+	server := api.NewServer()
+
+	addr := fmt.Sprintf(":%d", *port)
+	fmt.Printf("pflow API server listening on http://localhost%s\n", addr)
+	fmt.Printf("Endpoints:\n")
+	fmt.Printf("  GET /api/v1/dashboard?window=1d&max_inactive=1\n")
+
+	// Graceful shutdown on SIGINT/SIGTERM
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		fmt.Println("\nShutting down...")
+		os.Exit(0)
+	}()
+
+	if err := http.ListenAndServe(addr, server); err != nil {
+		log.Fatalf("server: %v", err)
+	}
+}
+
+// ── formatting helpers ──────────────────────────────────────────────
 
 func shortID(id string, n int) string {
 	if len(id) <= n {
@@ -213,4 +369,11 @@ func formatSince(t time.Time) string {
 		}
 		return fmt.Sprintf("%dd ago", days)
 	}
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return "n/a"
+	}
+	return t.Format(time.DateTime)
 }

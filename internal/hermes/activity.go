@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pancake-lee/pflow/internal/config"
 )
 
 // ActiveSession mirrors one entry in ~/.hermes/sessions/sessions.json.
@@ -62,21 +64,21 @@ type PlatformInfo struct {
 
 // SessionSummary is the aggregated view of one Hermes session.
 type SessionSummary struct {
-	SessionID    string
-	Project      string // working directory (from system prompt) or platform name
-	Platform     string // weixin, cli, cron
-	ChatType     string // dm, group
-	IsSuspended  bool
-	IsActive     bool // true = from sessions.json (actively tracked), false = from dump file
-	DisplayName  string
-	MessageCount int // from request_dump files
-	InputTokens  int
-	OutputTokens int
-	FirstActive  time.Time
-	LastActive   time.Time
-	Name         string // session title or first user message (first ~15 chars)
-	LastReq      string // first ~15 chars of latest user message
-	LastResp     string // first ~15 chars of latest assistant response
+	SessionID        string
+	Project          string // working directory (from system prompt) or platform name
+	Platform         string // weixin, cli, cron
+	ChatType         string // dm, group
+	IsSuspended      bool
+	IsGatewayTracked bool // true = tracked by gateway (sessions.json), false = from dump file
+	DisplayName      string
+	MessageCount     int // from request_dump files
+	InputTokens      int
+	OutputTokens     int
+	FirstActive      time.Time
+	LastActive       time.Time
+	Name             string // session title or first user message (first ~15 chars)
+	LastReq          string // first ~15 chars of latest user message
+	LastResp         string // first ~15 chars of latest assistant response
 }
 
 // ScanResult holds the full scan output for Hermes.
@@ -98,15 +100,15 @@ func hermesDir() (string, error) {
 }
 
 // Scan reads Hermes Agent's local data and returns summaries for sessions
-// that were active within the given window.
-func Scan(activeWindow time.Duration) (*ScanResult, error) {
+// that were active within the configured window.
+func Scan(opts config.ScanOptions) (*ScanResult, error) {
 	hd, err := hermesDir()
 	if err != nil {
 		return nil, err
 	}
 
 	now := time.Now()
-	cutoff := now.Add(-activeWindow)
+	cutoff := now.Add(-opts.Window)
 
 	// Scan dump files first to build a cwd lookup map for gateway sessions.
 	dumpSessions := scanDumpFiles(hd, cutoff)
@@ -166,13 +168,13 @@ func Scan(activeWindow time.Duration) (*ScanResult, error) {
 
 		seen[s.SessionID] = true
 		summaries = append(summaries, SessionSummary{
-			SessionID:    s.SessionID,
-			Project:      project,
-			Platform:     s.Platform,
-			ChatType:     s.ChatType,
-			IsSuspended:  s.Suspended,
-			IsActive:     true, // tracked by gateway
-			DisplayName:  name,
+			SessionID:        s.SessionID,
+			Project:          project,
+			Platform:         s.Platform,
+			ChatType:         s.ChatType,
+			IsSuspended:      s.Suspended,
+			IsGatewayTracked: true, // tracked by gateway
+			DisplayName:      name,
 			InputTokens:  s.InputTokens,
 			OutputTokens: s.OutputTokens,
 			FirstActive:  createdAt,
@@ -211,6 +213,9 @@ func Scan(activeWindow time.Duration) (*ScanResult, error) {
 		})
 	}
 
+	// Apply max-inactive filter per project
+	summaries = applyHermesMaxInactive(summaries, opts.MaxInactive)
+
 	// Sort by last active (most recent first)
 	sort.Slice(summaries, func(i, j int) bool {
 		return summaries[i].LastActive.After(summaries[j].LastActive)
@@ -219,7 +224,7 @@ func Scan(activeWindow time.Duration) (*ScanResult, error) {
 	gwAlive := gw != nil && gw.GatewayState == "running"
 
 	return &ScanResult{
-		ActiveWindow: activeWindow,
+		ActiveWindow: opts.Window,
 		Cutoff:       cutoff,
 		Now:          now,
 		GatewayAlive: gwAlive,
@@ -444,6 +449,35 @@ func parseDumpFilename(name string, modTime time.Time) *dumpFileInfo {
 	}
 }
 
+// IsActive returns true if the session is actively tracked by the gateway and running.
+// Suspended and completed (dump-only) sessions are considered inactive.
+func (s SessionSummary) IsActive() bool {
+	return s.IsGatewayTracked && !s.IsSuspended
+}
+
+// TrafficLight returns the traffic-light icon for the session's status.
+func (s SessionSummary) TrafficLight() string {
+	if !s.IsGatewayTracked {
+		return "⚫"
+	}
+	if s.IsSuspended {
+		return "🟡"
+	}
+	return "🟢"
+}
+
+// StatusLabel returns a human-readable status with traffic light.
+func (s SessionSummary) StatusLabel() string {
+	light := s.TrafficLight()
+	if !s.IsGatewayTracked {
+		return light + " completed"
+	}
+	if s.IsSuspended {
+		return light + " suspended"
+	}
+	return light + " running"
+}
+
 // PlatformIcon returns a simple icon for a platform.
 func (s SessionSummary) PlatformIcon() string {
 	switch s.Platform {
@@ -456,17 +490,6 @@ func (s SessionSummary) PlatformIcon() string {
 	default:
 		return "📡"
 	}
-}
-
-// StatusLabel returns a human-readable status.
-func (s SessionSummary) StatusLabel() string {
-	if !s.IsActive {
-		return "— completed" // from dump file, not actively tracked
-	}
-	if s.IsSuspended {
-		return "⏸ suspended"
-	}
-	return "▶ running"
 }
 
 // ShortID returns a truncated session ID.
@@ -527,4 +550,49 @@ func truncateRunes(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+// applyHermesMaxInactive limits the number of inactive sessions per project.
+// Active sessions are always kept; inactive (completed, suspended) sessions are
+// limited to maxInactive per project (the most recent ones). If maxInactive is 0,
+// all sessions are kept.
+func applyHermesMaxInactive(summaries []SessionSummary, maxInactive int) []SessionSummary {
+	if maxInactive <= 0 {
+		return summaries
+	}
+
+	type group struct {
+		active   []SessionSummary
+		inactive []SessionSummary
+	}
+	groups := make(map[string]*group)
+	var projOrder []string
+
+	for _, s := range summaries {
+		proj := s.Project
+		if proj == "" {
+			proj = s.Platform
+		}
+		if _, ok := groups[proj]; !ok {
+			groups[proj] = &group{}
+			projOrder = append(projOrder, proj)
+		}
+		if s.IsActive() {
+			groups[proj].active = append(groups[proj].active, s)
+		} else {
+			groups[proj].inactive = append(groups[proj].inactive, s)
+		}
+	}
+
+	var result []SessionSummary
+	for _, proj := range projOrder {
+		g := groups[proj]
+		result = append(result, g.active...)
+		if len(g.inactive) > maxInactive {
+			g.inactive = g.inactive[:maxInactive]
+		}
+		result = append(result, g.inactive...)
+	}
+
+	return result
 }
