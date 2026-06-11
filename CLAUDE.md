@@ -7,10 +7,19 @@ pflow 是一个 Go 项目，目标是在 cc-connect 的"与 Claude Code CLI 通�
 ## 编译与测试
 
 ```bash
-go build ./...
-go test ./...
-go vet ./...
+make              # 构建前端 + 后端，输出到 bin/pflow
+make env          # 安装全部依赖（Go + Node.js）
+make vet          # Go 静态分析
+make test         # Go 测试
+make clean        # 清理构建产物
+make dev          # 启动 API server（配合 cd web && npm run dev 前端开发）
+make run          # 构建并启动完整服务
 ```
+
+- 前端代码在 `web/` 目录，后端代码在 `cmd/` + `internal/`
+- `//go:embed` 指令在项目根 `embed.go`，由 `cmd/pflow/main.go` 引用
+- `make build` 会先 `npm run build` 生成 `web/dist/`，再 `go build` 嵌入二进制
+- 编译产物只输出到 `bin/` 目录，不污染项目根
 
 ## 工作规则
 

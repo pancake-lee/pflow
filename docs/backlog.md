@@ -4,7 +4,8 @@
 
 ## P0 — 核心体验，不做产品不完整
 
-- 阶段一全部验证项（详见 [`prd.md`](./prd.md) 第 5 节）
+- ✅ 阶段一全部验证项（详见 [`prd.md`](./prd.md) 第 5 节）— 已完成
+- **→ Web Dashboard（浏览器访问，适合挂副屏）** ← 当前阶段，从 P3 提前
 - Agent 会话启动：`pflow start --project X --task "..."` 在后台启动 Claude Code
 - 状态仪表盘：`pflow status` 红绿灯战况表
 - 亲赴前线：`pflow attach <session>` 唤起终端进入 Agent 会话
@@ -27,7 +28,6 @@
 
 ## P3 — 远期/探索，条件成熟再做
 
-- Web Dashboard（浏览器访问，适合挂副屏）
 - 游戏化外壳（战场地图隐喻的视觉包装）
 - VSCode 扩展
 - 跨设备同步（手机/平板看状态、点批准）

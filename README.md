@@ -17,7 +17,7 @@ pflow 帮助你在同时使用多个 AI 编程 Agent（Claude Code、Cline 等�
 
 ## 状态
 
-当前处于**阶段一：可行性验证**。详见 [`todo.md`](./todo.md)。
+当前处于**阶段二：Web Dashboard**。基于 Vue 3 + Naive UI 构建浏览器端可视化面板。详见 [`todo.md`](./todo.md)。
 
 ## 术语
 

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/pancake-lee/pflow"
 	"github.com/pancake-lee/pflow/internal/api"
 	"github.com/pancake-lee/pflow/internal/claude"
 	"github.com/pancake-lee/pflow/internal/config"
@@ -293,16 +295,20 @@ func printHermesProbe(s hermes.SessionSummary, gatewayAlive bool) {
 // ── serve ────────────────────────────────────────────────────────────
 
 func runServeCmd(args []string) {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	port := fs.Int("port", 8080, "HTTP server port")
-	fs.Parse(args)
+	flagSet := flag.NewFlagSet("serve", flag.ExitOnError)
+	port := flagSet.Int("port", 8080, "HTTP server port")
+	flagSet.Parse(args)
 
-	server := api.NewServer()
+	// Pass the embedded Vue SPA filesystem. If the web/dist directory
+	// is not embedded (e.g. during development), pass nil to serve API only.
+	var staticFS fs.FS = pflow.WebDist
+	server := api.NewServer(staticFS)
 
 	addr := fmt.Sprintf(":%d", *port)
-	fmt.Printf("pflow API server listening on http://localhost%s\n", addr)
+	fmt.Printf("pflow server listening on http://localhost%s\n", addr)
 	fmt.Printf("Endpoints:\n")
-	fmt.Printf("  GET /api/v1/dashboard?window=1d&max_inactive=1\n")
+	fmt.Printf("  Web UI:  http://localhost%s/\n", addr)
+	fmt.Printf("  API:     GET /api/v1/dashboard?window=1d&max_inactive=1\n")
 
 	// Graceful shutdown on SIGINT/SIGTERM
 	go func() {

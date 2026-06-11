@@ -32,27 +32,32 @@ pflow/
 │       └── main.go              # CLI 入口
 ├── internal/
 │   ├── claude/                  # Claude Code CLI 进程管理
-│   │   ├── session.go           # Claude CLI 子进程管理、stream-json 解析、事件流
-│   │   ├── proc_unix.go         # Unix 进程组管理
+│   │   ├── activity.go          # Session 活动扫描
+│   │   ├── stream.go            # stream-json 类型定义与解析
+│   │   ├── subprocess.go        # CLI 子进程管理
 │   │   └── snapshot.go          # SessionSnapshot 状态快照
-│   ├── manager/                 # Agent Session 管理器
-│   │   ├── manager.go           # 多 Session 生命周期管理
-│   │   ├── dashboard.go         # 状态聚合与 Dashboard 数据模型
-│   │   └── eventloop.go         # 事件消费循环
-│   ├── attention/               # 军情哨（注意力管理器）
-│   │   ├── analyzer.go          # 状态分析引擎
-│   │   └── advisor.go           # LLM 引导建议生成
+│   ├── hermes/                  # Hermes Agent 会话监控
+│   │   └── activity.go          # Session 活动扫描
 │   ├── api/                     # HTTP API
-│   │   ├── server.go            # Dashboard API server
-│   │   └── handlers.go          # API 端点处理
+│   │   └── server.go            # Dashboard API server
 │   └── config/                  # 配置管理
-│       └── config.go            # TOML 配置解析
-├── pkg/
-│   └── tui/                     # TUI Dashboard（阶段二）
-│       └── dashboard.go         # Bubble Tea 界面
+│       └── config.go            # ScanOptions + ParseWindow
+├── web/                         # Web Dashboard 前端（阶段二）
+│   ├── src/
+│   │   ├── components/          # Vue 组件
+│   │   ├── composables/         # 组合式函数（useDashboard, usePolling）
+│   │   ├── types/               # TypeScript 类型定义
+│   │   └── views/               # 页面视图
+│   ├── index.html
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   └── package.json
 ├── docs/
 │   ├── prd.md
-│   └── tech-design.md
+│   ├── tech.md
+│   ├── backlog.md
+│   ├── note.md
+│   └── archive/                 # 历史产出归档
 ├── .local/                      # 个人工作文档（gitignored）
 ├── go.mod
 ├── go.sum
@@ -85,38 +90,46 @@ Claude Code 进程 → stream-json 事件流 → Event Loop 解析
                                     Manager 聚合多 Session
                                             ↓
                                     Dashboard API（JSON）
-                                            ↓
-                                    CLI / TUI 展示
+                                       ↓         ↓
+                                  CLI 文本表格   Web Dashboard（Vue 3）
 ```
 
 `SessionSnapshot` 是 pflow 的核心数据模型——每个 Agent 会话对外暴露一个只读快照，包含：会话标识、当前状态（busy/waiting/idle）、最近操作摘要、上下文用量、进程存活状态。Dashboard API 层负责聚合所有 session 的快照并返回。
 
-## 3. 阶段一实施计划
+## 3. 实施阶段
 
-### 3.1 目标
+### 3.1 阶段一：可行性验证 ✅ 已完成
 
 构建最小技术验证链路：启动 Claude Code → 拿到事件流 → 导出状态快照 → CLI 显示。
 
-### 3.2 步骤
+产出：`pflow status`、`pflow probe`、`pflow serve`（Dashboard API）、双 Agent 支持（Claude + Hermes）。
+
+### 3.2 阶段二：Web Dashboard ← 当前阶段
+
+**目标**：构建浏览器端可视化面板，用 Vue 3 + Naive UI 替代终端文本表格，提供真正意义上的"军帐战报"。
+
+**为什么 Web 优先于 TUI**：
+- Web Dashboard 可视化表现力远超终端，适合红绿灯、时间线等图形元素
+- 可长期挂在副屏，不占用终端工作区
+- Naive UI 组件库提供 DataTable / Tag / Card 等开箱即用的 Dashboard 组件
+- Vue SPA 打包后可嵌入 Go binary，部署仍为单文件
+
+**步骤**：
 
 | 步骤 | 内容 | 产出 |
 |------|------|------|
-| 1. 项目初始化 | `go mod init`，按需添加依赖 | 可编译的空项目 |
-| 2. 实现 Claude 进程管理 | 实现 Claude CLI 子进程启动、stdin/stdout 管道通信、stream-json 事件解析 | 能启动 Claude Code 并拿到事件流 |
-| 3. 实现状态快照 | 基于事件流推断状态（busy/waiting/idle），暴露 `Snapshot()` 方法 | `SessionSnapshot` 数据模型 |
-| 4. 构建 Manager | 实现多 session 注册/注销，聚合生成 `Dashboard` | `GET /api/v1/dashboard` 返回 JSON |
-| 5. CLI 原型 | `pflow probe` 和 `pflow status` 命令，输出文本表格 | 终端可见的状态仪表盘 |
-| 6. 验证测试 | 同时启动 2-3 个 Claude Code 会话，验证状态准确性 | 验证报告 |
+| 1. 项目初始化 | Vite + Vue 3 + TypeScript + Naive UI | `web/` 目录，可运行的空 Dashboard |
+| 2. Dashboard 主页面 | DataTable 会话列表、红绿灯渲染、筛选控制栏、统计摘要 | 可用的浏览器面板 |
+| 3. 会话详情 | 点击展开/抽屉显示完整 session 信息 | 详情视图 |
+| 4. 自动刷新 | 可配置轮询间隔，调用现有 `/api/v1/dashboard` | 准实时更新 |
+| 5. Go embed 集成 | `//go:embed web/dist`，`pflow serve` 同时提供 API + 静态资源 | 单二进制部署 |
 
-### 3.3 验证指标
+### 3.3 后续阶段
 
-| 指标 | 目标 | 测试方法 |
-|------|------|---------|
-| busy/waiting/idle 三态准确率 | > 80% | 人工标记 vs 系统判断 |
-| 权限请求检测率 | > 70% | 触发工具调用，检测 permission request 事件 |
-| 上下文用量准确度 | 与 `claude --version` 输出一致 | 对比系统取值与终端显示 |
-| Dashboard API 延迟 | < 100ms | 单次请求耗时 |
-| 多 session 并发 | 3 个 session 无串扰 | 同时运行，各自状态独立 |
+| 阶段 | 内容 |
+|------|------|
+| 阶段三：智能调度 | 军情哨主动推送、统帅偏好学习、战局图 |
+| 阶段四：体验层 | TUI Dashboard、游戏化外壳、VSCode 扩展、跨设备同步 |
 
 ## 4. MIT 协议合规
 
@@ -139,10 +152,45 @@ pflow 以 MIT License 发布，`LICENSE` 文件已就位。
 
 ## 5. 技术选型
 
+### 5.1 后端
+
 | 选择 | 方案 | 理由 |
 |------|------|------|
 | 语言 | Go | CLI 工具首选，子进程管理和并发模型优秀 |
-| TUI 框架 | Bubble Tea (charmbracelet) | 成熟稳定，社区活跃 |
-| HTTP 路由 | 标准库 net/http（阶段一）/ chi（后续） | 阶段一仅 2-3 个端点，标准库足够 |
+| TUI 框架 | Bubble Tea (charmbracelet) | 成熟稳定，社区活跃（阶段二暂搁置，Web 先行） |
+| HTTP 路由 | 标准库 net/http | 端点少，标准库足够 |
 | 配置格式 | TOML | Go 生态主流，可读性好 |
-| 数据持久化 | JSON 文件（阶段一）→ SQLite（后续） | 渐进式，先简单后扩展 |
+| 数据持久化 | JSON 文件（当前）→ SQLite（后续） | 渐进式，先简单后扩展 |
+
+### 5.2 前端（Web Dashboard）
+
+| 选择 | 方案 | 理由 |
+|------|------|------|
+| 框架 | **Vue 3** (Composition API) | 模板语法天然适合 Dashboard 类数据展示页面；SFC 直观、学习曲线平缓 |
+| 组件库 | **Naive UI** | 树摇优化、暗色主题一流；DataTable / Tag / Card / Drawer 等组件开箱即用；TypeScript 支持完善 |
+| 语言 | **TypeScript** | 类型安全，与 Go 后端的 JSON API 对接时有明确的数据契约 |
+| 构建 | **Vite** | 秒级 HMR，开发体验极佳；Rollup 生产构建 |
+| 部署 | **Go embed** (`//go:embed web/dist`) | 前端打包为静态资源嵌入 Go binary，`pflow serve` 单文件部署 |
+
+### 5.3 前后端交互
+
+```
+浏览器                          Go Server
+  │                                │
+  │  GET /api/v1/dashboard         │
+  │  ?window=1d&max_inactive=1     │
+  │ ─────────────────────────────> │
+  │                                │  claude.Scan() + hermes.Scan()
+  │  JSON {sessions:[...]}         │
+  │ <───────────────────────────── │
+  │                                │
+  │  (轮询 10s/30s/60s 可配置)      │
+  │                                │
+  │  GET / (静态资源)               │
+  │ ─────────────────────────────> │
+  │  index.html + Vue SPA          │  //go:embed web/dist/*
+  │ <───────────────────────────── │
+```
+
+- **当前方案**：前端轮询 `/api/v1/dashboard`，间隔可配置
+- **后续升级**：WebSocket 实时推送（`GET /api/v1/dashboard/ws`），状态变化时服务端主动推送

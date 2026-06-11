@@ -2,7 +2,71 @@
 
 > 活跃技术备忘：当前在用的实现细节、调试技巧、临时方案、已知问题。
 
-## 当前周期（阶段一 可行性验证）
+## 当前周期（阶段二 Web Dashboard）
+
+### 阶段切换（2026-06-11）
+
+- 阶段一已完成，P1/P2 未完成项回写到 [`backlog.md`](./backlog.md)
+- Web Dashboard 从 P3（远期）提前到阶段二，优先于 TUI 方案
+- 前端选型确认：**Vue 3 + Naive UI + TypeScript + Vite**
+- 理由：模板语法适合 Dashboard，Naive UI DataTable/Tag/Card 开箱即用，暗色主题一流
+- 部署方案：Vue SPA 打包后通过 `//go:embed` 嵌入 Go binary，`pflow serve` 单文件部署
+
+### 前端嵌入与部署流程
+
+```
+web/src/*  (Vue 3 + TS)
+    │  npm run build
+    ▼
+web/dist/  (纯静态 HTML/JS/CSS)
+    │  //go:embed web/dist/*  (embed.go)
+    ▼
+bin/pflow  (Go 二进制，内含前端静态资源)
+    │  pflow serve → http://localhost:8080
+    ▼
+浏览器访问 → Go HTTP Server 直接返回内嵌的 Vue SPA
+```
+
+- `embed.go` 位于项目根目录，import path 为 `github.com/pancake-lee/pflow`
+- `cmd/pflow/main.go` 将 `pflow.WebDist`（`embed.FS`）传入 `api.NewServer()`
+- `server.go` 的 `spaHandler` 处理 SPA 路由回退：非 `/api` 路径全部返回 `index.html`
+- 开发时前后端分离：`make dev` 启动 API server，`cd web && npm run dev` 启动 Vite dev server（带 proxy）
+- 生产时单二进制：`make build && bin/pflow serve` 一个命令启动全部
+
+### 待办
+
+- [x] 初始化 `web/` 目录：Vite + Vue 3 + TypeScript + Naive UI
+- [x] 确认现有 Dashboard API 字段满足 Web 展示需求
+- [ ] API 是否需要 CORS 头（开发阶段 Vite proxy 可规避，生产环境同源部署不需要）
+
+### 实现记录（2026-06-11）
+
+**新增文件**：
+
+| 文件 | 功能 |
+|------|------|
+| `embed.go` | `//go:embed web/dist/*` 嵌入 Vue SPA，导出 `WebDist embed.FS` |
+| `web/src/types/dashboard.ts` | TypeScript 类型定义，与 Go `DashboardEntry` 对齐 |
+| `web/src/composables/useDashboard.ts` | Dashboard API 调用 + 响应状态管理 |
+| `web/src/composables/usePolling.ts` | 可配置的轮询定时器 |
+| `web/src/composables/format.ts` | 时间格式化、文本截断、ID 缩短 |
+| `web/src/views/DashboardView.vue` | 核心 Dashboard 页面：控制栏 + DataTable + 统计卡片 + Drawer 详情 |
+
+**修改文件**：
+
+| 文件 | 修改内容 |
+|------|---------|
+| `internal/api/server.go` | `NewServer(fs.FS)` 接受静态文件系统；新增 `spaHandler`，非 API 路径回退到 `index.html` |
+| `cmd/pflow/main.go` | `runServeCmd` 传入 `pflow.WebDist`；修复 `flagSet` 变量命名冲突（`fs` → `flagSet`） |
+| `web/vite.config.ts` | 添加 `/api` 开发代理到 `localhost:8080` |
+| `web/index.html` | 标题改为 "pflow — Agent Dashboard"，添加 `class="dark"` |
+
+**构建产物**：
+- 前端：`web/dist/` — 625KB JS (gzip 178KB) + 1.5KB CSS
+- 后端：Go binary 9.3MB（含嵌入前端）
+- TypeScript 类型检查 + Go vet 均通过
+
+---
 
 ### Hermes Agent 集成可行性（2026-06-11）
 

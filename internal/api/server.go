@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"strconv"
 	"time"
@@ -38,13 +39,54 @@ type DashboardResponse struct {
 // Server is the pflow HTTP API server.
 type Server struct {
 	http.ServeMux
+	staticFS fs.FS // optional embedded static files (web/dist)
 }
 
 // NewServer creates a new API server with registered routes.
-func NewServer() *Server {
-	s := &Server{}
+// If staticFS is non-nil, static files (the Vue SPA) are served from it.
+func NewServer(staticFS fs.FS) *Server {
+	s := &Server{staticFS: staticFS}
 	s.HandleFunc("/api/v1/dashboard", s.handleDashboard)
+
+	// Serve static files if embedded, falling back to index.html for SPA routing.
+	if staticFS != nil {
+		s.Handle("/", spaHandler{staticFS: staticFS})
+	}
+
 	return s
+}
+
+// spaHandler serves static files from an embedded filesystem with
+// SPA fallback: any path that doesn't match a real file returns index.html.
+type spaHandler struct {
+	staticFS fs.FS
+}
+
+func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Don't intercept API routes
+	if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Try to serve the exact file first
+	path := "web/dist" + r.URL.Path
+	if r.URL.Path == "/" {
+		path = "web/dist/index.html"
+	}
+
+	f, err := h.staticFS.Open(path)
+	if err == nil {
+		defer f.Close()
+		stat, _ := f.Stat()
+		if stat != nil && !stat.IsDir() {
+			http.ServeFileFS(w, r, h.staticFS, path)
+			return
+		}
+	}
+
+	// SPA fallback: serve index.html
+	http.ServeFileFS(w, r, h.staticFS, "web/dist/index.html")
 }
 
 // handleDashboard handles GET /api/v1/dashboard.

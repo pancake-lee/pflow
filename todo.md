@@ -1,64 +1,71 @@
 # todo
 
-> 当前周期：阶段一 可行性验证
+> 当前周期：阶段二 Web Dashboard
 
-## P0
+## 目标
 
-### P0-1
+构建基于 **Vue 3 + Naive UI + TypeScript + Vite** 的浏览器端可视化面板，替代终端文本表格，提供真正意义上的"军帐战报"。
 
-- [x] 项目初始化：`go mod init`，搭好目录结构
-- [x] 实现活跃会话检测：扫描 `~/.claude/sessions/` + `history.jsonl`，按 24h 窗口汇总
-  - `internal/claude/activity.go` — 读取 session metadata 和 history，聚合输出 SessionSummary
-  - `cmd/pflow/main.go` — CLI 入口，打印活跃会话表格（状态/项目/消息数/最后活跃）
-- [x] 实现 Hermes Agent 会话监控（额外插入任务）
-  - `internal/hermes/activity.go` — 读取 `sessions.json` + `gateway_state.json` + request_dump 文件
-  - 确认 Hermes 支持 ACP 协议（v0.14.0），cc-connect 有完整 ACP 适配器，留作后续对接
-  - 统一 CLI 输出：Claude Code + Hermes 双面板
-  - 数据源：sessions.json（gateway 管理，实时） + request_dump 文件（CLI/cron，事后）
-  - 文档记录在 `docs/note.md`
-- [x] 实现 Claude Code CLI 子进程启动与 stdin/stdout 管道通信
-  - `internal/claude/subprocess.go` — `Start()`, `Send()`, `Events()`, `Close()`, `PID()`
-  - 使用 `--output-format stream-json --input-format stream-json --permission-prompt-tool stdio` 标志
-- [x] 实现 stream-json 事件流解析（基于 `--output-format stream-json --input-format stream-json --permission-prompt-tool stdio`）
-  - `internal/claude/stream.go` — Event/UserEvent/AssistantEvent 类型，`ParseEvents()` 流式解析器
-- [x] 实现 SessionSnapshot：从事件流推断 busy/waiting/idle 三态
-  - `internal/claude/snapshot.go` — `Tracker` 并发安全的状态追踪器，基于 stop_reason 推断状态
-  - busy: 用户刚发消息 或 assistant 正在执行工具 (stop_reason=tool_use)
-  - idle: assistant 完成回复 (stop_reason=end_turn)，等待用户输入
-  - waiting: 权限请求场景（预留，stdio permission prompt 事件待补充）
-- [x] 统一展示格式：Session ID / Project / Status / Last Active / Last Req / Last Resp
-  - Last Req / Last Resp 从 transcript 文件 (`~/.claude/projects/.../<session>.jsonl`) 提取，截取前 15 字
-  - busy 状态的 session 清除 Last Resp（避免展示不匹配的 req/resp 对）
-  - Hermes Last Req 从 request_dump body 提取，Last Resp 暂无（需 SQLite）
+## P0 — 核心面板，必须完成
 
-### P0-2
+### P0-1 项目初始化
 
-- [x] 实现 Dashboard API：`GET /api/v1/dashboard?window=1d&max_inactive=1` 返回所有 session 的状态快照
-  - `internal/api/server.go` — net/http 标准库，JSON 响应含 session_id/agent_type/status/traffic_light 等字段
-- [x] 实现 `pflow probe` 命令：探测单个会话的详细状态（支持 Claude + Hermes，模糊匹配 session ID 前缀）
-- [x] 实现 `pflow status` 命令：终端文本表格列出所有会话状态（支持 `--window` 和 `--max-inactive` 参数）
-- [x] 实现 `pflow serve` 命令：启动 HTTP Dashboard API 服务器（`--port` 参数，默认 8080）
-- [x] 新增时间窗口参数：`--window` 支持 `1h`/`3h`/`1d`/`2d` 等格式（`internal/config/config.go` — ParseWindow）
-- [x] 新增非活跃限制参数：`--max-inactive` 按 PROJECT 分组限制 unknown/completed 等非活跃状态的展示数量
-- [x] Agent 各自定义状态枚举及红绿灯映射：Claude (busy🟢/waiting🟡/idle⚪/unknown⚫)，Hermes (running🟢/suspended🟡/completed⚫)
-- [x] 验证测试：build/vet 通过，CLI + API 功能验证正常（status/probe/serve 均可运行）
-  - `pflow status --window 1h --max-inactive 1` 正确过滤非活跃 session
-  - `pflow probe <id>` 支持 Claude 和 Hermes 两种 agent，支持前缀模糊匹配
-  - `pflow serve` API 返回 JSON 含完整 traffic_light 和 is_active 字段
+- [x] 用 Vite 创建 Vue 3 + TypeScript 项目（`web/` 目录）
+- [x] 安装 Naive UI、配置暗色主题
+- [x] 配置与 Go 后端的开发代理（Vite proxy → `localhost:8080`）
+- [x] 建立目录结构：`components/`、`composables/`、`types/`、`views/`
 
-## P1
+### P0-2 Dashboard 主页面
 
-- [ ] Shell 补齐脚本（bash/zsh completion）
+- [x] 会话列表表格（Naive UI DataTable）：
+  - 列：Agent 图标 / Session ID / Project / Status（红绿灯） / Name / Last Active / Last Req / Last Resp
+  - 红绿灯渲染：🟢 busy/running、🟡 waiting/suspended、⚪ idle、⚫ unknown/completed
+  - 相对时间显示（"3m ago"、"1h ago"）
+  - 文本截断 + hover 展开 tooltip
+- [x] 控制栏（筛选参数）：
+  - Time window 选择器（1h / 3h / 6h / 1d / 3d / 7d）
+  - Max inactive per project 输入
+  - Agent type 过滤（All / Claude / Hermes）
+- [x] 自动刷新：可配置间隔（off / 10s / 30s / 60s），轮询 `/api/v1/dashboard`
+- [x] 统计摘要栏：活跃数 / 等待数 / 空闲数 / 总计
 
-## P2
+### P0-3 会话详情
 
-- [ ] **Hermes Last Resp 提取**：接入 `~/.hermes/state.db` SQLite，读取 assistant 回复内容填充 `LastResp` 字段。当前仅从 request_dump body 提取了 `LastReq`，回复内容需查询 SQLite messages 表。
+- [x] 点击会话行 → 侧边抽屉显示详情：
+  - 完整 Session ID
+  - Agent 类型、Platform（Hermes）
+  - Status + TrafficLight
+  - IsActive 状态
+  - 完整 Last Req / Last Resp 文本
+
+## P1 — 体验完善
+
+- [x] Go embed：`//go:embed web/dist/*` 将前端打包进 Go binary，`pflow serve` 单文件部署
+- [x] 空状态设计：无 session 时的引导提示
+- [x] 错误状态：API 不可用时的 NAlert 提示
+- [x] Loading 状态：NSpin 包裹
+- [ ] 响应式布局：桌面端为主，平板可用（暂未严格测试）
+
+## P2 — 锦上添花
+
+- [ ] WebSocket 实时推送（替代轮询）
+- [ ] Session 状态变化时的浏览器通知（Notification API）
+- [ ] 会话时间线可视化（甘特图式的时间分布）
+- [ ] 暗色/亮色主题切换
+
+## 不包含（本周期）
+
+- Agent 启动/停止/attach（后端能力，留待后续）
+- 军情哨推送（留待阶段三）
+- 游戏化外壳（留待阶段四）
+- TUI Dashboard（Bubble Tea 方案暂时搁置，Web 面板先行）
 
 ## 验证目标
 
 | 指标 | 目标 |
 |------|------|
-| busy/waiting/idle 三态准确率 | > 80% |
-| 权限请求检测率 | > 70% |
-| Dashboard API 延迟 | < 100ms |
-| 多 session 并发 | 3 个 session 无串扰 |
+| Dashboard 页面首屏加载 | < 2s |
+| 自动刷新延迟（轮询） | 与设定间隔一致 |
+| 多 session 展示 | 支持 50+ 条无卡顿 |
+| Go embed 后二进制增量 | < 5MB |
+| 暗色主题视觉一致性 | Naive UI 暗色主题通过 |
