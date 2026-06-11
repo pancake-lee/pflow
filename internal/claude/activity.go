@@ -43,6 +43,9 @@ type SessionSummary struct {
 	MessageCount int    // number of history entries in the active window
 	FirstActive  time.Time
 	LastActive   time.Time
+	Name         string // session title or first user message (first ~15 chars)
+	LastReq      string // first ~15 chars of latest user message
+	LastResp     string // first ~15 chars of latest assistant text response
 }
 
 // ScanResult holds the full scan output.
@@ -84,6 +87,15 @@ func Scan(activeWindow time.Duration) (*ScanResult, error) {
 
 	// Aggregate by session ID
 	agg := aggregate(sessionMetas, historyEntries)
+
+	// Enrich with last request/response from transcript files
+	transcripts := readTranscripts(cd)
+	for i := range agg {
+		if t, ok := transcripts[agg[i].SessionID]; ok {
+			agg[i].LastReq = t.lastReq
+			agg[i].LastResp = t.lastResp
+		}
+	}
 
 	// Sort by last active time (most recent first)
 	sort.Slice(agg, func(i, j int) bool {
@@ -172,20 +184,22 @@ func aggregate(metas map[string]*SessionMeta, history []HistoryEntry) []SessionS
 
 	// Build per-session history stats
 	type histStats struct {
-		count      int
+		count       int
 		first, last time.Time
-		project    string
+		firstMsg    string
+		project     string
 	}
 	hist := make(map[string]*histStats)
 	for _, h := range history {
 		sid := h.SessionID
 		if _, ok := hist[sid]; !ok {
-			hist[sid] = &histStats{first: h.TimestampTime(), last: h.TimestampTime(), project: h.Project}
+			hist[sid] = &histStats{first: h.TimestampTime(), last: h.TimestampTime(), firstMsg: h.Display, project: h.Project}
 		}
 		s := hist[sid]
 		s.count++
 		if t := h.TimestampTime(); t.Before(s.first) {
 			s.first = t
+			s.firstMsg = h.Display
 		}
 		if t := h.TimestampTime(); t.After(s.last) {
 			s.last = t
@@ -220,6 +234,9 @@ func aggregate(metas map[string]*SessionMeta, history []HistoryEntry) []SessionS
 			if hs.project != "" {
 				ss.Project = hs.project
 			}
+			if hs.firstMsg != "" {
+				ss.Name = truncateText(hs.firstMsg, 15)
+			}
 		}
 
 		// If session metadata has an updatedAt timestamp, use it for LastActive if newer
@@ -244,6 +261,87 @@ func aggregate(metas map[string]*SessionMeta, history []HistoryEntry) []SessionS
 	}
 
 	return result
+}
+
+// transcriptInfo holds the last user request and assistant response extracted
+// from a Claude Code transcript file (~/.claude/projects/.../<session>.jsonl).
+type transcriptInfo struct {
+	lastReq  string
+	lastResp string
+}
+
+// readTranscripts scans ~/.claude/projects/ for transcript files and extracts
+// the last user message and last assistant text response for each session.
+func readTranscripts(claudeDir string) map[string]*transcriptInfo {
+	dir := filepath.Join(claudeDir, "projects")
+	result := make(map[string]*transcriptInfo)
+
+	// Walk ~/.claude/projects/ — structure is: projects/<project-name>/<session-id>.jsonl
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		// Session ID is the filename without .jsonl
+		sessionID := strings.TrimSuffix(d.Name(), ".jsonl")
+		if sessionID == "" {
+			return nil
+		}
+
+		info := parseTranscriptFile(path)
+		if info != nil {
+			result[sessionID] = info
+		}
+		return nil
+	})
+
+	return result
+}
+
+// parseTranscriptFile reads a transcript file and extracts the last user
+// message and last assistant text response.
+func parseTranscriptFile(path string) *transcriptInfo {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var lastUser, lastAssistant string
+
+	for ev := range ParseEvents(f) {
+		switch ev.Type {
+		case "user":
+			ue, err := ev.ParseUser()
+			if err != nil {
+				continue
+			}
+			text := ue.Text()
+			if text != "" {
+				lastUser = truncateText(text, 15)
+			}
+		case "assistant":
+			ae, err := ev.ParseAssistant()
+			if err != nil {
+				continue
+			}
+			text := ae.Text()
+			if text != "" {
+				lastAssistant = truncateText(text, 15)
+			}
+		}
+	}
+
+	if lastUser == "" && lastAssistant == "" {
+		return nil
+	}
+
+	return &transcriptInfo{
+		lastReq:  lastUser,
+		lastResp: lastAssistant,
+	}
 }
 
 // isProcessAlive checks if a PID corresponds to a running process.

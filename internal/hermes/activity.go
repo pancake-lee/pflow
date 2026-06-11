@@ -63,6 +63,7 @@ type PlatformInfo struct {
 // SessionSummary is the aggregated view of one Hermes session.
 type SessionSummary struct {
 	SessionID    string
+	Project      string // working directory (from system prompt) or platform name
 	Platform     string // weixin, cli, cron
 	ChatType     string // dm, group
 	IsSuspended  bool
@@ -73,6 +74,9 @@ type SessionSummary struct {
 	OutputTokens int
 	FirstActive  time.Time
 	LastActive   time.Time
+	Name         string // session title or first user message (first ~15 chars)
+	LastReq      string // first ~15 chars of latest user message
+	LastResp     string // first ~15 chars of latest assistant response
 }
 
 // ScanResult holds the full scan output for Hermes.
@@ -103,6 +107,15 @@ func Scan(activeWindow time.Duration) (*ScanResult, error) {
 
 	now := time.Now()
 	cutoff := now.Add(-activeWindow)
+
+	// Scan dump files first to build a cwd lookup map for gateway sessions.
+	dumpSessions := scanDumpFiles(hd, cutoff)
+	dumpCWD := make(map[string]string) // session_id → cwd from dump files
+	for _, ds := range dumpSessions {
+		if ds.Project != "" {
+			dumpCWD[ds.SessionID] = ds.Project
+		}
+	}
 
 	// Read active sessions from sessions.json (gateway-tracked)
 	sessions := readActiveSessions(hd)
@@ -139,9 +152,22 @@ func Scan(activeWindow time.Duration) (*ScanResult, error) {
 			name = *s.Origin.UserName
 		}
 
+		// Session name: use DisplayName if set (e.g. WeChat user name), otherwise empty
+		sessionName := ""
+		if name != "" {
+			sessionName = truncateRunes(name, 15)
+		}
+
+		// Try to get working directory from matching dump file
+		project := s.Platform // fallback
+		if cwd, ok := dumpCWD[s.SessionID]; ok {
+			project = cwd
+		}
+
 		seen[s.SessionID] = true
 		summaries = append(summaries, SessionSummary{
 			SessionID:    s.SessionID,
+			Project:      project,
 			Platform:     s.Platform,
 			ChatType:     s.ChatType,
 			IsSuspended:  s.Suspended,
@@ -151,23 +177,37 @@ func Scan(activeWindow time.Duration) (*ScanResult, error) {
 			OutputTokens: s.OutputTokens,
 			FirstActive:  createdAt,
 			LastActive:   updatedAt,
+			Name:         sessionName,
 		})
 	}
 
-	// Scan request_dump files for CLI/cron sessions not tracked by gateway
-	dumpSessions := scanDumpFiles(hd, cutoff)
+	// Add dump-based sessions (CLI/cron not tracked by gateway)
 	for _, ds := range dumpSessions {
 		if seen[ds.SessionID] {
 			continue
 		}
+		// For dump-based sessions, use the user message as name (no explicit title)
+		dumpName := ""
+		if ds.LastReq != "" {
+			dumpName = ds.LastReq
+		}
+
+		project := ds.Project
+		if project == "" {
+			project = ds.Platform
+		}
+
 		seen[ds.SessionID] = true
 		summaries = append(summaries, SessionSummary{
 			SessionID:   ds.SessionID,
+			Project:     project,
 			Platform:    ds.Platform,
 			ChatType:    "dm",
 			DisplayName: "",
 			FirstActive: ds.FirstActive,
 			LastActive:  ds.LastActive,
+			Name:        dumpName,
+			LastReq:     ds.LastReq,
 		})
 	}
 
@@ -217,12 +257,14 @@ func readGatewayState(hd string) *GatewayState {
 	return &gw
 }
 
-// dumpFileInfo holds info parsed from a request_dump filename.
+// dumpFileInfo holds info parsed from a request_dump filename and body.
 type dumpFileInfo struct {
 	SessionID   string
 	Platform    string // "cli" or "cron"
 	FirstActive time.Time
 	LastActive  time.Time
+	LastReq     string // first ~15 chars of user message extracted from body
+	Project     string // working directory from system prompt
 }
 
 // scanDumpFiles scans ~/.hermes/sessions/ for request_dump_*.json files
@@ -258,6 +300,15 @@ func scanDumpFiles(hd string, cutoff time.Time) []dumpFileInfo {
 			continue
 		}
 
+		// Extract user message and cwd from dump body
+		meta := readDumpMeta(filepath.Join(dir, e.Name()))
+		if meta != nil {
+			di.LastReq = truncateRunes(meta.userMsg, 15)
+			if meta.cwd != "" && meta.cwd != "/" {
+				di.Project = meta.cwd
+			}
+		}
+
 		// Only include sessions active within the window
 		if di.LastActive.After(cutoff) || di.FirstActive.After(cutoff) {
 			results = append(results, *di)
@@ -270,6 +321,80 @@ func scanDumpFiles(hd string, cutoff time.Time) []dumpFileInfo {
 	})
 
 	return results
+}
+
+// dumpBody is a minimal structure for extracting metadata from a request_dump file.
+type dumpBody struct {
+	Request struct {
+		Body struct {
+			System   string `json:"system"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"` // string or []contentBlock
+			} `json:"messages"`
+		} `json:"body"`
+	} `json:"request"`
+}
+
+// dumpMeta holds metadata extracted from a request_dump file.
+type dumpMeta struct {
+	userMsg string // last user message text
+	cwd     string // working directory from system prompt
+}
+
+// readDumpMeta reads a request_dump file and extracts user message + working directory.
+func readDumpMeta(path string) *dumpMeta {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var dump dumpBody
+	if err := json.Unmarshal(data, &dump); err != nil {
+		return nil
+	}
+
+	meta := &dumpMeta{}
+
+	// Extract working directory from system prompt
+	meta.cwd = extractCWD(dump.Request.Body.System)
+
+	// Find the last user message
+	for _, msg := range dump.Request.Body.Messages {
+		if msg.Role != "user" {
+			continue
+		}
+		switch c := msg.Content.(type) {
+		case string:
+			meta.userMsg = c
+		case []any:
+			var parts []string
+			for _, item := range c {
+				if block, ok := item.(map[string]any); ok {
+					if t, _ := block["type"].(string); t == "text" {
+						if text, _ := block["text"].(string); text != "" {
+							parts = append(parts, text)
+						}
+					}
+				}
+			}
+			if len(parts) > 0 {
+				meta.userMsg = strings.Join(parts, " ")
+			}
+		}
+	}
+	return meta
+}
+
+// extractCWD parses the "Current working directory: <path>" line from a system prompt.
+func extractCWD(system string) string {
+	for _, line := range strings.Split(system, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "Current working directory:") {
+			cwd := strings.TrimPrefix(line, "Current working directory:")
+			cwd = strings.TrimSpace(cwd)
+			return cwd
+		}
+	}
+	return ""
 }
 
 // parseDumpFilename extracts session info from a request_dump filename.
@@ -393,4 +518,13 @@ func GatewaySummary(hd string) string {
 // FindDir finds the .hermes directory or returns an error.
 func FindDir() (string, error) {
 	return hermesDir()
+}
+
+// truncateRunes truncates s to maxLen runes, appending "..." if truncated.
+func truncateRunes(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
 }

@@ -36,21 +36,46 @@ func main() {
 	if claudeErr == nil && len(claudeResult.Sessions) > 0 {
 		fmt.Println("── Claude Code ──────────────────────────────────────────────────────")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "SESSION ID\tPROJECT\tSTATUS\tPID\tMSGS\tLAST ACTIVE")
+		fmt.Fprintln(w, "SESSION ID\tPROJECT\tSTATUS\tNAME\tLAST ACTIVE\tLAST REQ\tLAST RESP")
 
 		for _, s := range claudeResult.Sessions {
-			status := claudeStatusIcon(s)
-			if s.IsRunning {
-				status += " (alive)"
+			status := formatClaudeStatus(s)
+			project := s.Project
+			if project == "" {
+				project = "?"
 			}
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n",
+			name := escapeNewlines(truncate(s.Name, 15))
+			if name == "" {
+				name = "—"
+			}
+
+			lastReq := escapeNewlines(truncate(s.LastReq, 15))
+			if lastReq == "" {
+				lastReq = "—"
+			}
+			// For busy sessions, the last assistant response in the transcript
+			// is from a *previous* turn — clear it to avoid showing mismatched pairs.
+			lastResp := ""
+			if s.Status != "busy" {
+				lastResp = escapeNewlines(truncate(s.LastResp, 15))
+			}
+			if lastResp == "" {
+				if s.Status == "busy" {
+					lastResp = "…" // assistant is processing current request
+				} else {
+					lastResp = "—"
+				}
+			}
+
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				shortID(s.SessionID, 16),
-				s.Project,
+				project,
 				status,
-				s.PID,
-				s.MessageCount,
+				name,
 				formatSince(s.LastActive),
+				lastReq,
+				lastResp,
 			)
 		}
 		w.Flush()
@@ -70,27 +95,40 @@ func main() {
 		}
 		fmt.Println()
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "SESSION ID\tPLATFORM\tSTATUS\tCHAT\tTOKENS\tLAST ACTIVE")
+		fmt.Fprintln(w, "SESSION ID\tPROJECT\tSTATUS\tNAME\tLAST ACTIVE\tLAST REQ\tLAST RESP")
 
 		for _, s := range hermesResult.Sessions {
-			tokens := ""
-			if s.InputTokens > 0 || s.OutputTokens > 0 {
-				tokens = fmt.Sprintf("↓%d ↑%d", s.InputTokens, s.OutputTokens)
+			project := s.Project
+			if project == "" {
+				project = s.Platform
+			}
+			if s.ChatType != "" && s.ChatType != "dm" {
+				project += "/" + s.ChatType
 			}
 
-			display := s.DisplayName
-			if display == "" {
-				display = s.ChatType
+			name := escapeNewlines(truncate(s.Name, 15))
+			if name == "" {
+				name = "—"
 			}
 
-			fmt.Fprintf(w, "%s\t%s %s\t%s\t%s\t%s\t%s\n",
+			lastReq := escapeNewlines(truncate(s.LastReq, 15))
+			if lastReq == "" {
+				lastReq = "—"
+			}
+			lastResp := escapeNewlines(truncate(s.LastResp, 15))
+			if lastResp == "" {
+				lastResp = "—"
+			}
+
+			fmt.Fprintf(w, "%s\t%s %s\t%s\t%s\t%s\t%s\t%s\n",
 				s.ShortID(),
 				s.PlatformIcon(),
-				s.Platform,
+				project,
 				s.StatusLabel(),
-				display,
-				tokens,
+				name,
 				formatSince(s.LastActive),
+				lastReq,
+				lastResp,
 			)
 		}
 		w.Flush()
@@ -106,20 +144,24 @@ func main() {
 	fmt.Println(strings.Repeat("─", 70))
 	fmt.Printf("%d active sessions total\n", totalSessions)
 	fmt.Println("🟢 busy  🟡 waiting  ⚪ idle  ▶ running  ⏸ suspended")
-	fmt.Println("(alive) = process is running  ↓↑ = token usage")
 }
 
-func claudeStatusIcon(s claude.SessionSummary) string {
+func formatClaudeStatus(s claude.SessionSummary) string {
+	icon := "?"
 	switch s.Status {
 	case "busy":
-		return "🟢 busy"
+		icon = "🟢 busy"
 	case "waiting":
-		return "🟡 waiting"
+		icon = "🟡 waiting"
 	case "idle":
-		return "⚪ idle"
+		icon = "⚪ idle"
 	default:
-		return fmt.Sprintf("? %s", s.Status)
+		icon = "? " + s.Status
 	}
+	if s.IsRunning {
+		icon += " ●"
+	}
+	return icon
 }
 
 func shortID(id string, n int) string {
@@ -127,6 +169,24 @@ func shortID(id string, n int) string {
 		return id
 	}
 	return id[:n]
+}
+
+func truncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
+}
+
+// escapeNewlines replaces control characters with visible escape sequences
+// so they don't break the table layout.
+func escapeNewlines(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", `\r\n`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
+	return s
 }
 
 func formatSince(t time.Time) string {

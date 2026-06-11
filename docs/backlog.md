@@ -19,6 +19,7 @@
 
 ## P2 — 锦上添花，有余力时做
 
+- **Hermes Last Resp 提取**：接入 `~/.hermes/state.db` SQLite（纯 Go 驱动如 `modernc.org/sqlite`），查询 messages 表获取 assistant 回复内容，填充 `LastResp` 字段。当前仅从 request_dump body 提取了 `LastReq`。
 - 军情哨主动推送（定时 + 事件触发，需后台守护进程）
 - 统帅偏好学习（推送频率自适应）
 - 战局图：任务依赖关系的可视化建立与阻塞检测

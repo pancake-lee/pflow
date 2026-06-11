@@ -16,9 +16,20 @@
   - 统一 CLI 输出：Claude Code + Hermes 双面板
   - 数据源：sessions.json（gateway 管理，实时） + request_dump 文件（CLI/cron，事后）
   - 文档记录在 `docs/note.md`
-- [ ] 实现 Claude Code CLI 子进程启动与 stdin/stdout 管道通信
-- [ ] 实现 stream-json 事件流解析（基于 `--output-format stream-json --input-format stream-json --permission-prompt-tool stdio`）
-- [ ] 实现 SessionSnapshot：从事件流推断 busy/waiting/idle 三态
+- [x] 实现 Claude Code CLI 子进程启动与 stdin/stdout 管道通信
+  - `internal/claude/subprocess.go` — `Start()`, `Send()`, `Events()`, `Close()`, `PID()`
+  - 使用 `--output-format stream-json --input-format stream-json --permission-prompt-tool stdio` 标志
+- [x] 实现 stream-json 事件流解析（基于 `--output-format stream-json --input-format stream-json --permission-prompt-tool stdio`）
+  - `internal/claude/stream.go` — Event/UserEvent/AssistantEvent 类型，`ParseEvents()` 流式解析器
+- [x] 实现 SessionSnapshot：从事件流推断 busy/waiting/idle 三态
+  - `internal/claude/snapshot.go` — `Tracker` 并发安全的状态追踪器，基于 stop_reason 推断状态
+  - busy: 用户刚发消息 或 assistant 正在执行工具 (stop_reason=tool_use)
+  - idle: assistant 完成回复 (stop_reason=end_turn)，等待用户输入
+  - waiting: 权限请求场景（预留，stdio permission prompt 事件待补充）
+- [x] 统一展示格式：Session ID / Project / Status / Last Active / Last Req / Last Resp
+  - Last Req / Last Resp 从 transcript 文件 (`~/.claude/projects/.../<session>.jsonl`) 提取，截取前 15 字
+  - busy 状态的 session 清除 Last Resp（避免展示不匹配的 req/resp 对）
+  - Hermes Last Req 从 request_dump body 提取，Last Resp 暂无（需 SQLite）
 
 ### P0-2
 
@@ -30,6 +41,10 @@
 ## P1
 
 - [ ] Shell 补齐脚本（bash/zsh completion）
+
+## P2
+
+- [ ] **Hermes Last Resp 提取**：接入 `~/.hermes/state.db` SQLite，读取 assistant 回复内容填充 `LastResp` 字段。当前仅从 request_dump body 提取了 `LastReq`，回复内容需查询 SQLite messages 表。
 
 ## 验证目标
 
