@@ -1,4 +1,4 @@
-.PHONY: build env clean vet test dev run
+.PHONY: build env clean vet test dev run install
 
 # Default target
 .DEFAULT_GOAL := build
@@ -47,3 +47,8 @@ run: build
 ## dev: start Go API server (for use with 'cd web && npm run dev')
 dev:
 	go run ./cmd/pflow/ serve
+
+## install: build and install pflow to $GOPATH/bin (or $GOBIN)
+install: build
+	go install ./cmd/pflow/
+	@echo "==> pflow installed to $$(go env GOPATH)/bin/pflow"
