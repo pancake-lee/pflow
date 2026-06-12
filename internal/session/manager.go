@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 )
 
 // Session represents a managed terminal session.
@@ -297,13 +299,16 @@ func ensureTmux(name, workDir string) error {
 }
 
 // startTtyd starts a ttyd process bound to the given port.
-// Command: ttyd -p <port> -i <host> tmux attach -t <name>
+// Command: ttyd -W -p <port> -i <host> tmux attach -t <name>
+// -W enables writable mode explicitly (default in most versions, added for safety).
 func startTtyd(port int, sessionName, host string) (*exec.Cmd, error) {
 	args := []string{
+		"-W", // explicitly writable
 		"-p", strconv.Itoa(port),
 		"-i", host,
 		"tmux", "attach", "-t", sessionName,
 	}
+	plogger.Debugf("ttyd: starting: ttyd %v", args)
 	cmd := exec.Command("ttyd", args...)
 
 	// Forward stderr for diagnostics
@@ -316,6 +321,7 @@ func startTtyd(port int, sessionName, host string) (*exec.Cmd, error) {
 	// Give ttyd a moment to bind the port
 	time.Sleep(300 * time.Millisecond)
 
+	plogger.Infof("ttyd: started on port %d for tmux session %s", port, sessionName)
 	return cmd, nil
 }
 

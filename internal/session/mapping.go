@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 )
 
 // Mapping records the association between a pflow-managed tmux session
@@ -82,7 +84,11 @@ func (mm *mappingManager) save(store *mappingStore) error {
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, mm.path)
+	if err := os.Rename(tmpPath, mm.path); err != nil {
+		return err
+	}
+	plogger.Debugf("mapping: saved %d entries to %s", len(store.Mappings), mm.path)
+	return nil
 }
 
 // addMapping appends a new mapping and persists.
@@ -102,6 +108,8 @@ func (mm *mappingManager) addMapping(m Mapping) error {
 	filtered = append(filtered, m)
 	store.Mappings = filtered
 
+	plogger.Infof("mapping: added tmux=%s prefix=%s workDir=%s (total=%d)",
+		m.TmuxName, m.ClaudePrefix, m.WorkDir, len(filtered))
 	return mm.save(store)
 }
 
@@ -176,17 +184,32 @@ func (mm *mappingManager) cleanStale() (int, error) {
 		return 0, err
 	}
 	var alive []Mapping
-	removed := 0
+	var staleNames []string
 	for _, m := range store.Mappings {
 		if tmuxSessionExists(m.TmuxName) {
 			alive = append(alive, m)
 		} else {
-			removed++
+			staleNames = append(staleNames, m.TmuxName)
 		}
 	}
-	if removed == 0 {
+	if len(staleNames) == 0 {
 		return 0, nil
 	}
+	plogger.Infof("mapping: cleaning stale entries: %v (keeping %d)", staleNames, len(alive))
 	store.Mappings = alive
-	return removed, mm.save(store)
+	return len(staleNames), mm.save(store)
+}
+
+// LoadMappings returns all saved tmux↔Claude mappings. It is used by
+// the dashboard API to annotate sessions with terminal availability.
+func LoadMappings() ([]Mapping, error) {
+	mm, err := newMappingManager()
+	if err != nil {
+		return nil, err
+	}
+	store, err := mm.load()
+	if err != nil {
+		return nil, err
+	}
+	return store.Mappings, nil
 }

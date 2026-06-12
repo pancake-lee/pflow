@@ -20,9 +20,16 @@ import (
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
 	"github.com/pancake-lee/pflow/internal/session"
+	plogger "github.com/pancake-lee/pgo/pkg/plogger"
+	"go.uber.org/zap/zapcore"
 )
 
 func main() {
+	// Parse global flags before subcommand dispatch.
+	// -l controls whether logs also appear on console (default: file only).
+	logConsole := parseGlobalFlags()
+	plogger.InitLogger(logConsole, zapcore.DebugLevel, "./logs/")
+
 	if len(os.Args) < 2 {
 		// Default: status with defaults
 		runStatus(config.DefaultWindow, config.DefaultMaxInactive)
@@ -47,11 +54,30 @@ func main() {
 	}
 }
 
+// parseGlobalFlags extracts global flags (like -l) from os.Args before
+// subcommand-specific flag parsing. Returns true if -l was present.
+func parseGlobalFlags() bool {
+	logConsole := false
+	filtered := make([]string, 0, len(os.Args))
+	for _, a := range os.Args {
+		if a == "-l" {
+			logConsole = true
+			continue // drop -l
+		}
+		filtered = append(filtered, a)
+	}
+	os.Args = filtered
+	return logConsole
+}
+
 func printUsage() {
 	fmt.Println(`pflow — Multi-Agent Attention Manager
 
 Usage:
-  pflow [command] [flags]
+  pflow [-l] [command] [flags]
+
+Global Flags:
+  -l    Log to console (default: log to file only)
 
 Commands:
   status   Show agent activity dashboard (default if no command given)

@@ -22,6 +22,7 @@ import {
   NSpin,
   NAlert,
   NTooltip,
+  NModal,
 } from 'naive-ui'
 import {
   DesktopOutline,
@@ -105,16 +106,58 @@ function startResize(e: MouseEvent) {
   document.body.style.userSelect = 'none'
 }
 
-// Terminal in detail sidebar
+// Terminal state
 const terminalUrl = ref<string | null>(null)
 const terminalName = ref<string | null>(null)
 const terminalLoading = ref(false)
 const terminalError = ref<string | null>(null)
-const terminalFound = ref(false)          // true if lookup found a matching tmux
-const terminalVerified = ref(false)       // true if live capture-pane confirmed the match
-const terminalLookupHint = ref<string | null>(null)  // hint when not found
-const terminalLookupWarning = ref<string | null>(null)  // warning when found but not verified
-const terminalLookupDone = ref(false)     // true after lookup completes
+const terminalFound = ref(false)
+const terminalVerified = ref(false)
+const terminalLookupHint = ref<string | null>(null)
+const terminalLookupWarning = ref<string | null>(null)
+const terminalLookupDone = ref(false)
+
+// Terminal modal
+const showTerminalModal = ref(false)
+
+function openTerminalModal() {
+  if (terminalUrl.value) {
+    showTerminalModal.value = true
+    return
+  }
+  // Will start ttyd first, then open modal
+  startTerminal()
+}
+
+// Open terminal directly from the table column button
+async function openTerminalFromTable(row: DashboardEntry) {
+  selectedSession.value = row
+  showDetail.value = false // don't open drawer
+
+  // Reset terminal state
+  terminalUrl.value = null
+  terminalError.value = null
+  terminalLookupHint.value = null
+  terminalLookupWarning.value = null
+
+  // If dashboard API already found a mapping, use it directly
+  if (row.has_terminal && row.terminal_tmux_name) {
+    terminalFound.value = true
+    terminalVerified.value = false
+    terminalName.value = row.terminal_tmux_name
+    terminalLookupDone.value = true
+    await startTerminal() // this auto-opens modal on success
+    return
+  }
+
+  // Fallback: do a lookup (should not normally happen if backend populated mapping)
+  if (row.agent_type === 'claude' && row.session_id) {
+    await lookupTerminal(row.session_id)
+    if (terminalFound.value) {
+      await startTerminal()
+    }
+  }
+}
 
 // ── Derived ──────────────────────────────────────────────────────
 
@@ -155,6 +198,7 @@ function openDetail(row: DashboardEntry) {
     terminalLookupHint.value = null
     terminalLookupWarning.value = null
     terminalLookupDone.value = false
+    showTerminalModal.value = false
   }
   selectedSession.value = row
   showDetail.value = true
@@ -235,33 +279,13 @@ async function startTerminal() {
     terminalUrl.value = data.ttyd_url ?? null
     terminalName.value = data.name ?? null
     terminalFound.value = true
+    // Auto-open the terminal modal
+    showTerminalModal.value = true
   } catch (e) {
     terminalError.value = e instanceof Error ? e.message : 'Failed to start terminal'
     terminalUrl.value = null
     terminalName.value = null
   } finally {
-    terminalLoading.value = false
-  }
-}
-
-async function stopTerminal() {
-  const name = terminalName.value
-  if (!name) return
-
-  terminalLoading.value = true
-  terminalError.value = null
-
-  try {
-    await fetch('/api/v1/terminal/stop', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    })
-  } catch (e) {
-    terminalError.value = e instanceof Error ? e.message : 'Failed to stop terminal'
-  } finally {
-    terminalUrl.value = null
-    terminalName.value = null
     terminalLoading.value = false
   }
 }
@@ -313,6 +337,13 @@ const columns: DataTableColumns<DashboardEntry> = [
     key: 'project',
     width: 140,
     ellipsis: { tooltip: true },
+    sorter: (a, b) => {
+      const pa = (a.project || a.platform || '?').toLowerCase()
+      const pb = (b.project || b.platform || '?').toLowerCase()
+      if (pa < pb) return -1
+      if (pa > pb) return 1
+      return 0
+    },
     render(row) {
       const p = row.project || (row.platform ? row.platform : '?')
       return h('span', p)
@@ -366,6 +397,26 @@ const columns: DataTableColumns<DashboardEntry> = [
     ellipsis: { tooltip: true },
     render(row) {
       return h('span', escapeNewlines(truncate(row.last_resp, 15)) || '—')
+    },
+  },
+  {
+    title: 'TTY',
+    key: 'terminal',
+    width: 50,
+    render(row) {
+      if (row.agent_type !== 'claude' || !row.has_terminal) return null
+      return h(
+        NButton,
+        {
+          size: 'tiny',
+          quaternary: true,
+          onClick: (e: MouseEvent) => {
+            e.stopPropagation()
+            openTerminalFromTable(row)
+          },
+        },
+        { default: () => '🖥' },
+      )
     },
   },
 ]
@@ -523,7 +574,7 @@ function rowProps(row: DashboardEntry) {
       <NDrawerContent v-if="selectedSession" title="Session Detail" closable>
         <!-- Resize handle on left edge -->
         <div class="resize-handle" @mousedown="startResize"></div>
-        <NDescriptions label-placement="left" :column="1" bordered size="small">
+        <NDescriptions label-placement="left" :column="1" bordered size="small" label-style="width: 100px; min-width: 100px; white-space: nowrap">
           <NDescriptionsItem label="Session ID">
             <code>{{ selectedSession.session_id }}</code>
           </NDescriptionsItem>
@@ -570,99 +621,73 @@ function rowProps(row: DashboardEntry) {
           </NDescriptionsItem>
         </NDescriptions>
 
-        <!-- Terminal Section -->
-        <div class="terminal-section">
-          <div class="terminal-section-header">
-            <span class="terminal-section-title">🖥 Terminal</span>
-            <NSpace :size="8">
-              <NButton
-                v-if="!terminalUrl && (terminalFound || !terminalLookupDone)"
-                size="tiny"
-                type="primary"
-                @click="startTerminal"
-                :loading="terminalLoading"
-              >
-                {{ terminalFound ? 'Open Terminal' : 'Start Terminal' }}
-              </NButton>
-              <NButton
-                v-else-if="terminalUrl"
-                size="tiny"
-                type="warning"
-                @click="stopTerminal"
-                :loading="terminalLoading"
-              >
-                Stop
-              </NButton>
-            </NSpace>
-          </div>
-
-          <!-- Lookup status -->
-          <NAlert
-            v-if="selectedSession?.agent_type === 'claude' && !terminalLookupDone && !terminalError"
-            type="info"
-            size="tiny"
-            style="margin-bottom: 8px"
-          >
-            Looking for managed tmux session...
-          </NAlert>
-
-          <!-- Not-verified warning -->
-          <NAlert
-            v-if="terminalFound && !terminalVerified && !terminalError"
-            type="warning"
-            size="tiny"
-            style="margin-bottom: 8px"
-          >
-            {{ terminalLookupWarning || 'Unable to verify this tmux session matches the current Claude session — it may have changed.' }}
-          </NAlert>
+        <!-- Terminal Section (Claude only) -->
+        <div class="terminal-section" v-if="selectedSession?.agent_type === 'claude'">
+          <NSpace>
+            <NButton
+              size="small"
+              type="primary"
+              @click="openTerminalModal"
+              :loading="terminalLoading || !terminalLookupDone"
+              :disabled="terminalLookupDone && !terminalFound"
+            >
+              🖥 Terminal
+            </NButton>
+          </NSpace>
 
           <NAlert
             v-if="terminalError"
             type="error"
             size="tiny"
-            style="margin-bottom: 8px"
+            style="margin-top: 8px"
           >
             {{ terminalError }}
           </NAlert>
 
-          <div v-if="terminalUrl" class="terminal-frame-wrapper">
-            <iframe
-              :src="terminalUrl"
-              class="terminal-iframe"
-              frameborder="0"
-              title="Web Terminal"
-            />
-          </div>
+          <NAlert
+            v-if="terminalFound && !terminalVerified && !terminalError"
+            type="warning"
+            size="tiny"
+            style="margin-top: 8px"
+          >
+            {{ terminalLookupWarning || 'Unable to verify this tmux session matches the current Claude session — it may have changed.' }}
+          </NAlert>
 
-          <!-- Found tmux but no ttyd yet -->
-          <div v-else-if="terminalFound && !terminalUrl && !terminalLoading && !terminalError" class="terminal-placeholder terminal-found">
-            <p>✅ Tmux session <code>{{ terminalName }}</code> found.</p>
-            <p>Click "Open Terminal" to connect via web terminal.</p>
-          </div>
-
-          <!-- Lookup done, no match -->
-          <div v-else-if="terminalLookupDone && !terminalFound && !terminalLoading && !terminalError && selectedSession?.agent_type === 'claude'" class="terminal-placeholder">
+          <div v-if="terminalLookupDone && !terminalFound && !terminalError" class="terminal-placeholder">
             <p>{{ terminalLookupHint || 'No tmux session found' }}</p>
             <p class="terminal-placeholder-hint">
               Start with: <code>pflow claude</code> in the project directory.
-              <br/>The status line must show the 8-char session ID prefix.
             </p>
-          </div>
-
-          <!-- Hermes or other agent types -->
-          <div v-else-if="selectedSession?.agent_type !== 'claude' && !terminalUrl && !terminalLoading && !terminalError" class="terminal-placeholder">
-            <p>Terminal integration is only available for Claude Code sessions.</p>
-            <p class="terminal-placeholder-hint">Requires tmux + ttyd to be installed on the server.</p>
-          </div>
-
-          <!-- Default placeholder -->
-          <div v-else-if="!terminalUrl && !terminalLoading && !terminalError && !terminalLookupDone" class="terminal-placeholder">
-            <p>Open a web terminal to the session's working directory.</p>
-            <p class="terminal-placeholder-hint">Requires tmux + ttyd to be installed on the server.</p>
           </div>
         </div>
       </NDrawerContent>
     </NDrawer>
+
+    <!-- Terminal Modal -->
+    <NModal
+      v-model:show="showTerminalModal"
+      :mask-closable="false"
+      preset="card"
+      :style="{ width: '90vw', maxWidth: '1200px' }"
+      :title="'🖥 Terminal: ' + (terminalName || '')"
+      closable
+    >
+      <div v-if="terminalUrl" class="terminal-modal-body">
+        <iframe
+          :src="terminalUrl"
+          class="terminal-modal-iframe"
+          frameborder="0"
+          title="Web Terminal"
+        />
+      </div>
+      <div v-else-if="terminalLoading" class="terminal-modal-loading">
+        <NSpin />
+        <p>Starting terminal...</p>
+      </div>
+      <div v-else class="terminal-modal-loading">
+        <p>Terminal not available. Click "Open Terminal" to start.</p>
+      </div>
+    </NModal>
   </NLayout>
 </template>
 
@@ -799,39 +824,14 @@ function rowProps(row: DashboardEntry) {
   padding-top: 12px;
 }
 
-.terminal-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.terminal-section-title {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.terminal-frame-wrapper {
-  border: 1px solid var(--n-border-color);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.terminal-iframe {
-  width: 100%;
-  height: 400px;
-  display: block;
-  background: #1e1e1e;
-}
-
 .terminal-placeholder {
-  padding: 16px;
+  padding: 12px;
   background: var(--n-color-embedded);
   border-radius: 6px;
   border: 1px dashed var(--n-border-color);
-  text-align: center;
   color: var(--n-text-color-3);
   font-size: 13px;
+  margin-top: 8px;
 }
 
 .terminal-placeholder-hint {
@@ -847,15 +847,29 @@ function rowProps(row: DashboardEntry) {
   font-size: 11px;
 }
 
-.terminal-found {
-  border-color: #18a058 !important;
-  background: rgba(24, 160, 88, 0.06);
+/* Terminal modal */
+.terminal-modal-body {
+  height: 75vh;
+  min-height: 400px;
+  background: #1e1e1e;
+  border-radius: 4px;
+  overflow: hidden;
 }
 
-.terminal-found code {
-  background: var(--n-color-embedded);
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 12px;
+.terminal-modal-iframe {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border: none;
+}
+
+.terminal-modal-loading {
+  height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--n-text-color-3);
 }
 </style>

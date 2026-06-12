@@ -12,23 +12,26 @@ import (
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
 	"github.com/pancake-lee/pflow/internal/session"
+	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 )
 
 // DashboardEntry is a unified session entry for the Dashboard API response.
 type DashboardEntry struct {
-	SessionID    string    `json:"session_id"`
-	AgentType    string    `json:"agent_type"` // "claude" or "hermes"
-	Project      string    `json:"project"`
-	Status       string    `json:"status"`
-	IsActive     bool      `json:"is_active"`
-	TrafficLight string    `json:"traffic_light"`
-	Name         string    `json:"name"`
-	LastActive   time.Time `json:"last_active"`
-	LastReq      string    `json:"last_req"`       // truncated ~15 chars for table
-	LastResp     string    `json:"last_resp"`       // truncated ~15 chars for table
-	LastReqFull  string    `json:"last_req_full"`   // full text for detail view
-	LastRespFull string    `json:"last_resp_full"`  // full text for detail view
-	Platform     string    `json:"platform,omitempty"` // Hermes only
+	SessionID        string    `json:"session_id"`
+	AgentType        string    `json:"agent_type"` // "claude" or "hermes"
+	Project          string    `json:"project"`
+	Status           string    `json:"status"`
+	IsActive         bool      `json:"is_active"`
+	TrafficLight     string    `json:"traffic_light"`
+	Name             string    `json:"name"`
+	LastActive       time.Time `json:"last_active"`
+	LastReq          string    `json:"last_req"`          // truncated ~15 chars for table
+	LastResp         string    `json:"last_resp"`         // truncated ~15 chars for table
+	LastReqFull      string    `json:"last_req_full"`     // full text for detail view
+	LastRespFull     string    `json:"last_resp_full"`    // full text for detail view
+	Platform         string    `json:"platform,omitempty"`   // Hermes only
+	HasTerminal      bool      `json:"has_terminal"`         // true if a tmux mapping exists
+	TerminalTmuxName string    `json:"terminal_tmux_name,omitempty"` // matched tmux session name
 }
 
 // DashboardResponse is the JSON response for GET /api/v1/dashboard.
@@ -159,6 +162,25 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				LastRespFull: s.LastRespFull,
 				Platform:     s.Platform,
 			})
+		}
+	}
+
+	// Annotate Claude sessions with terminal mapping info.
+	if mappings, err := session.LoadMappings(); err == nil && len(mappings) > 0 {
+		prefixToTmux := make(map[string]string, len(mappings))
+		for _, m := range mappings {
+			// Only include mappings with live tmux sessions
+			if m.ClaudePrefix != "" {
+				prefixToTmux[m.ClaudePrefix] = m.TmuxName
+			}
+		}
+		for i := range resp.Sessions {
+			if resp.Sessions[i].AgentType == "claude" {
+				if tmuxName, ok := prefixToTmux[resp.Sessions[i].SessionID]; ok {
+					resp.Sessions[i].HasTerminal = true
+					resp.Sessions[i].TerminalTmuxName = tmuxName
+				}
+			}
 		}
 	}
 
@@ -343,14 +365,17 @@ func (s *Server) handleTerminalLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	plogger.Debugf("api: terminal lookup request session_id=%s", truncate8(sessionID))
 	result, err := s.sessionMgr.LookupByClaudeSessionID(sessionID)
 	if err != nil {
+		plogger.Warnf("api: terminal lookup error session_id=%s: %v", truncate8(sessionID), err)
 		writeTerminalError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if result.Session == nil {
+		plogger.Infof("api: terminal lookup NOT FOUND session_id=%s", truncate8(sessionID))
 		json.NewEncoder(w).Encode(terminalLookupResponse{
 			Found: false,
 			Hint:  "No pflow-managed tmux session found for this Claude session. Start one with: pflow claude",
@@ -358,6 +383,8 @@ func (s *Server) handleTerminalLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	plogger.Infof("api: terminal lookup FOUND session_id=%s tmux=%s verified=%v",
+		truncate8(sessionID), result.Session.Name, result.Verified)
 	resp := terminalLookupResponse{
 		Found:    true,
 		Verified: result.Verified,

@@ -15,6 +15,8 @@ export interface DashboardEntry {
   last_req_full?: string  // full text for detail view
   last_resp_full?: string // full text for detail view
   platform?: string // Hermes only
+  has_terminal: boolean
+  terminal_tmux_name?: string
 }
 
 export interface DashboardResponse {
