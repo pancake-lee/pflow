@@ -1,81 +1,75 @@
 # todo
 
-> 当前周期：阶段二 Web Dashboard
+> 当前周期：阶段三 CLI 能力扩展
 
 ## 目标
 
-构建基于 **Vue 3 + Naive UI + TypeScript + Vite** 的浏览器端可视化面板，替代终端文本表格，提供真正意义上的"军帐战报"。
+在已打通的"Dashboard 看到状态 → Web 终端交互"闭环基础上，补齐 CLI 端的独立操作能力，让用户无需浏览器也能完成"赴前线/获取建议/设定焦点"等核心操作。
 
-## P0 — 核心面板，必须完成
+已完成：`pflow claude`、Web 终端集成、Tmux↔Claude session 映射。详见 [`docs/prd.md`](./docs/prd.md) 阶段三。
 
-### P0-1 项目初始化
+## P0 — 核心闭环，必须完成
 
-- [x] 用 Vite 创建 Vue 3 + TypeScript 项目（`web/` 目录）
-- [x] 安装 Naive UI、配置暗色主题
-- [x] 配置与 Go 后端的开发代理（Vite proxy → `localhost:8080`）
-- [x] 建立目录结构：`components/`、`composables/`、`types/`、`views/`
+### P0-1 `pflow attach` — 独立的终端唤醒命令
 
-### P0-2 Dashboard 主页面
+- [ ] 按 session ID（前缀匹配）查找并 attach 到对应 tmux session
+- [ ] 按项目名/路径查找并 attach
+- [ ] 如果 session 没有关联的 tmux（非 pflow 托管），给出明确提示
+- [ ] 支持 `--list` / `--choose` 交互选择模式（多个匹配时）
+- [ ] `pflow attach` 无参数时列出所有当前可 attach 的会话供选择
 
-- [x] 会话列表表格（Naive UI DataTable）：
-  - 列：Agent 图标 / Session ID / Project / Status（红绿灯） / Name / Last Active / Last Req / Last Resp
-  - 红绿灯渲染：🟢 busy/running、🟡 waiting/suspended、⚪ idle、⚫ unknown/completed
-  - 相对时间显示（"3m ago"、"1h ago"）
-  - 文本截断 + hover 展开 tooltip
-- [x] 控制栏（筛选参数）：
-  - Time window 选择器（1h / 3h / 6h / 1d / 3d / 7d）
-  - Max inactive per project 输入
-  - Agent type 过滤（All / Claude / Hermes）
-- [x] 自动刷新：可配置间隔（off / 10s / 30s / 60s），轮询 `/api/v1/dashboard`
-- [x] 统计摘要栏：活跃数 / 等待数 / 空闲数 / 总计
+### P0-2 `pflow focus` — 主攻/侧翼配置
 
-### P0-3 会话详情
+- [ ] `pflow focus --main <session-id>` 设定主攻方向
+- [ ] `pflow focus --side <session-id,...>` 设定侧翼战场（逗号分隔）
+- [ ] `pflow focus --show` 展示当前焦点配置
+- [ ] `pflow focus --clear` 清除所有焦点配置
+- [ ] 配置持久化（`~/.pflow/focus.json` 或 TOML）
+- [ ] Dashboard API 返回焦点信息，前端高亮显示主攻/侧翼 session
 
-- [x] 点击会话行 → 侧边抽屉显示详情：
-  - 完整 Session ID
-  - Agent 类型、Platform（Hermes）
-  - Status + TrafficLight
-  - IsActive 状态
-  - 完整 Last Req / Last Resp 文本
+### P0-3 沉默提醒
 
-## P1 — 体验完善
+- [ ] 后台 goroutine 定期扫描活跃 session 的最后活动时间
+- [ ] 主攻 session 沉默超过可配置阈值（默认 5min）→ 终端输出通知
+- [ ] 通知内容：哪个 session、沉默了多久、当前状态
+- [ ] 可配置提醒间隔（避免重复骚扰）
+- [ ] `pflow serve` 启动时自动开启（可通过 `--no-watch` 禁用）
 
-- [x] Go embed：`//go:embed web/dist/*` 将前端打包进 Go binary，`pflow serve` 单文件部署
-- [x] 空状态设计：无 session 时的引导提示
-- [x] 错误状态：API 不可用时的 NAlert 提示
-- [x] Loading 状态：NSpin 包裹
-- [x] Go embed：`//go:embed web/dist/*` 将前端打包进 Go binary，`pflow serve` 单文件部署
-- [x] `max_inactive` 排序稳定性：inactive session 按 LastActive 降序排列后再截断，确保输出稳定
-- [x] Hermes 红绿灯修复：API `status` 字段使用纯文本（不再含 emoji 前缀），前端统一拼接 `traffic_light + status`
-- [x] 状态统一：Claude `unknown` + Hermes `suspended`/`completed` → 统一为 `inactive`（⚫）
-- [x] 侧边栏可调宽度：拖拽手柄调整，min 1/4 屏幕、max 3/4 屏幕
-- [x] 侧边栏完整内容：新增 `last_req_full`/`last_resp_full` 字段贯穿全链路，抽屉展示完整文本；表格保持 15 字截断
-- [x] `max_inactive` 默认值改为 1（CLI + Web 同步）
-- [x] `CLAUDE.md` 规则：禁止直接 `go build`，必须通过 `make build`
-- [ ] 响应式布局：桌面端为主，平板可用（暂未严格测试）
+## P1 — 体验提升
 
-## P2 — 锦上添花
+### P1-1 `pflow suggest` — 军情哨手动触发
 
-- [x] Web 终端集成（ttyd + tmux + Claude statusline 关联）
-- [x] `pflow claude` CLI 子命令（托管 tmux + Claude 会话）
-- [ ] WebSocket 实时推送（替代轮询）
-- [ ] Session 状态变化时的浏览器通知（Notification API）
-- [ ] 会话时间线可视化（甘特图式的时间分布）
-- [ ] 暗色/亮色主题切换
+- [ ] 分析当前所有会话状态（busy/waiting/idle 分布、等待时间、项目关联）
+- [ ] 输出一条引导建议：应该关注哪个 session、为什么
+- [ ] 建议维度：等待最久的、主攻方向有更新的、侧翼有新进展的
+- [ ] 纯 CLI 文本输出，不依赖 LLM（基于规则引擎）
+- [ ] 后续可接入 LLM 做更智能的分析
+
+### P1-2 Shell 补齐脚本
+
+- [ ] Bash 补齐：`pflow <subcommand>` 子命令名补齐
+- [ ] `pflow attach <session-id-prefix>` 补齐可用的 session ID
+- [ ] `pflow claude -dir <path>` 补齐目录路径
+- [ ] Zsh 补齐（可选，优先 Bash）
+- [ ] 安装方式：`make install` 或 `pflow completion bash > /etc/bash_completion.d/pflow`
+
+### P1-3 多 Agent 类型启动
+
+- [ ] `pflow start --agent hermes --project X` 启动 Hermes 托管会话
+- [ ] 统一 `pflow start` 作为通用启动入口（`pflow claude` 保留为快捷方式）
+- [ ] 每种 agent 类型有自己的 tmux + 进程管理逻辑
+
+## P2 — 锦上添花（可延后）
+
+- [ ] **Hermes Last Resp 提取**：接入 `~/.hermes/state.db` SQLite，提取 assistant 回复内容填充 `LastResp`
+- [ ] **WebSocket 实时推送**：`GET /api/v1/dashboard/ws`，状态变化时服务端主动推送
+- [ ] **浏览器通知**：Session 状态变化时触发 Notification API
+- [ ] **会话时间线**：甘特图式的时间分布可视化
 
 ## 不包含（本周期）
 
-- Agent 启动/停止/attach（后端能力，留待后续）
-- 军情哨推送（留待阶段三）
-- 游戏化外壳（留待阶段四）
-- TUI Dashboard（Bubble Tea 方案暂时搁置，Web 面板先行）
-
-## 验证目标
-
-| 指标 | 目标 |
-|------|------|
-| Dashboard 页面首屏加载 | < 2s |
-| 自动刷新延迟（轮询） | 与设定间隔一致 |
-| 多 session 展示 | 支持 50+ 条无卡顿 |
-| Go embed 后二进制增量 | < 5MB |
-| 暗色主题视觉一致性 | Naive UI 暗色主题通过 |
+- 军情哨主动推送（需后台守护进程，留待阶段四）
+- 统帅偏好学习（留待阶段四）
+- 战局图（留待阶段四）
+- TUI Dashboard（留待阶段五）
+- 游戏化外壳（留待阶段五）

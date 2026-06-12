@@ -29,72 +29,99 @@
 pflow/
 ├── cmd/
 │   └── pflow/
-│       └── main.go              # CLI 入口
+│       └── main.go                 # CLI 入口
 ├── internal/
-│   ├── claude/                  # Claude Code CLI 进程管理
-│   │   ├── activity.go          # Session 活动扫描
-│   │   ├── stream.go            # stream-json 类型定义与解析
-│   │   ├── subprocess.go        # CLI 子进程管理
-│   │   └── snapshot.go          # SessionSnapshot 状态快照
-│   ├── hermes/                  # Hermes Agent 会话监控
-│   │   └── activity.go          # Session 活动扫描
-│   ├── api/                     # HTTP API
-│   │   └── server.go            # Dashboard API server
-│   └── config/                  # 配置管理
-│       └── config.go            # ScanOptions + ParseWindow
-├── web/                         # Web Dashboard 前端（阶段二）
+│   ├── claude/                     # Claude Code CLI 进程监控
+│   │   ├── activity.go             # Session 活动扫描（从 transcript 文件读取）
+│   │   ├── stream.go               # stream-json 类型定义与解析
+│   │   ├── subprocess.go           # CLI 子进程管理
+│   │   └── snapshot.go             # SessionSnapshot 状态快照
+│   ├── hermes/                     # Hermes Agent 会话监控
+│   │   └── activity.go             # Session 活动扫描（从 sessions.json + request_dump 读取）
+│   ├── session/                    # Tmux + ttyd 会话管理（阶段三）
+│   │   ├── manager.go              # Tmux/ttyd 进程生命周期管理
+│   │   ├── claude.go               # Claude statusline 配置 + 启动 + capture-pane 前缀解析
+│   │   └── mapping.go              # Tmux↔Claude session 映射持久化
+│   ├── api/                        # HTTP API
+│   │   └── server.go               # Dashboard API + 终端管理 API
+│   └── config/                     # 配置管理
+│       └── config.go               # ScanOptions + ParseWindow
+├── web/                            # Web Dashboard 前端
 │   ├── src/
-│   │   ├── components/          # Vue 组件
-│   │   ├── composables/         # 组合式函数（useDashboard, usePolling）
-│   │   ├── types/               # TypeScript 类型定义
-│   │   └── views/               # 页面视图
+│   │   ├── components/             # Vue 组件
+│   │   ├── composables/            # 组合式函数（useDashboard, usePolling, format）
+│   │   ├── types/                  # TypeScript 类型定义
+│   │   └── views/                  # 页面视图
 │   ├── index.html
 │   ├── vite.config.ts
 │   ├── tsconfig.json
 │   └── package.json
+├── embed.go                        # //go:embed web/dist/*
 ├── docs/
 │   ├── prd.md
 │   ├── tech.md
 │   ├── backlog.md
+│   ├── changelog.md
 │   ├── note.md
-│   └── archive/                 # 历史产出归档
-├── .local/                      # 个人工作文档（gitignored）
+│   └── archive/                    # 历史产出归档
+├── .local/                         # 个人工作文档（gitignored）
+├── Makefile
 ├── go.mod
 ├── go.sum
-├── LICENSE                      # MIT
-├── NOTICE                       # 第三方依赖版权声明
+├── LICENSE                         # MIT
+├── NOTICE                          # 第三方依赖版权声明
 └── README.md
 ```
 
 ### 2.1 模块分层
 
 ```
-┌─────────────────────────────────────────┐
-│  CLI / TUI（cmd/pflow, pkg/tui）         │  ← 用户界面
-├─────────────────────────────────────────┤
-│  调度层（internal/manager, attention）    │  ← pflow 核心
-├─────────────────────────────────────────┤
-│  Agent 适配层（internal/claude）          │  ← Claude Code CLI 通信
-├─────────────────────────────────────────┤
-│  公共服务（internal/api, config）         │  ← 基础设施
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  CLI / Web UI（cmd/pflow, web/）                  │  ← 用户界面
+├──────────────────────────────────────────────────┤
+│  会话管理层（internal/session）                    │  ← tmux + ttyd + statusline 关联
+├──────────────────────────────────────────────────┤
+│  调度层（internal/manager, attention）             │  ← pflow 核心（规划中）
+├──────────────────────────────────────────────────┤
+│  Agent 适配层（internal/claude, internal/hermes）  │  ← Agent 状态监控
+├──────────────────────────────────────────────────┤
+│  公共服务（internal/api, config）                  │  ← 基础设施
+└──────────────────────────────────────────────────┘
 ```
 
 ### 2.2 核心数据流
 
 ```
-Claude Code 进程 → stream-json 事件流 → Event Loop 解析
+Claude Code 进程 → transcript 文件 / Hermes → sessions.json + request_dump
                                             ↓
-                                    SessionSnapshot（状态快照）
+                                    SessionSummary（统一状态快照）
                                             ↓
-                                    Manager 聚合多 Session
+                                    API 聚合多 Session
                                             ↓
                                     Dashboard API（JSON）
                                        ↓         ↓
                                   CLI 文本表格   Web Dashboard（Vue 3）
+                                                    ↓
+                                              Web 终端（ttyd + tmux）
 ```
 
-`SessionSnapshot` 是 pflow 的核心数据模型——每个 Agent 会话对外暴露一个只读快照，包含：会话标识、当前状态（busy/waiting/idle）、最近操作摘要、上下文用量、进程存活状态。Dashboard API 层负责聚合所有 session 的快照并返回。
+`SessionSummary` 是 pflow 的核心数据模型——每个 Agent 会话对外暴露一个只读快照，包含：会话标识、当前状态（busy/waiting/idle/inactive）、最近操作摘要、上下文用量、进程存活状态。Dashboard API 层负责聚合所有 session 的快照并返回。
+
+**Tmux 终端数据流**：
+
+```
+pflow claude 启动
+  ├── 1. 配置 ~/.claude/settings.json (statusline)
+  ├── 2. tmux new-session + Claude
+  ├── 3. tmux capture-pane → 提取 8-char session 前缀
+  └── 4. 保存映射到 ~/.pflow/mappings.json
+
+Dashboard 打开详情时
+  ├── 1. GET /api/v1/terminal/lookup?session_id=<prefix>
+  ├── 2. 后端查 mappings.json → 匹配 tmux session
+  ├── 3. 返回 ttyd URL → 前端 iframe 嵌入 Web 终端
+  └── 4. ttyd → WebSocket → tmux attach → 交互式 Claude 会话
+```
 
 ## 3. 实施阶段
 
@@ -104,32 +131,37 @@ Claude Code 进程 → stream-json 事件流 → Event Loop 解析
 
 产出：`pflow status`、`pflow probe`、`pflow serve`（Dashboard API）、双 Agent 支持（Claude + Hermes）。
 
-### 3.2 阶段二：Web Dashboard ← 当前阶段
+### 3.2 阶段二：Web Dashboard ✅ 已完成
 
-**目标**：构建浏览器端可视化面板，用 Vue 3 + Naive UI 替代终端文本表格，提供真正意义上的"军帐战报"。
-
-**为什么 Web 优先于 TUI**：
-- Web Dashboard 可视化表现力远超终端，适合红绿灯、时间线等图形元素
-- 可长期挂在副屏，不占用终端工作区
-- Naive UI 组件库提供 DataTable / Tag / Card 等开箱即用的 Dashboard 组件
-- Vue SPA 打包后可嵌入 Go binary，部署仍为单文件
-
-**步骤**：
+**产出**：Vue 3 + Naive UI 浏览器端可视化面板。
 
 | 步骤 | 内容 | 产出 |
 |------|------|------|
 | 1. 项目初始化 | Vite + Vue 3 + TypeScript + Naive UI | `web/` 目录，可运行的空 Dashboard |
 | 2. Dashboard 主页面 | DataTable 会话列表、红绿灯渲染、筛选控制栏、统计摘要 | 可用的浏览器面板 |
-| 3. 会话详情 | 点击展开/抽屉显示完整 session 信息 | 详情视图 |
+| 3. 会话详情 | 点击展开/抽屉显示完整 session 信息 | 详情视图（含可调宽度侧边栏） |
 | 4. 自动刷新 | 可配置轮询间隔，调用现有 `/api/v1/dashboard` | 准实时更新 |
 | 5. Go embed 集成 | `//go:embed web/dist`，`pflow serve` 同时提供 API + 静态资源 | 单二进制部署 |
 
-### 3.3 后续阶段
+### 3.3 阶段三：CLI 能力扩展 ← 当前阶段
+
+**目标**：打通"从 Dashboard 看到 Agent 状态"到"一键进入 Agent 会话交互"的闭环。
+
+| 步骤 | 内容 | 状态 |
+|------|------|------|
+| 1. `pflow claude` 子命令 | 创建 tmux + Claude 托管会话，自动配置 statusline、提取 session 前缀 | ✅ 已完成 |
+| 2. Web 终端集成 | Dashboard 侧边栏通过 ttyd + tmux 嵌入交互式终端，通过 statusline 关联 Claude session | ✅ 已完成 |
+| 3. Session 映射持久化 | `~/.pflow/mappings.json` 存储 tmux↔Claude 关联，Dashboard API 自动 lookup 并标注可终端连接的 session | ✅ 已完成 |
+| 4. `pflow attach` 子命令 | 独立的终端唤醒命令，按 session ID 或项目名查找并 attach | 待实现 |
+| 5. `pflow suggest` | 军情哨手动触发分析建议 | 待实现 |
+| 6. `pflow focus` | 主攻/侧翼配置 | 待实现 |
+
+### 3.4 后续阶段
 
 | 阶段 | 内容 |
 |------|------|
-| 阶段三：智能调度 | 军情哨主动推送、统帅偏好学习、战局图 |
-| 阶段四：体验层 | TUI Dashboard、游戏化外壳、VSCode 扩展、跨设备同步 |
+| 阶段四：智能调度 | 军情哨主动推送、统帅偏好学习、战局图 |
+| 阶段五：体验层 | TUI Dashboard、游戏化外壳、VSCode 扩展、跨设备同步 |
 
 ## 4. MIT 协议合规
 
@@ -157,10 +189,10 @@ pflow 以 MIT License 发布，`LICENSE` 文件已就位。
 | 选择 | 方案 | 理由 |
 |------|------|------|
 | 语言 | Go | CLI 工具首选，子进程管理和并发模型优秀 |
-| TUI 框架 | Bubble Tea (charmbracelet) | 成熟稳定，社区活跃（阶段二暂搁置，Web 先行） |
+| TUI 框架 | Bubble Tea (charmbracelet) | 成熟稳定，社区活跃（当前搁置，Web 先行） |
 | HTTP 路由 | 标准库 net/http | 端点少，标准库足够 |
 | 配置格式 | TOML | Go 生态主流，可读性好 |
-| 数据持久化 | JSON 文件（当前）→ SQLite（后续） | 渐进式，先简单后扩展 |
+| 数据持久化 | JSON 文件（`~/.pflow/mappings.json`） | 简单够用，后续可升级 SQLite |
 
 ### 5.2 前端（Web Dashboard）
 
@@ -195,7 +227,7 @@ pflow 以 MIT License 发布，`LICENSE` 文件已就位。
 - **当前方案**：前端轮询 `/api/v1/dashboard`，间隔可配置
 - **后续升级**：WebSocket 实时推送（`GET /api/v1/dashboard/ws`），状态变化时服务端主动推送
 
-### 5.4 Web 终端集成（ttyd + tmux + Claude 关联）
+### 5.4 Web 终端集成（ttyd + tmux + Claude 关联）✅ 已实现
 
 **核心思路**：通过 Claude 的 `/statusline` 功能，在终端状态行显示 session ID 的前 8 个字符作为前缀。pflow 管理的 tmux session 可以通过 `tmux capture-pane` 解析出这个前缀，从而建立 **tmux session ↔ Claude session** 的关联。
 
@@ -203,16 +235,16 @@ pflow 以 MIT License 发布，`LICENSE` 文件已就位。
 
 ```
 pflow claude 启动流程:
-  1. 配置 Claude statusline（~/.claude/settings.json）
+  1. 检查并配置 Claude statusline（~/.claude/settings.json）
      → 状态行格式: "sid8 | model | ctx | tok | session"
   2. 创建 tmux session + 启动 Claude
-  3. wait + tmux capture-pane 提取 8-char session 前缀
+  3. 异步 wait + tmux capture-pane 提取 8-char session 前缀
   4. 保存映射到 ~/.pflow/mappings.json
 
 Dashboard 打开详情时:
   1. GET /api/v1/terminal/lookup?session_id=<uuid>
   2. 后端读取 mappings.json，按前缀匹配
-  3. 找到 → 返回 tmux 会话信息，前端可启动 ttyd
+  3. 找到 → 返回 tmux 会话信息（含 ttyd URL），前端可启动/连接 Web 终端
   4. 未找到 → 提示用户使用 pflow claude 启动
 ```
 
@@ -231,19 +263,18 @@ tmux session (pflow-<name>)
 项目工作目录
 ```
 
-**组件**：
+**组件实现**：
 
-| 组件 | 角色 |
-|------|------|
-| `internal/session/manager.go` | tmux + ttyd 进程管理器：创建/销毁会话、分配端口、追踪进程状态 |
-| `internal/session/claude.go` | Claude statusline 配置、Claude 进程启动、capture-pane 前缀解析 |
-| `internal/session/mapping.go` | tmux↔Claude session 映射持久化（`~/.pflow/mappings.json`） |
-| `cmd/pflow/main.go:runClaudeCmd` | `pflow claude` CLI 子命令：一键创建 tmux + Claude 托管会话 |
-| `POST /api/v1/terminal/start` | 启动 ttyd（支持指定已有 tmux session 名） |
-| `POST /api/v1/terminal/stop` | 停止 ttyd 进程（可选保留 tmux） |
-| `GET /api/v1/terminal/list` | 列出当前活跃的终端会话 |
-| `GET /api/v1/terminal/lookup` | 按 Claude session ID 查找关联的 tmux 会话 |
-| `DashboardView.vue` Terminal 面板 | 打开详情时自动 lookup，找到则显示连接按钮 |
+| 组件 | 角色 | 文件 |
+|------|------|------|
+| Session Manager | tmux + ttyd 进程管理器：创建/销毁会话、分配端口、追踪进程状态 | `internal/session/manager.go` |
+| Claude Session | Claude statusline 配置、Claude 进程启动、capture-pane 前缀解析 | `internal/session/claude.go` |
+| Mapping | tmux↔Claude session 映射持久化（`~/.pflow/mappings.json`） | `internal/session/mapping.go` |
+| CLI: `pflow claude` | 一键创建 tmux + Claude 托管会话 | `cmd/pflow/main.go:runClaudeCmd` |
+| API: terminal/start | 启动 ttyd 并连接到指定 tmux session | `internal/api/server.go` |
+| API: terminal/stop | 停止 ttyd 进程（可选保留 tmux） | `internal/api/server.go` |
+| API: terminal/list | 列出当前活跃的终端会话 | `internal/api/server.go` |
+| API: terminal/lookup | 按 Claude session ID 查找关联的 tmux 会话 | `internal/api/server.go` |
 
 **CLI 使用**：
 

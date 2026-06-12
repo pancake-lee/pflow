@@ -64,8 +64,8 @@ pflow 是一个**注意力管理工具**，帮助用户在同时使用多个 AI 
 
 一个 Agent Session 代表一个正在执行任务的 AI Agent 实例：
 
-- **兵种**：Claude Code CLI / Cline（VSCode）/ API 直接调用 / 其他第三方 Agent
-- **三态**：🟢 交战（busy） / 🟡 待命（waiting） / ⚪ 休整（idle）
+- **兵种**：Claude Code CLI / Hermes / Cline（VSCode）/ API 直接调用 / 其他第三方 Agent
+- **三态**：🟢 交战（busy/running） / 🟡 待命（waiting） / ⚪ 休整（idle） / ⚫ 静默（inactive）
 
 ### 4.2 军情哨（Attention Manager）
 
@@ -124,7 +124,7 @@ pflow 是一个**注意力管理工具**，帮助用户在同时使用多个 AI 
 - 主动提醒
 - 可视化界面（Web Dashboard 推迟到阶段二）
 
-### 阶段二：Web Dashboard ← 当前阶段
+### 阶段二：Web Dashboard ✅ 已完成
 
 **前提**：阶段一验证通过，Dashboard API 已可用。
 
@@ -146,16 +146,21 @@ Vue 3 + Naive UI + TypeScript + Vite。详见 [`tech.md`](./tech.md) 第 5.2 节
 - 军情哨推送（留待阶段三）
 - 游戏化外壳（留待阶段四）
 
-### 阶段三：核心 MVP（CLI 能力扩展）
+### 阶段三：CLI 能力扩展 ← 当前阶段
 
-| 功能 | 命令 | 说明 |
+核心目标：打通"从 Dashboard 看到 Agent 状态"到"一键进入 Agent 会话交互"的闭环。
+
+| 功能 | 命令 | 状态 |
 |------|------|------|
-| ✅ 启动 Claude 托管会话 | `pflow claude [-dir] [-name]` | 创建 tmux session + 启动 Claude，自动配置 statusline 关联 Dashboard |
-| 亲赴前线 | `pflow attach <session>` | 唤起终端（tmux attach）或打开 VSCode，直接与 Agent 交互 |
-| 手动获取建议 | `pflow suggest` | 军情哨分析当前所有会话状态，给出一条引导建议 |
-| 设定主攻/侧翼 | `pflow focus --main A --side B,C` | 设定今日主攻方向和可填充的侧翼战场 |
-| 沉默提醒 | — | 会话沉默超阈值时终端输出通知 |
-| 会话持久化 | — | 断开 SSH / 关闭终端后 Agent 继续在后台工作 |
+| 启动 Claude 托管会话 | `pflow claude [-dir] [-name] [-force] [-no-attach]` | ✅ 已完成 |
+| Claude statusline 自动配置 | 通过 `pflow claude` 自动写入 `~/.claude/settings.json` | ✅ 已完成 |
+| Web 终端集成 | Dashboard 侧边栏通过 ttyd + tmux 嵌入交互式终端 | ✅ 已完成 |
+| Tmux ↔ Claude 会话映射 | capture-pane 提取 8 位 session ID 前缀，持久化到 `~/.pflow/mappings.json` | ✅ 已完成 |
+| 亲赴前线 | `pflow attach <session>` | 待实现（当前通过 `pflow claude` 自带 attach + Web 终端实现） |
+| 手动获取建议 | `pflow suggest` | 待实现 |
+| 设定主攻/侧翼 | `pflow focus --main A --side B,C` | 待实现 |
+| 沉默提醒 | — | 待实现 |
+| 多 Agent 类型启动 | `pflow start --agent hermes` | 待实现 |
 
 ### 阶段四：智能调度
 
@@ -184,4 +189,4 @@ Vue 3 + Naive UI + TypeScript + Vite。详见 [`tech.md`](./tech.md) 第 5.2 节
 ---
 
 *前期调研与讨论记录见 `.local/` 目录。*
-*技术实现方案见 [`tech-design.md`](./tech-design.md)。*
+*技术实现方案见 [`tech.md`](./tech.md)。*

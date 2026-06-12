@@ -35,3 +35,4 @@ pflow
 # .idea/
 # .vscode/
 .local
+logs
