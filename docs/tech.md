@@ -194,3 +194,91 @@ pflow 以 MIT License 发布，`LICENSE` 文件已就位。
 
 - **当前方案**：前端轮询 `/api/v1/dashboard`，间隔可配置
 - **后续升级**：WebSocket 实时推送（`GET /api/v1/dashboard/ws`），状态变化时服务端主动推送
+
+### 5.4 Web 终端集成（ttyd + tmux + Claude 关联）
+
+**核心思路**：通过 Claude 的 `/statusline` 功能，在终端状态行显示 session ID 的前 8 个字符作为前缀。pflow 管理的 tmux session 可以通过 `tmux capture-pane` 解析出这个前缀，从而建立 **tmux session ↔ Claude session** 的关联。
+
+**关联流程**：
+
+```
+pflow claude 启动流程:
+  1. 配置 Claude statusline（~/.claude/settings.json）
+     → 状态行格式: "sid8 | model | ctx | tok | session"
+  2. 创建 tmux session + 启动 Claude
+  3. wait + tmux capture-pane 提取 8-char session 前缀
+  4. 保存映射到 ~/.pflow/mappings.json
+
+Dashboard 打开详情时:
+  1. GET /api/v1/terminal/lookup?session_id=<uuid>
+  2. 后端读取 mappings.json，按前缀匹配
+  3. 找到 → 返回 tmux 会话信息，前端可启动 ttyd
+  4. 未找到 → 提示用户使用 pflow claude 启动
+```
+
+**架构**：
+
+```
+浏览器 Dashboard 侧边栏
+  │  iframe 嵌入 ttyd 终端
+  ▼
+ttyd 进程 (端口 10000+)
+  │  WebSocket + PTY
+  ▼
+tmux session (pflow-<name>)
+  │  Claude Code（statusline 显示 session ID 前缀）
+  ▼
+项目工作目录
+```
+
+**组件**：
+
+| 组件 | 角色 |
+|------|------|
+| `internal/session/manager.go` | tmux + ttyd 进程管理器：创建/销毁会话、分配端口、追踪进程状态 |
+| `internal/session/claude.go` | Claude statusline 配置、Claude 进程启动、capture-pane 前缀解析 |
+| `internal/session/mapping.go` | tmux↔Claude session 映射持久化（`~/.pflow/mappings.json`） |
+| `cmd/pflow/main.go:runClaudeCmd` | `pflow claude` CLI 子命令：一键创建 tmux + Claude 托管会话 |
+| `POST /api/v1/terminal/start` | 启动 ttyd（支持指定已有 tmux session 名） |
+| `POST /api/v1/terminal/stop` | 停止 ttyd 进程（可选保留 tmux） |
+| `GET /api/v1/terminal/list` | 列出当前活跃的终端会话 |
+| `GET /api/v1/terminal/lookup` | 按 Claude session ID 查找关联的 tmux 会话 |
+| `DashboardView.vue` Terminal 面板 | 打开详情时自动 lookup，找到则显示连接按钮 |
+
+**CLI 使用**：
+
+```bash
+# 默认：在当前目录创建托管 session
+pflow claude
+
+# 指定项目目录
+pflow claude -dir /path/to/project
+
+# 同一项目启动多个 Claude（不同 session 名）
+pflow claude -name fix-bug
+
+# 后台启动（不 attach）
+pflow claude -no-attach
+```
+
+**Statusline 配置**：
+
+pflow 会自动配置 `~/.claude/settings.json` 中的 statusline。如果用户已有自定义配置，会给出提示。用户可以：
+1. `pflow claude -force` 覆盖为 pflow 的配置
+2. 手动在自己的 statusline 最前面添加 `sid8` 变量（8 位 session ID 前缀）
+
+**外部依赖**：
+- `tmux`（必须）— 终端多路复用
+- `ttyd`（必须）— Web 终端网关，用户需自行安装：`dnf install ttyd` 或 `apt install ttyd`
+- `jq`（必须）— Claude statusline 命令中用于解析 JSON
+
+**安全设计**：
+- ttyd 绑定 `127.0.0.1` 仅监听本地，不暴露到公网
+- 每个会话分配独立端口（默认从 10000 开始递增）
+- 生产环境建议通过 nginx 反向代理 + 认证保护
+
+**设计权衡**：
+
+- 只处理通过 `pflow claude` 启动 + 配合 statusline 配置的会话。原生终端启动、自建 tmux、Claude 退出又重进等路径不保证关联成功。
+- 关联失败时不影响 Dashboard 的核心功能——Terminal 面板是可选的增强功能。
+- 8 位前缀并非完整 UUID，但同一项目内足以区分不同会话。

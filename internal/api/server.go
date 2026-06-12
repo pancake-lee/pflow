@@ -11,6 +11,7 @@ import (
 	"github.com/pancake-lee/pflow/internal/claude"
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
+	"github.com/pancake-lee/pflow/internal/session"
 )
 
 // DashboardEntry is a unified session entry for the Dashboard API response.
@@ -41,14 +42,21 @@ type DashboardResponse struct {
 // Server is the pflow HTTP API server.
 type Server struct {
 	http.ServeMux
-	staticFS fs.FS // optional embedded static files (web/dist)
+	staticFS   fs.FS // optional embedded static files (web/dist)
+	sessionMgr *session.Manager
 }
 
 // NewServer creates a new API server with registered routes.
 // If staticFS is non-nil, static files (the Vue SPA) are served from it.
-func NewServer(staticFS fs.FS) *Server {
-	s := &Server{staticFS: staticFS}
+func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
+	s := &Server{staticFS: staticFS, sessionMgr: sessionMgr}
 	s.HandleFunc("/api/v1/dashboard", s.handleDashboard)
+
+	// Terminal management endpoints
+	s.HandleFunc("POST /api/v1/terminal/start", s.handleTerminalStart)
+	s.HandleFunc("POST /api/v1/terminal/stop", s.handleTerminalStop)
+	s.HandleFunc("GET /api/v1/terminal/list", s.handleTerminalList)
+	s.HandleFunc("GET /api/v1/terminal/lookup", s.handleTerminalLookup)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -114,7 +122,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for _, s := range claudeResult.Sessions {
 			resp.Sessions = append(resp.Sessions, DashboardEntry{
-				SessionID:    s.SessionID,
+				SessionID:    truncate8(s.SessionID),
 				AgentType:    "claude",
 				Project:      s.Project,
 				Status:       s.Status,
@@ -137,7 +145,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for _, s := range hermesResult.Sessions {
 			resp.Sessions = append(resp.Sessions, DashboardEntry{
-				SessionID:    s.SessionID,
+				SessionID:    truncate8(s.SessionID),
 				AgentType:    "hermes",
 				Project:      s.Project,
 				Status:       hermesRawStatus(s),
@@ -197,4 +205,181 @@ func hermesRawStatus(s hermes.SessionSummary) string {
 		return "inactive"
 	}
 	return "running"
+}
+
+// ── Terminal management handlers ──────────────────────────────────
+
+type terminalStartReq struct {
+	WorkDir  string `json:"work_dir"`
+	TmuxName string `json:"tmux_name,omitempty"` // optional: attach to existing tmux session
+}
+
+type terminalStopReq struct {
+	Name string `json:"name"`
+}
+
+type terminalResponse struct {
+	OK       bool   `json:"ok,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Name     string `json:"name,omitempty"`
+	WorkDir  string `json:"work_dir,omitempty"`
+	TtydPort int    `json:"ttyd_port,omitempty"`
+	TtydURL  string `json:"ttyd_url,omitempty"`
+}
+
+// handleTerminalStart handles POST /api/v1/terminal/start.
+func (s *Server) handleTerminalStart(w http.ResponseWriter, r *http.Request) {
+	if s.sessionMgr == nil {
+		writeTerminalError(w, "terminal management not enabled", http.StatusInternalServerError)
+		return
+	}
+
+	var req terminalStartReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeTerminalError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.WorkDir == "" {
+		writeTerminalError(w, "work_dir is required", http.StatusBadRequest)
+		return
+	}
+
+	var sess *session.Session
+	var err error
+	if req.TmuxName != "" {
+		// Attach ttyd to an existing tmux session
+		sess, err = s.sessionMgr.StartExisting(req.TmuxName, req.WorkDir)
+	} else {
+		sess, err = s.sessionMgr.Start(req.WorkDir)
+	}
+	if err != nil {
+		writeTerminalError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(terminalResponse{
+		OK:       true,
+		Name:     sess.Name,
+		WorkDir:  sess.WorkDir,
+		TtydPort: sess.TtydPort,
+		TtydURL:  sess.TtydURL,
+	})
+}
+
+// handleTerminalStop handles POST /api/v1/terminal/stop.
+func (s *Server) handleTerminalStop(w http.ResponseWriter, r *http.Request) {
+	if s.sessionMgr == nil {
+		writeTerminalError(w, "terminal management not enabled", http.StatusInternalServerError)
+		return
+	}
+
+	var req terminalStopReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeTerminalError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		writeTerminalError(w, "name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Don't kill the tmux session on stop — user may want to reattach later
+	if err := s.sessionMgr.Stop(req.Name, false); err != nil {
+		writeTerminalError(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(terminalResponse{OK: true})
+}
+
+// handleTerminalList handles GET /api/v1/terminal/list.
+func (s *Server) handleTerminalList(w http.ResponseWriter, r *http.Request) {
+	if s.sessionMgr == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]terminalResponse{})
+		return
+	}
+
+	sessions := s.sessionMgr.List()
+	result := make([]terminalResponse, 0, len(sessions))
+	for _, sess := range sessions {
+		result = append(result, terminalResponse{
+			Name:     sess.Name,
+			WorkDir:  sess.WorkDir,
+			TtydPort: sess.TtydPort,
+			TtydURL:  sess.TtydURL,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// terminalLookupResponse is the response for GET /api/v1/terminal/lookup.
+type terminalLookupResponse struct {
+	Found    bool   `json:"found"`
+	Verified bool   `json:"verified"`            // live capture-pane confirmed the prefix
+	TmuxName string `json:"tmux_name,omitempty"`
+	WorkDir  string `json:"work_dir,omitempty"`
+	TtydPort int    `json:"ttyd_port,omitempty"`
+	TtydURL  string `json:"ttyd_url,omitempty"`
+	Hint     string `json:"hint,omitempty"`      // message when not found
+	Warning  string `json:"warning,omitempty"`   // shown when found but not verified
+}
+
+// handleTerminalLookup handles GET /api/v1/terminal/lookup?session_id=<claude-session-id>.
+// It finds a pflow-managed tmux session associated with the given Claude session.
+func (s *Server) handleTerminalLookup(w http.ResponseWriter, r *http.Request) {
+	if s.sessionMgr == nil {
+		writeTerminalError(w, "terminal management not enabled", http.StatusInternalServerError)
+		return
+	}
+
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		writeTerminalError(w, "session_id query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	result, err := s.sessionMgr.LookupByClaudeSessionID(sessionID)
+	if err != nil {
+		writeTerminalError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if result.Session == nil {
+		json.NewEncoder(w).Encode(terminalLookupResponse{
+			Found: false,
+			Hint:  "No pflow-managed tmux session found for this Claude session. Start one with: pflow claude",
+		})
+		return
+	}
+
+	resp := terminalLookupResponse{
+		Found:    true,
+		Verified: result.Verified,
+		TmuxName: result.Session.Name,
+		WorkDir:  result.Session.WorkDir,
+		TtydPort: result.Session.TtydPort,
+		TtydURL:  result.Session.TtydURL,
+		Warning:  result.Warning,
+	}
+
+	json.NewEncoder(w).Encode(resp)
+}
+
+func truncate8(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
+}
+
+func writeTerminalError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(terminalResponse{Error: msg})
 }

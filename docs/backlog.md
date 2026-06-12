@@ -20,6 +20,8 @@
 
 ## P2 — 锦上添花，有余力时做
 
+- ✅ **Web 终端集成（ttyd）** — 侧边栏嵌入 ttyd Web 终端，通过 Claude statusline 的 8 位 session ID 前缀关联 tmux↔Claude session。详见 [`tech.md`](./tech.md) 第 5.4 节
+- ✅ **`pflow claude` CLI 子命令** — 一键创建 tmux + Claude 托管会话，自动配置 statusline、提取 session 前缀、保存关联映射。支持 `-name` / `-dir` / `-force` / `-no-attach` 参数
 - **Hermes Last Resp 提取**：接入 `~/.hermes/state.db` SQLite（纯 Go 驱动如 `modernc.org/sqlite`），查询 messages 表获取 assistant 回复内容，填充 `LastResp` 字段。当前仅从 request_dump body 提取了 `LastReq`。
 - 军情哨主动推送（定时 + 事件触发，需后台守护进程）
 - 统帅偏好学习（推送频率自适应）

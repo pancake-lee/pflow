@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"github.com/pancake-lee/pflow/internal/claude"
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
+	"github.com/pancake-lee/pflow/internal/session"
 )
 
 func main() {
@@ -34,6 +36,8 @@ func main() {
 		runProbeCmd(os.Args[2:])
 	case "serve":
 		runServeCmd(os.Args[2:])
+	case "claude":
+		runClaudeCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -53,6 +57,7 @@ Commands:
   status   Show agent activity dashboard (default if no command given)
   probe    Probe a single session's detailed state
   serve    Start HTTP Dashboard API server
+  claude   Start a managed Claude session in tmux (with statusline integration)
   help     Show this help
 
 Run 'pflow <command> -h' for detailed flags.`)
@@ -133,7 +138,7 @@ func runStatus(window time.Duration, maxInactive int) {
 			}
 
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				shortID(s.SessionID, 16),
+				shortID(s.SessionID, 8),
 				project,
 				status,
 				name,
@@ -297,18 +302,23 @@ func printHermesProbe(s hermes.SessionSummary, gatewayAlive bool) {
 func runServeCmd(args []string) {
 	flagSet := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := flagSet.Int("port", 8080, "HTTP server port")
+	ttydBasePort := flagSet.Int("ttyd-base-port", 10000, "Base port for ttyd terminal processes")
 	flagSet.Parse(args)
+
+	// Session manager for tmux + ttyd terminal management
+	sessionMgr := session.NewManager(*ttydBasePort, "127.0.0.1")
 
 	// Pass the embedded Vue SPA filesystem. If the web/dist directory
 	// is not embedded (e.g. during development), pass nil to serve API only.
 	var staticFS fs.FS = pflow.WebDist
-	server := api.NewServer(staticFS)
+	server := api.NewServer(staticFS, sessionMgr)
 
 	addr := fmt.Sprintf(":%d", *port)
 	fmt.Printf("pflow server listening on http://localhost%s\n", addr)
 	fmt.Printf("Endpoints:\n")
 	fmt.Printf("  Web UI:  http://localhost%s/\n", addr)
 	fmt.Printf("  API:     GET /api/v1/dashboard?window=1d&max_inactive=1\n")
+	fmt.Printf("  Terminal: POST /api/v1/terminal/start  (ttyd base port: %d)\n", *ttydBasePort)
 
 	// Graceful shutdown on SIGINT/SIGTERM
 	go func() {
@@ -321,6 +331,59 @@ func runServeCmd(args []string) {
 
 	if err := http.ListenAndServe(addr, server); err != nil {
 		log.Fatalf("server: %v", err)
+	}
+}
+
+// ── claude ────────────────────────────────────────────────────────────
+
+func runClaudeCmd(args []string) {
+	flagSet := flag.NewFlagSet("claude", flag.ExitOnError)
+	name := flagSet.String("name", "", "Name suffix for the tmux session (sanitized)")
+	dir := flagSet.String("dir", "", "Working directory (default: current directory)")
+	force := flagSet.Bool("force", false, "Force-overwrite existing Claude statusline configuration")
+	noAttach := flagSet.Bool("no-attach", false, "Don't attach to the tmux session after creation")
+	flagSet.Parse(args)
+
+	// Resolve working directory
+	workDir := *dir
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pflow claude: cannot get current directory: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// Create session manager and start Claude session
+	mgr := session.NewManager(0, "127.0.0.1")
+	sess, prefix, err := mgr.StartClaudeSession(*name, workDir, *force)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pflow claude: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Print session info
+	fmt.Printf("=== Claude Session Started ===\n")
+	fmt.Printf("  Tmux session:  %s\n", sess.Name)
+	fmt.Printf("  Work dir:      %s\n", sess.WorkDir)
+	if prefix != "" {
+		fmt.Printf("  Claude prefix: %s\n", prefix)
+	}
+	fmt.Println()
+
+	// Attach to tmux session (unless -no-attach)
+	if !*noAttach {
+		fmt.Printf("Attaching to tmux session %s...\n", sess.Name)
+		fmt.Println("(Press Ctrl+B then D to detach without stopping Claude)")
+		cmd := exec.Command("tmux", "attach", "-t", sess.Name)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "pflow claude: tmux attach failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Session %s is still running. Reattach with: tmux attach -t %s\n", sess.Name, sess.Name)
+		}
 	}
 }
 

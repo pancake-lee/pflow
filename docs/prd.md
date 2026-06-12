@@ -150,7 +150,7 @@ Vue 3 + Naive UI + TypeScript + Vite。详见 [`tech.md`](./tech.md) 第 5.2 节
 
 | 功能 | 命令 | 说明 |
 |------|------|------|
-| 启动 Agent 会话 | `pflow start --project X --task "..."` | 在后台启动一个 Claude Code 会话 |
+| ✅ 启动 Claude 托管会话 | `pflow claude [-dir] [-name]` | 创建 tmux session + 启动 Claude，自动配置 statusline 关联 Dashboard |
 | 亲赴前线 | `pflow attach <session>` | 唤起终端（tmux attach）或打开 VSCode，直接与 Agent 交互 |
 | 手动获取建议 | `pflow suggest` | 军情哨分析当前所有会话状态，给出一条引导建议 |
 | 设定主攻/侧翼 | `pflow focus --main A --side B,C` | 设定今日主攻方向和可填充的侧翼战场 |

@@ -34,10 +34,12 @@ import type {
   ScanOptions,
   AgentFilter,
   RefreshInterval,
+  TerminalResponse,
+  TerminalLookupResponse,
 } from '../types/dashboard'
 import { useDashboard } from '../composables/useDashboard'
 import { usePolling } from '../composables/usePolling'
-import { formatSince, truncate, escapeNewlines, shortID } from '../composables/format'
+import { formatSince, truncate, escapeNewlines } from '../composables/format'
 
 // ── State ────────────────────────────────────────────────────────
 
@@ -103,6 +105,17 @@ function startResize(e: MouseEvent) {
   document.body.style.userSelect = 'none'
 }
 
+// Terminal in detail sidebar
+const terminalUrl = ref<string | null>(null)
+const terminalName = ref<string | null>(null)
+const terminalLoading = ref(false)
+const terminalError = ref<string | null>(null)
+const terminalFound = ref(false)          // true if lookup found a matching tmux
+const terminalVerified = ref(false)       // true if live capture-pane confirmed the match
+const terminalLookupHint = ref<string | null>(null)  // hint when not found
+const terminalLookupWarning = ref<string | null>(null)  // warning when found but not verified
+const terminalLookupDone = ref(false)     // true after lookup completes
+
 // ── Derived ──────────────────────────────────────────────────────
 
 const scanOpts = computed<ScanOptions>(() => ({
@@ -133,8 +146,124 @@ function refresh() {
 }
 
 function openDetail(row: DashboardEntry) {
+  // Reset terminal state when opening a different session
+  if (selectedSession.value?.session_id !== row.session_id) {
+    terminalUrl.value = null
+    terminalError.value = null
+    terminalFound.value = false
+    terminalVerified.value = false
+    terminalLookupHint.value = null
+    terminalLookupWarning.value = null
+    terminalLookupDone.value = false
+  }
   selectedSession.value = row
   showDetail.value = true
+
+  // Look up matching tmux session for Claude sessions
+  if (row.agent_type === 'claude' && row.session_id) {
+    lookupTerminal(row.session_id)
+  } else {
+    terminalLookupDone.value = true
+    terminalFound.value = false
+  }
+}
+
+async function lookupTerminal(sessionId: string) {
+  terminalLookupDone.value = false
+  terminalFound.value = false
+  terminalVerified.value = false
+  terminalLookupHint.value = null
+  terminalLookupWarning.value = null
+
+  try {
+    const resp = await fetch(`/api/v1/terminal/lookup?session_id=${encodeURIComponent(sessionId)}`)
+    if (!resp.ok) {
+      terminalLookupHint.value = `Lookup failed (HTTP ${resp.status})`
+      terminalLookupDone.value = true
+      return
+    }
+    const data: TerminalLookupResponse = await resp.json()
+    terminalLookupDone.value = true
+
+    if (data.found) {
+      terminalFound.value = true
+      terminalVerified.value = data.verified
+      terminalName.value = data.tmux_name ?? null
+      if (data.warning) {
+        terminalLookupWarning.value = data.warning
+      }
+      // If ttyd is already running, use it
+      if (data.ttyd_url) {
+        terminalUrl.value = data.ttyd_url
+      }
+    } else {
+      terminalLookupHint.value = data.hint ?? 'No tmux session found for this Claude session'
+    }
+  } catch (e) {
+    terminalLookupHint.value = e instanceof Error ? e.message : 'Lookup error'
+    terminalLookupDone.value = true
+  }
+}
+
+async function startTerminal() {
+  if (!selectedSession.value) return
+  const workDir = selectedSession.value.project
+  if (!workDir || workDir === '?' || workDir === '/') {
+    terminalError.value = 'No valid working directory for this session'
+    return
+  }
+
+  terminalLoading.value = true
+  terminalError.value = null
+
+  try {
+    // If we already found a tmux session via lookup, use its name
+    const body: Record<string, string> = { work_dir: workDir }
+    if (terminalFound.value && terminalName.value) {
+      body['tmux_name'] = terminalName.value
+    }
+
+    const resp = await fetch('/api/v1/terminal/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const data: TerminalResponse = await resp.json()
+    if (!resp.ok || data.error) {
+      throw new Error(data.error || `HTTP ${resp.status}`)
+    }
+    terminalUrl.value = data.ttyd_url ?? null
+    terminalName.value = data.name ?? null
+    terminalFound.value = true
+  } catch (e) {
+    terminalError.value = e instanceof Error ? e.message : 'Failed to start terminal'
+    terminalUrl.value = null
+    terminalName.value = null
+  } finally {
+    terminalLoading.value = false
+  }
+}
+
+async function stopTerminal() {
+  const name = terminalName.value
+  if (!name) return
+
+  terminalLoading.value = true
+  terminalError.value = null
+
+  try {
+    await fetch('/api/v1/terminal/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+  } catch (e) {
+    terminalError.value = e instanceof Error ? e.message : 'Failed to stop terminal'
+  } finally {
+    terminalUrl.value = null
+    terminalName.value = null
+    terminalLoading.value = false
+  }
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────
@@ -174,13 +303,9 @@ const columns: DataTableColumns<DashboardEntry> = [
   {
     title: 'Session ID',
     key: 'session_id',
-    width: 140,
+    width: 100,
     render(row) {
-      return h(
-        NTooltip,
-        {},
-        { trigger: () => h('span', { style: { fontFamily: 'monospace', fontSize: '12px' } }, shortID(row.session_id)), default: () => row.session_id },
-      )
+      return h('span', { style: { fontFamily: 'monospace', fontSize: '12px' } }, row.session_id || '—')
     },
   },
   {
@@ -444,6 +569,98 @@ function rowProps(row: DashboardEntry) {
             {{ selectedSession.platform }}
           </NDescriptionsItem>
         </NDescriptions>
+
+        <!-- Terminal Section -->
+        <div class="terminal-section">
+          <div class="terminal-section-header">
+            <span class="terminal-section-title">🖥 Terminal</span>
+            <NSpace :size="8">
+              <NButton
+                v-if="!terminalUrl && (terminalFound || !terminalLookupDone)"
+                size="tiny"
+                type="primary"
+                @click="startTerminal"
+                :loading="terminalLoading"
+              >
+                {{ terminalFound ? 'Open Terminal' : 'Start Terminal' }}
+              </NButton>
+              <NButton
+                v-else-if="terminalUrl"
+                size="tiny"
+                type="warning"
+                @click="stopTerminal"
+                :loading="terminalLoading"
+              >
+                Stop
+              </NButton>
+            </NSpace>
+          </div>
+
+          <!-- Lookup status -->
+          <NAlert
+            v-if="selectedSession?.agent_type === 'claude' && !terminalLookupDone && !terminalError"
+            type="info"
+            size="tiny"
+            style="margin-bottom: 8px"
+          >
+            Looking for managed tmux session...
+          </NAlert>
+
+          <!-- Not-verified warning -->
+          <NAlert
+            v-if="terminalFound && !terminalVerified && !terminalError"
+            type="warning"
+            size="tiny"
+            style="margin-bottom: 8px"
+          >
+            {{ terminalLookupWarning || 'Unable to verify this tmux session matches the current Claude session — it may have changed.' }}
+          </NAlert>
+
+          <NAlert
+            v-if="terminalError"
+            type="error"
+            size="tiny"
+            style="margin-bottom: 8px"
+          >
+            {{ terminalError }}
+          </NAlert>
+
+          <div v-if="terminalUrl" class="terminal-frame-wrapper">
+            <iframe
+              :src="terminalUrl"
+              class="terminal-iframe"
+              frameborder="0"
+              title="Web Terminal"
+            />
+          </div>
+
+          <!-- Found tmux but no ttyd yet -->
+          <div v-else-if="terminalFound && !terminalUrl && !terminalLoading && !terminalError" class="terminal-placeholder terminal-found">
+            <p>✅ Tmux session <code>{{ terminalName }}</code> found.</p>
+            <p>Click "Open Terminal" to connect via web terminal.</p>
+          </div>
+
+          <!-- Lookup done, no match -->
+          <div v-else-if="terminalLookupDone && !terminalFound && !terminalLoading && !terminalError && selectedSession?.agent_type === 'claude'" class="terminal-placeholder">
+            <p>{{ terminalLookupHint || 'No tmux session found' }}</p>
+            <p class="terminal-placeholder-hint">
+              Start with: <code>pflow claude</code> in the project directory.
+              <br/>The status line must show the 8-char session ID prefix.
+            </p>
+          </div>
+
+          <!-- Hermes or other agent types -->
+          <div v-else-if="selectedSession?.agent_type !== 'claude' && !terminalUrl && !terminalLoading && !terminalError" class="terminal-placeholder">
+            <p>Terminal integration is only available for Claude Code sessions.</p>
+            <p class="terminal-placeholder-hint">Requires tmux + ttyd to be installed on the server.</p>
+          </div>
+
+          <!-- Default placeholder -->
+          <div v-else-if="!terminalUrl && !terminalLoading && !terminalError && !terminalLookupDone" class="terminal-placeholder">
+            <p>Open a web terminal to the session's working directory.</p>
+            <p class="terminal-placeholder-hint">Requires tmux + ttyd to be installed on the server.</p>
+          </div>
+        </div>
       </NDrawerContent>
     </NDrawer>
   </NLayout>
@@ -573,5 +790,72 @@ function rowProps(row: DashboardEntry) {
 
 .resize-handle:hover {
   background: var(--n-color-target);
+}
+
+/* Terminal section in sidebar */
+.terminal-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--n-border-color);
+  padding-top: 12px;
+}
+
+.terminal-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.terminal-section-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.terminal-frame-wrapper {
+  border: 1px solid var(--n-border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.terminal-iframe {
+  width: 100%;
+  height: 400px;
+  display: block;
+  background: #1e1e1e;
+}
+
+.terminal-placeholder {
+  padding: 16px;
+  background: var(--n-color-embedded);
+  border-radius: 6px;
+  border: 1px dashed var(--n-border-color);
+  text-align: center;
+  color: var(--n-text-color-3);
+  font-size: 13px;
+}
+
+.terminal-placeholder-hint {
+  font-size: 11px;
+  color: var(--n-text-color-4);
+  margin-top: 4px;
+}
+
+.terminal-placeholder-hint code {
+  background: var(--n-color-embedded);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.terminal-found {
+  border-color: #18a058 !important;
+  background: rgba(24, 160, 88, 0.06);
+}
+
+.terminal-found code {
+  background: var(--n-color-embedded);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
 }
 </style>

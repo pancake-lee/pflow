@@ -32,3 +32,32 @@ export interface ScanOptions {
 export type AgentFilter = 'all' | 'claude' | 'hermes'
 
 export type RefreshInterval = 0 | 10 | 30 | 60 // seconds, 0 = off
+
+// ── Terminal types ────────────────────────────────────────────────
+
+export interface TerminalSession {
+  name: string
+  work_dir: string
+  ttyd_port: number
+  ttyd_url: string
+}
+
+export interface TerminalResponse {
+  ok?: boolean
+  error?: string
+  name?: string
+  work_dir?: string
+  ttyd_port?: number
+  ttyd_url?: string
+}
+
+export interface TerminalLookupResponse {
+  found: boolean
+  verified: boolean
+  tmux_name?: string
+  work_dir?: string
+  ttyd_port?: number
+  ttyd_url?: string
+  hint?: string
+  warning?: string
+}

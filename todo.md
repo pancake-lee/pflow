@@ -56,6 +56,8 @@
 
 ## P2 — 锦上添花
 
+- [x] Web 终端集成（ttyd + tmux + Claude statusline 关联）
+- [x] `pflow claude` CLI 子命令（托管 tmux + Claude 会话）
 - [ ] WebSocket 实时推送（替代轮询）
 - [ ] Session 状态变化时的浏览器通知（Notification API）
 - [ ] 会话时间线可视化（甘特图式的时间分布）
