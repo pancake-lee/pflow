@@ -22,6 +22,11 @@ import {
   NSpin,
   NAlert,
   NTooltip,
+  NModal,
+  NInput,
+  NForm,
+  NFormItem,
+  useMessage,
 } from 'naive-ui'
 import {
   DesktopOutline,
@@ -41,7 +46,8 @@ import { formatSince, truncate, escapeNewlines, shortID } from '../composables/f
 
 // ── State ────────────────────────────────────────────────────────
 
-const { data, loading, error, fetchDashboard } = useDashboard()
+const { data, loading, error, fetchDashboard, startSession, respondPermission } = useDashboard()
+const message = useMessage()
 
 // Filter params
 const windowOptions = [
@@ -73,6 +79,39 @@ const refreshOptions = [
 // Detail drawer
 const showDetail = ref(false)
 const selectedSession = ref<DashboardEntry | null>(null)
+
+// Start session modal
+const showStartModal = ref(false)
+const newProject = ref('')
+const newPrompt = ref('')
+const starting = ref(false)
+
+async function doStartSession() {
+  if (!newProject.value.trim()) return
+  starting.value = true
+  try {
+    const result = await startSession({ project: newProject.value.trim(), prompt: newPrompt.value.trim() || undefined })
+    message.success(`Session started: ${result.session_id.slice(0, 16)}...`)
+    showStartModal.value = false
+    newProject.value = ''
+    newPrompt.value = ''
+    refresh() // Refresh dashboard to show the new session
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to start session')
+  } finally {
+    starting.value = false
+  }
+}
+
+async function doRespondPermission(sessionId: string, requestId: string, behavior: 'allow' | 'deny') {
+  try {
+    await respondPermission(sessionId, requestId, behavior)
+    message.success(behavior === 'allow' ? 'Permission granted' : 'Permission denied')
+    refresh() // Refresh to clear the pending permission
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to respond')
+  }
+}
 
 // Resizable drawer: min 1/4 screen, max 3/4 screen
 const drawerWidth = ref(Math.max(480, Math.floor(window.innerWidth / 4)))
@@ -268,6 +307,13 @@ function rowProps(row: DashboardEntry) {
           <NSpace>
             <NButton
               size="small"
+              type="primary"
+              @click="showStartModal = true"
+            >
+              + New Session
+            </NButton>
+            <NButton
+              size="small"
               quaternary
               @click="refresh"
               :loading="loading"
@@ -443,9 +489,65 @@ function rowProps(row: DashboardEntry) {
           <NDescriptionsItem v-if="selectedSession.platform" label="Platform">
             {{ selectedSession.platform }}
           </NDescriptionsItem>
+          <NDescriptionsItem v-if="selectedSession.is_managed" label="Managed">
+            <NTag type="info" size="small" bordered>pflow-managed</NTag>
+          </NDescriptionsItem>
         </NDescriptions>
+
+        <!-- Pending permission -->
+        <div v-if="selectedSession.pending_permission" class="permission-box">
+          <h4>🔔 Permission Required</h4>
+          <div class="permission-tool">{{ selectedSession.pending_permission.tool_name }}</div>
+          <div class="permission-input detail-text">{{ selectedSession.pending_permission.tool_input }}</div>
+          <NSpace style="margin-top: 12px">
+            <NButton
+              type="success"
+              size="small"
+              @click="doRespondPermission(selectedSession.session_id, selectedSession.pending_permission.request_id, 'allow')"
+            >
+              Allow
+            </NButton>
+            <NButton
+              type="error"
+              size="small"
+              @click="doRespondPermission(selectedSession.session_id, selectedSession.pending_permission.request_id, 'deny')"
+            >
+              Deny
+            </NButton>
+          </NSpace>
+        </div>
       </NDrawerContent>
     </NDrawer>
+
+    <!-- Start Session Modal -->
+    <NModal v-model:show="showStartModal" title="Start New Claude Session">
+      <div class="start-modal">
+        <NForm>
+          <NFormItem label="Project Directory" required>
+            <NInput
+              v-model:value="newProject"
+              placeholder="/absolute/path/to/project"
+              :disabled="starting"
+            />
+          </NFormItem>
+          <NFormItem label="Initial Prompt (optional)">
+            <NInput
+              v-model:value="newPrompt"
+              type="textarea"
+              placeholder="e.g. Help me refactor the auth module..."
+              :disabled="starting"
+              :autosize="{ minRows: 2, maxRows: 5 }"
+            />
+          </NFormItem>
+        </NForm>
+        <NSpace justify="end" style="margin-top: 16px">
+          <NButton @click="showStartModal = false" :disabled="starting">Cancel</NButton>
+          <NButton type="primary" @click="doStartSession" :loading="starting" :disabled="!newProject.trim()">
+            Start Session
+          </NButton>
+        </NSpace>
+      </div>
+    </NModal>
   </NLayout>
 </template>
 
@@ -573,5 +675,36 @@ function rowProps(row: DashboardEntry) {
 
 .resize-handle:hover {
   background: var(--n-color-target);
+}
+
+/* Permission prompt in drawer */
+.permission-box {
+  margin-top: 16px;
+  padding: 14px;
+  background: var(--n-color-warning);
+  border-radius: 8px;
+}
+
+.permission-box h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.permission-tool {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.permission-input {
+  font-size: 12px;
+  color: var(--n-text-color-3);
+}
+
+/* Start session modal */
+.start-modal {
+  width: 420px;
+  max-width: 90vw;
+  padding: 8px 0;
 }
 </style>

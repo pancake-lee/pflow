@@ -1,5 +1,10 @@
 import { ref, type Ref } from 'vue'
-import type { DashboardResponse, ScanOptions } from '../types/dashboard'
+import type {
+  DashboardResponse,
+  ScanOptions,
+  StartSessionRequest,
+  StartSessionResponse,
+} from '../types/dashboard'
 
 export function useDashboard() {
   const data: Ref<DashboardResponse | null> = ref(null)
@@ -28,5 +33,46 @@ export function useDashboard() {
     }
   }
 
-  return { data, loading, error, fetchDashboard }
+  async function startSession(req: StartSessionRequest): Promise<StartSessionResponse> {
+    const resp = await fetch('/api/v1/sessions/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    if (!resp.ok) {
+      const text = await resp.text()
+      throw new Error(text)
+    }
+    return (await resp.json()) as StartSessionResponse
+  }
+
+  async function sendToSession(sessionId: string, prompt: string): Promise<void> {
+    const resp = await fetch(`/api/v1/sessions/${sessionId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    })
+    if (!resp.ok) {
+      const text = await resp.text()
+      throw new Error(text)
+    }
+  }
+
+  async function respondPermission(
+    sessionId: string,
+    requestId: string,
+    behavior: 'allow' | 'deny',
+  ): Promise<void> {
+    const resp = await fetch(`/api/v1/sessions/${sessionId}/permission`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId, behavior }),
+    })
+    if (!resp.ok) {
+      const text = await resp.text()
+      throw new Error(text)
+    }
+  }
+
+  return { data, loading, error, fetchDashboard, startSession, sendToSession, respondPermission }
 }

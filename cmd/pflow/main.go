@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -13,6 +17,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/chenhg5/cc-connect/core"
 	"github.com/pancake-lee/pflow"
 	"github.com/pancake-lee/pflow/internal/api"
 	"github.com/pancake-lee/pflow/internal/claude"
@@ -34,6 +39,8 @@ func main() {
 		runProbeCmd(os.Args[2:])
 	case "serve":
 		runServeCmd(os.Args[2:])
+	case "start":
+		runStartCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -53,6 +60,7 @@ Commands:
   status   Show agent activity dashboard (default if no command given)
   probe    Probe a single session's detailed state
   serve    Start HTTP Dashboard API server
+  start    Start a managed Claude Code session (permissions via web UI)
   help     Show this help
 
 Run 'pflow <command> -h' for detailed flags.`)
@@ -302,13 +310,15 @@ func runServeCmd(args []string) {
 	// Pass the embedded Vue SPA filesystem. If the web/dist directory
 	// is not embedded (e.g. during development), pass nil to serve API only.
 	var staticFS fs.FS = pflow.WebDist
-	server := api.NewServer(staticFS)
+	manager := api.NewSessionManager()
+	server := api.NewServer(staticFS, manager)
 
 	addr := fmt.Sprintf(":%d", *port)
 	fmt.Printf("pflow server listening on http://localhost%s\n", addr)
 	fmt.Printf("Endpoints:\n")
 	fmt.Printf("  Web UI:  http://localhost%s/\n", addr)
 	fmt.Printf("  API:     GET /api/v1/dashboard?window=1d&max_inactive=1\n")
+	fmt.Printf("  Managed sessions: enabled\n")
 
 	// Graceful shutdown on SIGINT/SIGTERM
 	go func() {
@@ -321,6 +331,144 @@ func runServeCmd(args []string) {
 
 	if err := http.ListenAndServe(addr, server); err != nil {
 		log.Fatalf("server: %v", err)
+	}
+}
+
+// ── start ─────────────────────────────────────────────────────────
+
+func runStartCmd(args []string) {
+	fs := flag.NewFlagSet("start", flag.ExitOnError)
+	project := fs.String("project", "", "Project directory (required)")
+	prompt := fs.String("prompt", "", "Initial prompt (optional)")
+	servePort := fs.Int("port", 8080, "pflow serve port for permission delegation")
+	fs.Parse(args)
+
+	if *project == "" {
+		fmt.Fprintln(os.Stderr, "pflow start: --project is required")
+		os.Exit(1)
+	}
+
+	manager := api.NewSessionManager()
+	snap, err := manager.Start(context.Background(), *project, *prompt)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pflow start: %v\n", err)
+		os.Exit(1)
+	}
+
+	ms := manager.GetSession(snap.SessionID)
+	if ms == nil {
+		fmt.Fprintln(os.Stderr, "pflow start: session not found after start")
+		os.Exit(1)
+	}
+
+	baseURL := fmt.Sprintf("http://localhost:%d", *servePort)
+
+	fmt.Printf("pflow start — Claude Code session\n")
+	fmt.Printf("Session: %s\n", snap.SessionID)
+	fmt.Printf("Project: %s\n", *project)
+	fmt.Printf("Dashboard: %s\n\n", baseURL)
+
+	// Background: relay Claude events to stdout, handle permissions via pflow serve.
+	go func() {
+		for ev := range ms.Events() {
+			switch ev.Type {
+			case core.EventText:
+				fmt.Print(ev.Content)
+			case core.EventToolUse:
+				fmt.Printf("\n── [tool: %s] %s ──\n", ev.ToolName, ev.ToolInput)
+			case core.EventThinking:
+				// Silently skip thinking — Claude streams it as EventText anyway.
+			case core.EventPermissionRequest:
+				fmt.Printf("\n⏳ Permission required: %s\n", ev.ToolInput)
+				fmt.Printf("   Waiting for approval at %s ...\n", baseURL)
+				registerExternalPerm(baseURL, snap.SessionID, *project, ev)
+				decision := pollExternalPerm(baseURL, ev.RequestID)
+				switch decision {
+				case "allow":
+					fmt.Println("   ✅ Approved")
+					ms.RespondPermission(ev.RequestID, core.PermissionResult{
+						Behavior:     "allow",
+						UpdatedInput: ev.ToolInputRaw,
+					})
+				case "deny":
+					fmt.Println("   ❌ Denied")
+					ms.RespondPermission(ev.RequestID, core.PermissionResult{
+						Behavior: "deny",
+						Message:  "User denied this tool use.",
+					})
+				default:
+					fmt.Println("   ⚠️ No decision received, denying by default")
+					ms.RespondPermission(ev.RequestID, core.PermissionResult{
+						Behavior: "deny",
+						Message:  "No decision received.",
+					})
+				}
+			case core.EventResult:
+				fmt.Println()
+			case core.EventError:
+				fmt.Fprintf(os.Stderr, "\n⚠️ Error: %v\n", ev.Error)
+			}
+		}
+		fmt.Println("\n── session ended ──")
+		os.Exit(0)
+	}()
+
+	// Foreground: read stdin and send to Claude.
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "/exit" || line == "/quit" {
+			fmt.Println("Exiting...")
+			return
+		}
+		if err := ms.Send(line); err != nil {
+			fmt.Fprintf(os.Stderr, "Send error: %v\n", err)
+		}
+	}
+}
+
+// registerExternalPerm POSTs a permission request to pflow serve.
+func registerExternalPerm(baseURL, sessionID, project string, ev core.Event) {
+	body := map[string]any{
+		"session_id": sessionID,
+		"project":    project,
+		"permission": map[string]any{
+			"request_id":     ev.RequestID,
+			"tool_name":      ev.ToolName,
+			"tool_input":     ev.ToolInput,
+			"tool_input_raw": ev.ToolInputRaw,
+		},
+	}
+	b, _ := json.Marshal(body)
+	resp, err := http.Post(baseURL+"/api/v1/extperm/register", "application/json", bytes.NewReader(b))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Failed to register permission with pflow serve: %v\n", err)
+		fmt.Fprintf(os.Stderr, "   Is pflow serve running on %s?\n", baseURL)
+		return
+	}
+	resp.Body.Close()
+}
+
+// pollExternalPerm polls pflow serve until a decision is made on the given request_id.
+func pollExternalPerm(baseURL, requestID string) string {
+	if requestID == "" {
+		return ""
+	}
+	for {
+		time.Sleep(1 * time.Second)
+		resp, err := http.Get(fmt.Sprintf("%s/api/v1/extperm/%s", baseURL, requestID))
+		if err != nil {
+			continue
+		}
+		var result struct {
+			Decision string `json:"decision"`
+			Pending  bool   `json:"pending"`
+		}
+		json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if !result.Pending {
+			return result.Decision
+		}
 	}
 }
 
