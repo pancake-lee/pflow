@@ -7,6 +7,7 @@
 在已打通的"Dashboard 看到状态 → Web 终端交互"闭环基础上，补齐 CLI 端的独立操作能力，让用户无需浏览器也能完成"赴前线/获取建议/设定焦点"等核心操作。
 
 已完成：`pflow claude`、Web 终端集成、Tmux↔Claude session 映射。详见 [`docs/prd.md`](./docs/prd.md) 阶段三。
+已修复：`pflow claude` 意外退出后 tmux session 残留问题 — 通过 `tmux list-clients` 检测孤儿 session 自动重连，同时检测到活跃 client 时提示使用 `-name` 避免冲突。
 
 ## P0 — 核心闭环，必须完成
 

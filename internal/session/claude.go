@@ -241,9 +241,23 @@ func (m *Manager) StartClaudeSession(name, workDir string, forceStatusline bool)
 	name = m.uniqueName(name)
 	m.mu.Unlock()
 
-	// If tmux session already exists, just attach
+	// If tmux session already exists, check if it's orphaned (no clients attached)
+	// or actively in use by another terminal.
 	if tmuxSessionExists(name) {
-		return nil, "", fmt.Errorf("tmux session %q already exists; attach with: tmux attach -t %s", name, name)
+		if tmuxHasClients(name) {
+			// Session is actively used by another terminal — don't silently
+			// hijack it. Suggest using -name to create a different session.
+			return nil, "", fmt.Errorf(
+				"tmux session %q is already in use by another terminal; use -name to create a separate session, or attach manually: tmux attach -t %s",
+				name, name,
+			)
+		}
+		// Orphaned session: leftover from a crash or disconnect.
+		// Reconnect to it without restarting Claude.
+		return &Session{
+			Name:    name,
+			WorkDir: absDir,
+		}, "", nil
 	}
 
 	// 1. Configure statusline BEFORE starting Claude.

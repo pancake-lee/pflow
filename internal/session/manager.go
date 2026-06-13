@@ -330,6 +330,17 @@ func tmuxSessionExists(name string) bool {
 	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
 }
 
+// tmuxHasClients returns true if the tmux session has at least one attached client.
+// An orphaned session (exists but no clients) means pflow claude exited unexpectedly
+// and the session is safe to re-attach.
+func tmuxHasClients(name string) bool {
+	out, err := exec.Command("tmux", "list-clients", "-t", name).Output()
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(out))) > 0
+}
+
 // sanitizeName converts a path component into a valid tmux session name.
 func sanitizeName(s string) string {
 	// Replace characters that are problematic for tmux session names
