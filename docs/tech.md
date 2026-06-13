@@ -107,40 +107,37 @@ Mappings ────────── │                      │
 
 ### 2.3 项目数据模型
 
+**路径即项目**。不引入独立的项目 ID/名称实体。session 元数据中已有的 working directory 就是天然的归属标识。
+
 ```json
-// ~/.pflow/projects.json
+// ~/.pflow/project_roots.json
 {
   "version": 1,
-  "projects": [
-    {
-      "id": "proj-1",
-      "name": "pflow",
-      "path": "/home/user/code/pflow",
-      "priority": "primary",
-      "created_at": "2026-06-13T00:00:00Z",
-      "sort_order": 0
-    },
-    {
-      "id": "proj-2",
-      "name": "周报",
-      "path": "",
-      "priority": "secondary",
-      "created_at": "2026-06-13T00:00:00Z",
-      "sort_order": 1
-    },
-    {
-      "id": "proj-3",
-      "name": "未分类",
-      "path": "",
-      "priority": "normal",
-      "created_at": "2026-06-13T00:00:00Z",
-      "is_default": true
-    }
+  "roots": [
+    { "path": "/home/user/code/pflow", "priority": "primary" },
+    { "path": "/home/user/code/hermes", "priority": "secondary" },
+    { "path": "/home/user/code/pancake", "priority": "normal" }
   ]
 }
 ```
 
-**Session ↔ Project 关联**：每个 session 通过 `projectId` 字段关联到项目。对于本地 Agent（Claude Code），可按工作目录自动匹配；未匹配的 session 归入"未分类"默认项目。
+- `path` 是唯一键。用户通过 Dashboard 界面的 ☐ "识别为项目" 勾选框标记/取消。
+- 不需要 `id`、`name`、`created_at` 等字段——路径本身就是标识，目录名就是天然的"项目名"。
+
+**Session 自动归类**：最长前缀匹配。
+
+```
+Session cwd: /home/user/code/pflow/internal/api
+Roots:
+  /home/user/code/pflow         → 匹配 ✓
+  /home/user/code/pflow/internal → 如果存在则匹配（更具体），否则回退到 /home/user/code/pflow
+
+规则：
+1. 遍历 roots，取所有 path 为 session.cwd 前缀的匹配
+2. 选 path 最长者（最具体的匹配）
+3. 无匹配 → 作为"未归类 session"展示
+4. / 不能被标记为 root（API 层拒绝）
+```
 
 **优先级语义**：
 
@@ -149,13 +146,12 @@ Mappings ────────── │                      │
 | `primary` | 今日主线 | 1 | ⭐ 独立区域，始终展开 |
 | `secondary` | 支线 | 最多 3 | 🚩 独立区域，始终展开 |
 | `normal` | 普通关注 | 不限 | 📁 可折叠区域 |
-| `archived` | 已归档 | 不限 | 📦 可折叠，默认折叠 |
 
 **优先级切换规则**：
 - 设为主线：原主线降为 normal，目标升为 primary
 - 设为支线：若支线数 < 3 则直接加入；已满则拒绝并提示
 - 设为普通：从 primary/secondary 移除
-- 归档：从当前区域移入 archived
+- 取消标记（DELETE）：从 roots 中移除，匹配该 root 的 session 重新归类
 
 ## 3. 实施阶段
 
@@ -169,15 +165,15 @@ Vue 3 + Naive UI 浏览器端面板。产出：`pflow serve` 单二进制部署�
 
 ### 3.3 阶段三：项目策略管理 ← 当前阶段
 
-**目标**：从"扁平 session 列表"升级为"项目 → session"两级结构，支持用户设定主线/支线策略。
+**目标**：从"扁平 session 列表"升级为按项目路径分组的视图，支持主线/支线策略。
 
 | 步骤 | 内容 | 产出 |
 |------|------|------|
-| 1. 数据层 | `internal/project/` 包：`~/.pflow/projects.json` 读写、CRUD、策略校验 | Go 包 + 测试 |
-| 2. Session 关联 | 扩展现有 scan 流程，session 增加 `projectId`；按工作目录自动归类；历史数据迁移逻辑 | 兼容旧数据 |
-| 3. API 层 | Dashboard API 返回 projects + sessions 两级结构；新增项目 CRUD 端点 | REST API |
-| 4. 前端重构 | 替换扁平表格为项目卡片视图，按优先级分区展示，优先级切换交互 | Vue 组件 |
-| 5. 策略引擎 | 优先级切换规则、数量校验（1 主线 + 最多 3 支线）、边界条件处理 | 后端校验 |
+| 1. 数据层 | `internal/project/` 包：`~/.pflow/project_roots.json` 读写、优先级校验 | Go 包 |
+| 2. 归类逻辑 | 最长前缀匹配算法；根目录保护（拒绝 `/`）；向后兼容（无 roots 时全部视为未归类） | 归类函数 |
+| 3. API 层 | Dashboard API 返回 `matched_root` 字段；新增 `PUT/DELETE/GET /api/v1/project-roots` | REST API |
+| 4. 前端标记交互 | 每个 distinct 工作目录旁的 ☐ "识别为项目" 勾选框 + hover tooltip | Vue 组件 |
+| 5. 前端分组视图 | 替换扁平表格为按 root 分组的项目视图，按优先级分区展示 | Vue 组件 |
 
 ### 3.4 后续阶段
 
@@ -235,16 +231,18 @@ pflow 以 MIT License 发布，`LICENSE` 文件已就位。
   │  ?window=1d&max_inactive=1     │
   │ ─────────────────────────────> │
   │                                │  claude.Scan() + hermes.Scan()
-  │  JSON {                        │  + project.Load() + 关联
-  │    projects: [...],            │
-  │    sessions: [...]             │
+  │  JSON {                        │  + project.MatchRoots()
+  │    project_roots: [...],       │
+  │    sessions: [                 │
+  │      { ..., matched_root: ".." }│
+  │    ]                           │
   │  }                             │
   │ <───────────────────────────── │
   │                                │
-  │  PUT /api/v1/projects/:id      │
-  │  {"priority": "primary"}       │
+  │  PUT /api/v1/project-roots     │
+  │  {"path":"/code/pflow", "priority":"primary"}
   │ ─────────────────────────────> │
-  │                                │  strategy.SetPrimary("proj-1")
+  │                                │  project.SetPriority()
   │  200 OK                        │
   │ <───────────────────────────── │
 ```

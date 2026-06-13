@@ -16,11 +16,11 @@
 - [x] `pflow probe <id>` — 探测单个 session 详细状态
 - [x] `pflow serve` — HTTP Dashboard API + Web Dashboard（单二进制部署）
 - [x] `pflow claude` — 启动 Claude Code 托管会话（tmux + statusline）
-- [ ] **项目数据模型** — `~/.pflow/projects.json`：项目定义（id/name/path/priority），CRUD API
-- [ ] **Session ↔ Project 关联** — session 增加 `projectId` 字段，支持按工作目录自动归类；未关联的归入"未分类"项目
+- [ ] **项目根标记** — `~/.pflow/project_roots.json` 存储被标记为项目根的路径列表 + 优先级（primary/secondary/normal）。路径即项目，不引入独立 ID/名称实体。
+- [ ] **Session 自动归类** — 最长前缀匹配算法：session 的 cwd 匹配到某个项目根路径则自动归入。根目录 `/` 禁止标记。未匹配的作为独立 session 展示。
+- [ ] **"识别为项目" ☐** — Dashboard 界面上每个 distinct 工作目录旁提供勾选框 + hover tooltip，一键标记/取消项目根
 - [ ] **主线/支线策略引擎** — 设定 1 主线 + 最多 3 支线，数量限制校验，优先级切换规则
-- [ ] **Dashboard 项目视图重构** — 前端从扁平表格改为"项目卡片 → session 列表"两级结构，按优先级分区展示（主线/支线/普通/归档）
-- [ ] **历史数据迁移** — 自动将现有 session 按工作目录归类到同名项目
+- [ ] **Dashboard 项目分组视图** — 前端从扁平表格改为按 root 分组的视图，按优先级分区展示（主线/支线/普通/未归类）
 
 ## P1 — 明显提效，用户高频受益
 

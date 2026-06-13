@@ -4,91 +4,114 @@
 
 ## 目标
 
-从"扁平 session 列表"升级为"项目 → session"两级结构，支持用户设定 **1 个主线 + 最多 3 个支线** 的策略，让 Dashboard 从"状态监控"进化为"注意力分配决策辅助"。
+让 Dashboard 从"扁平 session 列表"进化为以**项目路径**为维度的两级视图，支持用户设定 1 个主线 + 最多 3 个支线的注意力策略。
 
-核心原则：**最好的设计应该是无感的**。pflow 不替代用户的终端/VSCode，只负责信息的聚合和呈现。
+核心原则：
+- **路径即项目**：不引入独立的项目 ID/名称实体。路径天然唯一，且 session 元数据中已有 working directory。
+- **零手动归类**：用户不需要手动创建项目、命名、或把 session 拖到某个项目下。只需标记"哪些路径是项目根"，子目录 session 自动归入。
+- **最好的设计应该是无感的**：pflow 不替代用户的终端/VSCode，只负责信息的聚合和呈现。
 
 已完成：`pflow status` / `probe` / `serve` / `claude`、Web Dashboard、Web 终端（ttyd）。详见 [`docs/prd.md`](./docs/prd.md) 阶段三。
 
-## P0 — 数据层 + 核心策略，必须完成
+## P0 — 数据层 + 自动归类，必须完成
 
-### P0-1 项目数据模型
+### P0-1 项目根存储
 
 - [ ] 新增 `internal/project/` 包
-- [ ] `~/.pflow/projects.json` 文件结构定义和读写（`store.go`）
-  - 字段：`id` / `name` / `path`（可选，本地项目路径）/ `priority`（primary | secondary | normal | archived）/ `created_at` / `sort_order`
-  - 默认项目：首次启动时自动创建"未分类"项目（`is_default: true`，`priority: normal`）
-- [ ] 项目 CRUD 函数：`Create` / `Get` / `List` / `Update` / `Delete`
-- [ ] 原子化写入（tmp 文件 + rename，与 mappings.json 一致）
+- [ ] `~/.pflow/project_roots.json` 文件结构：
+  ```json
+  {
+    "version": 1,
+    "roots": [
+      { "path": "/home/user/code/pflow", "priority": "primary" },
+      { "path": "/home/user/code/hermes", "priority": "secondary" },
+      { "path": "/home/user/code/pancake", "priority": "normal" }
+    ]
+  }
+  ```
+- [ ] `roots` 是一个简单列表。`path` 是唯一键（同一个 path 不会出现两次）。
+- [ ] 读/写函数 + 原子化写入（tmp 文件 + rename）
 
-### P0-2 Session ↔ Project 关联
+### P0-2 Session 自动归类逻辑
 
-- [ ] 扩展现有 Claude/Hermes scan 流程，为每个 session 关联 `projectId`
-- [ ] 按工作目录自动归类：对于有 `path` 字段的 session，匹配项目 `path` 前缀；匹配到的自动关联
-- [ ] 未匹配的 session 归入"未分类"默认项目
-- [ ] 历史数据迁移：无需手动脚本，首次启动时自动将现有 session 归类
-- [ ] 前端 store 中实现 `groupSessionsByProject` 计算属性
+- [ ] 每个 session 已有 `Project` 字段（working directory，来自 Claude/Hermes scan）
+- [ ] 归类算法：
+  1. 加载 `project_roots.json` 中的 roots
+  2. 对每个 session，遍历 roots，如果 session 的 `Project` 路径**以 root.path 开头**（即 session.cwd 是 root.path 本身或其子目录），则匹配成功
+  3. 多个 root 可能匹配同一个 session（如 `/a` 和 `/a/b` 都是 root）→ 取最长前缀匹配（最具体的 root）
+  4. 未匹配任何 root 的 session 作为"独立 session"展示（不归入任何项目分组）
+- [ ] 根目录保护：`/` 不能被标记为项目根（API 层拒绝），防止所有 session 被错误归入同一个项目
 
-### P0-3 主线/支线策略引擎
+### P0-3 策略引擎
 
-- [ ] `internal/project/strategy.go`：优先级切换规则
-  - `SetPrimary(projectId)`：原主线降为 normal，目标升为 primary
-  - `SetSecondary(projectId)`：支线数 < 3 则直接加入；已满则返回错误
-  - `SetNormal(projectId)`：从 primary/secondary 移除
-  - `Archive(projectId)`：移入 archived
-- [ ] 所有切换操作前后端双重校验（防止并发修改导致的超限）
+- [ ] `internal/project/strategy.go`：
+  - `SetPriority(path, priority)`：更新指定 path 的优先级
+  - `ValidatePriorities()`：确保最多 1 个 primary、最多 3 个 secondary，超限时返回错误
+  - `RemoveRoot(path)`：取消标记（不再视为项目根），匹配该 root 的 session 重新归入独立或更短的 root 匹配
 - [ ] API 端点：
-  - `PUT /api/v1/projects/:id` — 更新项目（含优先级切换）
-  - `POST /api/v1/projects` — 创建项目
-  - `DELETE /api/v1/projects/:id` — 删除项目（session 重新归入"未分类"）
+  - `PUT /api/v1/project-roots` — 标记/更新路径的优先级（body: `{ "path": "...", "priority": "primary" }`）
+  - `DELETE /api/v1/project-roots?path=...` — 取消标记
+  - `GET /api/v1/project-roots` — 返回当前所有 roots
 
 ### P0-4 Dashboard API 升级
 
-- [ ] `GET /api/v1/dashboard` 返回结构扩展：增加 `projects` 字段
+- [ ] `GET /api/v1/dashboard` 返回结构扩展：
   ```json
   {
     "now": "...",
     "window": "1d",
-    "projects": [ { "id": "...", "name": "...", "priority": "...", ... } ],
-    "sessions": [ { ..., "project_id": "..." } ],
+    "project_roots": [
+      { "path": "/home/user/code/pflow", "priority": "primary" }
+    ],
+    "sessions": [
+      { ..., "project": "/home/user/code/pflow/internal/api", "matched_root": "/home/user/code/pflow" }
+    ],
+    "unmatched_sessions": [ ... ],
     "errors": []
   }
   ```
-- [ ] 保持向后兼容：`sessions` 数组结构不变，仅增加 `project_id` 字段
-- [ ] 项目按 `sort_order` 排序，优先级分区逻辑在前端实现
+- [ ] `matched_root` 字段：标识该 session 被归入的 root，前端据此分组展示
+- [ ] `unmatched_sessions`：没有匹配到任何 root 的 session，前端作为独立条目展示
+- [ ] 保持向后兼容：现有字段不变，仅新增 `matched_root`
 
 ## P1 — 前端视图重构，必须完成
 
-### P1-1 Dashboard 项目视图
+### P1-1 项目根标记交互
 
-- [ ] 新建组件 `ProjectCard.vue`：展示项目名、优先级标记、内部 session 列表
-  - Session 行复用现有样式（状态灯 + session ID + last active + last req/resp）
-  - 每个项目卡片显示 session 数量和状态分布摘要
-- [ ] 新建组件 `PrioritySelector.vue`：优先级切换按钮/菜单
-  - 选项受当前优先级和数量限制约束（如支线已满时"设为支线"按钮禁用并提示）
-- [ ] 重构 `DashboardView.vue` 主布局：
-  - 替换扁平 DataTable 为分区布局（⭐ 主线 / 🚩 支线 / 📁 普通 / 📦 归档）
-  - 每个分区独立滚动，主线/支线始终展开，普通/归档可折叠
-  - 统计摘要栏保留（按分区统计）
+- [ ] 在 Dashboard 中，每个 session 行 / 每个 distinct 工作目录旁边增加一个勾选框 ☐ "识别为项目"
+- [ ] Hover tooltip 文案："将该目录标记为项目根，其子目录下的所有 session 都将归类到此项目下"
+- [ ] 勾选后调用 `PUT /api/v1/project-roots`，默认优先级 `normal`
+- [ ] 已标记的路径显示 ☑ 已勾选状态，取消勾选调用 `DELETE`
 
-### P1-2 交互与状态管理
+### P1-2 Dashboard 项目分组视图
 
-- [ ] Pinia store 新增 `projects` 模块（或扩展现有 store）
-- [ ] 优先级切换时前端乐观更新 + 后端校验失败时回滚
-- [ ] 支线数量超限时 Toast 提示 + 按钮禁用
-- [ ] 归档项目默认折叠，点击展开
-- [ ] 用户折叠/展开状态记忆（localStorage）
+- [ ] 按 `matched_root` 将 session 分组展示（替代当前的扁平表格）
+- [ ] 每个分组显示：
+  - 路径（项目根）+ 优先级徽章（⭐主线 / 🚩支线 / 📁普通）
+  - 优先级下拉切换（主线 / 支线 / 普通 / 取消标记），受数量限制控制
+  - 组内 session 列表（复用现有行样式）
+- [ ] 分区布局：
+  - ⭐ 主线区域（0 或 1 个 root，始终展开）
+  - 🚩 支线区域（最多 3 个 root，始终展开）
+  - 📁 普通区域（不限，可折叠）
+  - 未归类 session（`matched_root` 为空的，可折叠）
+- [ ] 无 root 标记时的空状态引导：提示用户勾选目录旁的 ☐ 来创建第一个项目
 
-## P2 — 优化与迁移
+### P1-3 优先级管理
 
-- [ ] 帮助提示（Tooltip）：主线/支线规则说明
-- [ ] 空状态设计：无项目时的引导提示
-- [ ] 历史 session 迁移提示：首次升级时告知用户归类结果，允许手动调整
-- [ ] 项目卡片拖拽排序（可选，可用 `vuedraggable`）
+- [ ] 每个项目分组的优先级下拉菜单：⭐ 主线 / 🚩 支线 / 📁 普通 / ✕ 取消标记
+- [ ] 选"主线"时：原主线自动降为普通（前端乐观更新 + 后端校验）
+- [ ] 选"支线"时：若已有 3 个支线，菜单项显示为禁用态 + tooltip 提示"支线项目已满（最多 3 个）"
+- [ ] 操作反馈：Toast 提示成功/失败
+
+## P2 — 优化
+
+- [ ] 深色路径显示：分组标题中路径的展示方式（折叠 HOME、高亮项目名等）
+- [ ] 用户对普通/未归类区域的折叠状态记忆（localStorage）
+- [ ] 空状态设计：无 root 时的引导提示
 
 ## 不包含（本周期）
 
 - `pflow attach` / `suggest` / `focus` CLI 子命令（设计原则：pflow 不替代用户工作软件）
 - 沉默提醒 / 军情哨主动推送（留待阶段四）
 - TUI Dashboard / 游戏化外壳（留待阶段五）
-- 多 Agent 类型启动（留待 backlog P2）
