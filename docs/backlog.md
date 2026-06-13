@@ -16,32 +16,35 @@
 - [x] `pflow probe <id>` — 探测单个 session 详细状态
 - [x] `pflow serve` — HTTP Dashboard API + Web Dashboard（单二进制部署）
 - [x] `pflow claude` — 启动 Claude Code 托管会话（tmux + statusline）
-- [ ] 亲赴前线：`pflow attach <session>` 独立子命令（当前通过 `pflow claude` 自带 attach + Web 终端 ttyd 实现，但缺少独立的 tmux attach 查找子命令）
-- [ ] 多 Agent 类型启动：`pflow start --agent hermes --project X`（当前仅支持 Claude）
+- [ ] **项目数据模型** — `~/.pflow/projects.json`：项目定义（id/name/path/priority），CRUD API
+- [ ] **Session ↔ Project 关联** — session 增加 `projectId` 字段，支持按工作目录自动归类；未关联的归入"未分类"项目
+- [ ] **主线/支线策略引擎** — 设定 1 主线 + 最多 3 支线，数量限制校验，优先级切换规则
+- [ ] **Dashboard 项目视图重构** — 前端从扁平表格改为"项目卡片 → session 列表"两级结构，按优先级分区展示（主线/支线/普通/归档）
+- [ ] **历史数据迁移** — 自动将现有 session 按工作目录归类到同名项目
 
 ## P1 — 明显提效，用户高频受益
 
-- [ ] `pflow suggest` — 手动触发军情哨分析建议
-- [ ] `pflow focus --main A --side B,C` — 设定主攻/侧翼
-- [ ] Agent 沉默超阈值时终端通知
-- [ ] Shell 补齐脚本
+- [ ] **沉默提醒** — 主线项目 Agent 沉默超阈值时终端通知（可配置阈值 + 提醒间隔）
+- [ ] **项目手动排序** — 拖拽或按钮调整支线/普通项目的显示顺序
+- [ ] **项目折叠/展开** — 记忆用户对普通项目和归档项目的折叠状态
+- [ ] Shell 补齐脚本（`pflow` 子命令 + session ID）
 
 ## P2 — 锦上添花，有余力时做
 
-- [ ] **Hermes Last Resp 提取**：接入 `~/.hermes/state.db` SQLite（纯 Go 驱动如 `modernc.org/sqlite`），查询 messages 表获取 assistant 回复内容，填充 `LastResp` 字段。当前仅从 request_dump body 提取了 `LastReq`。
-- [ ] **军情哨主动推送**（定时 + 事件触发，需后台守护进程）
-- [ ] **统帅偏好学习**（推送频率自适应）
-- [ ] **战局图**：任务依赖关系的可视化建立与阻塞检测
-- [ ] TUI Dashboard（Bubble Tea 终端可视化战报）
+- [ ] **Hermes Last Resp 提取**：接入 `~/.hermes/state.db` SQLite，查询 messages 表获取 assistant 回复内容，填充 `LastResp` 字段。当前仅从 request_dump body 提取了 `LastReq`。
 - [ ] WebSocket 实时推送（替代 Dashboard 轮询）
 - [ ] Session 状态变化时的浏览器通知（Notification API）
-- [ ] 会话时间线可视化（甘特图式的时间分布）
+- [ ] 军情哨分析建议（`pflow suggest`）
+- [ ] 多 Agent 类型启动（`pflow start --agent hermes`）
+- [ ] TUI Dashboard（Bubble Tea 终端可视化战报）
 - [ ] 暗色/亮色主题切换
 
 ## P3 — 远期/探索，条件成熟再做
 
+- [ ] 军情哨主动推送（需后台守护进程）
+- [ ] 统帅偏好学习（推送频率自适应）
+- [ ] 战局图：任务依赖关系的可视化建立与阻塞检测
 - [ ] 游戏化外壳（战场地图隐喻的视觉包装）
 - [ ] VSCode 扩展
 - [ ] 跨设备同步（手机/平板看状态、点批准）
 - [ ] 多 Agent 类型支持（Cline、Codex CLI 等）
-- [ ] 多项目战局图（跨项目任务依赖与资源调度）
