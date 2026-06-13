@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/pancake-lee/pflow/internal/claude"
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
+	"github.com/pancake-lee/pflow/internal/project"
 	"github.com/pancake-lee/pflow/internal/session"
 	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 )
@@ -32,14 +34,22 @@ type DashboardEntry struct {
 	Platform         string    `json:"platform,omitempty"`   // Hermes only
 	HasTerminal      bool      `json:"has_terminal"`         // true if a tmux mapping exists
 	TerminalTmuxName string    `json:"terminal_tmux_name,omitempty"` // matched tmux session name
+	MatchedRoot      string    `json:"matched_root,omitempty"`       // matched project root path (empty = unmatched)
+}
+
+// ProjectRootJSON is the JSON representation of a project root for API responses.
+type ProjectRootJSON struct {
+	Path     string `json:"path"`
+	Priority string `json:"priority"`
 }
 
 // DashboardResponse is the JSON response for GET /api/v1/dashboard.
 type DashboardResponse struct {
-	Now      time.Time         `json:"now"`
-	Window   string            `json:"window"`
-	Sessions []DashboardEntry  `json:"sessions"`
-	Errors   []string          `json:"errors,omitempty"`
+	Now          time.Time          `json:"now"`
+	Window       string             `json:"window"`
+	ProjectRoots []ProjectRootJSON  `json:"project_roots"`
+	Sessions     []DashboardEntry   `json:"sessions"`
+	Errors       []string           `json:"errors,omitempty"`
 }
 
 // Server is the pflow HTTP API server.
@@ -47,12 +57,17 @@ type Server struct {
 	http.ServeMux
 	staticFS   fs.FS // optional embedded static files (web/dist)
 	sessionMgr *session.Manager
+	projectMgr *project.Manager
 }
 
 // NewServer creates a new API server with registered routes.
 // If staticFS is non-nil, static files (the Vue SPA) are served from it.
 func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
-	s := &Server{staticFS: staticFS, sessionMgr: sessionMgr}
+	s := &Server{
+		staticFS:   staticFS,
+		sessionMgr: sessionMgr,
+		projectMgr: project.NewManager(),
+	}
 	s.HandleFunc("/api/v1/dashboard", s.handleDashboard)
 
 	// Terminal management endpoints
@@ -60,6 +75,11 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	s.HandleFunc("POST /api/v1/terminal/stop", s.handleTerminalStop)
 	s.HandleFunc("GET /api/v1/terminal/list", s.handleTerminalList)
 	s.HandleFunc("GET /api/v1/terminal/lookup", s.handleTerminalLookup)
+
+	// Project root management endpoints
+	s.HandleFunc("GET /api/v1/project-roots", s.handleGetProjectRoots)
+	s.HandleFunc("PUT /api/v1/project-roots", s.handlePutProjectRoot)
+	s.HandleFunc("DELETE /api/v1/project-roots", s.handleDeleteProjectRoot)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -111,12 +131,29 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	opts := parseQueryParams(r)
 
+	// Load project roots
+	rootsFile, rootsErr := s.projectMgr.Load()
+	var projectRoots []ProjectRootJSON
+	if rootsErr == nil {
+		projectRoots = make([]ProjectRootJSON, 0, len(rootsFile.Roots))
+		for _, r := range rootsFile.Roots {
+			projectRoots = append(projectRoots, ProjectRootJSON{
+				Path:     r.Path,
+				Priority: string(r.Priority),
+			})
+		}
+	}
+
 	resp := DashboardResponse{
-		Now:    time.Now(),
-		Window: opts.Window.String(),
+		Now:          time.Now(),
+		Window:       opts.Window.String(),
+		ProjectRoots: projectRoots,
 	}
 
 	var errors []string
+	if rootsErr != nil {
+		errors = append(errors, "project_roots: "+rootsErr.Error())
+	}
 
 	// Scan Claude Code sessions
 	claudeResult, claudeErr := claude.Scan(opts)
@@ -124,7 +161,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		errors = append(errors, "claude: "+claudeErr.Error())
 	} else {
 		for _, s := range claudeResult.Sessions {
-			resp.Sessions = append(resp.Sessions, DashboardEntry{
+			entry := DashboardEntry{
 				SessionID:    truncate8(s.SessionID),
 				AgentType:    "claude",
 				Project:      s.Project,
@@ -137,7 +174,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				LastResp:     s.LastResp,
 				LastReqFull:  s.LastReqFull,
 				LastRespFull: s.LastRespFull,
-			})
+			}
+			// Match to project root
+			if rootsFile != nil {
+				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
+					entry.MatchedRoot = matched.Path
+				}
+			}
+			resp.Sessions = append(resp.Sessions, entry)
 		}
 	}
 
@@ -147,7 +191,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		errors = append(errors, "hermes: "+hermesErr.Error())
 	} else {
 		for _, s := range hermesResult.Sessions {
-			resp.Sessions = append(resp.Sessions, DashboardEntry{
+			entry := DashboardEntry{
 				SessionID:    truncate8(s.SessionID),
 				AgentType:    "hermes",
 				Project:      s.Project,
@@ -161,7 +205,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				LastReqFull:  s.LastReqFull,
 				LastRespFull: s.LastRespFull,
 				Platform:     s.Platform,
-			})
+			}
+			// Match to project root
+			if rootsFile != nil {
+				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
+					entry.MatchedRoot = matched.Path
+				}
+			}
+			resp.Sessions = append(resp.Sessions, entry)
 		}
 	}
 
@@ -214,6 +265,93 @@ func parseQueryParams(r *http.Request) config.ScanOptions {
 	}
 
 	return opts
+}
+
+// ── Project root management handlers ──────────────────────────────
+
+type putProjectRootReq struct {
+	Path     string `json:"path"`
+	Priority string `json:"priority"`
+}
+
+// handleGetProjectRoots handles GET /api/v1/project-roots.
+func (s *Server) handleGetProjectRoots(w http.ResponseWriter, r *http.Request) {
+	rf, err := s.projectMgr.Load()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	roots := make([]ProjectRootJSON, 0, len(rf.Roots))
+	for _, r := range rf.Roots {
+		roots = append(roots, ProjectRootJSON{Path: r.Path, Priority: string(r.Priority)})
+	}
+	if roots == nil {
+		roots = []ProjectRootJSON{} // always return array, not null
+	}
+
+	writeJSON(w, http.StatusOK, roots)
+}
+
+// handlePutProjectRoot handles PUT /api/v1/project-roots.
+// Body: {"path": "/home/user/code/pflow", "priority": "primary"}
+func (s *Server) handlePutProjectRoot(w http.ResponseWriter, r *http.Request) {
+	var req putProjectRootReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body: " + err.Error()})
+		return
+	}
+	if req.Path == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is required"})
+		return
+	}
+
+	// Clean the path
+	req.Path = filepath.Clean(req.Path)
+
+	// Reject root directory
+	if req.Path == "/" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot mark root directory '/' as a project root"})
+		return
+	}
+
+	priority := project.Priority(req.Priority)
+	if priority == "" {
+		priority = project.PriorityNormal
+	}
+
+	if err := s.projectMgr.SetPriority(req.Path, priority); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"path":     req.Path,
+		"priority": string(priority),
+	})
+}
+
+// handleDeleteProjectRoot handles DELETE /api/v1/project-roots?path=...
+func (s *Server) handleDeleteProjectRoot(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path query parameter is required"})
+		return
+	}
+
+	if err := s.projectMgr.RemoveRoot(path); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": path})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
 }
 
 // hermesRawStatus returns a raw status string for a Hermes session,

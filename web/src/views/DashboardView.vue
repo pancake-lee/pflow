@@ -5,7 +5,6 @@ import {
   NLayoutHeader,
   NLayoutContent,
   NLayoutFooter,
-  NDataTable,
   NTag,
   NSelect,
   NInputNumber,
@@ -23,6 +22,9 @@ import {
   NAlert,
   NTooltip,
   NModal,
+  NCollapse,
+  NCollapseItem,
+  useMessage,
 } from 'naive-ui'
 import {
   DesktopOutline,
@@ -41,10 +43,13 @@ import type {
 import { useDashboard } from '../composables/useDashboard'
 import { usePolling } from '../composables/usePolling'
 import { formatSince, truncate, escapeNewlines } from '../composables/format'
+import GroupCard from '../components/GroupCard.vue'
+import type { SessionGroup } from '../components/GroupCard.vue'
 
 // ── State ────────────────────────────────────────────────────────
 
 const { data, loading, error, fetchDashboard } = useDashboard()
+const message = useMessage()
 
 // Filter params
 const windowOptions = [
@@ -172,6 +177,149 @@ const filteredSessions = computed(() => {
   return data.value.sessions.filter((s) => s.agent_type === agentFilter.value)
 })
 
+// Group sessions by matched_root (with fallback to individual project path)
+type Priority = 'primary' | 'secondary' | 'normal'
+
+function projectBasename(path: string): string {
+  if (!path || path === '?' || path === '/') return 'Other'
+  const cleaned = path.replace(/\/+$/, '')
+  const idx = cleaned.lastIndexOf('/')
+  return idx >= 0 ? cleaned.slice(idx + 1) : cleaned
+}
+
+// Build a lookup map of path → priority from project roots
+const rootPriorityMap = computed(() => {
+  const map = new Map<string, Priority>()
+  const roots = data.value?.project_roots ?? []
+  for (const r of roots) {
+    map.set(r.path, r.priority)
+  }
+  return map
+})
+
+const groupedSessions = computed<SessionGroup[]>(() => {
+  const sessions = filteredSessions.value
+  const roots = data.value?.project_roots ?? []
+  const rootSet = new Set(roots.map(r => r.path))
+  const groups = new Map<string, DashboardEntry[]>()
+
+  for (const s of sessions) {
+    // Use matched_root if available, otherwise group by individual project path
+    const key = s.matched_root || s.project || 'Other'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(s)
+  }
+
+  const result: SessionGroup[] = Array.from(groups.entries()).map(([key, sess]) => ({
+    key,
+    basename: projectBasename(key),
+    fullPath: key,
+    sessions: sess,
+    hasActive: sess.some(s => s.is_active),
+    hasWaiting: sess.some(s => s.status === 'waiting'),
+    lastActive: Math.max(...sess.map(s => new Date(s.last_active).getTime())),
+    isRoot: rootSet.has(key),
+    priority: rootPriorityMap.value.get(key) ?? null,
+  }))
+
+  // Sort: primary first, then secondary, then normal, then unmatched
+  // Within each tier: active first, waiting next, then by recency
+  const priorityOrder: Record<string, number> = { primary: 0, secondary: 1, normal: 2, unmatched: 3 }
+
+  result.sort((a, b) => {
+    const pa = priorityOrder[a.priority ?? 'unmatched']
+    const pb = priorityOrder[b.priority ?? 'unmatched']
+    if (pa !== pb) return pa - pb
+    if (a.hasActive !== b.hasActive) return a.hasActive ? -1 : 1
+    if (a.hasWaiting !== b.hasWaiting) return a.hasWaiting ? -1 : 1
+    return b.lastActive - a.lastActive
+  })
+
+  return result
+})
+
+// Split groups into zones
+const primaryGroups = computed(() => groupedSessions.value.filter(g => g.priority === 'primary'))
+const secondaryGroups = computed(() => groupedSessions.value.filter(g => g.priority === 'secondary'))
+const normalGroups = computed(() => groupedSessions.value.filter(g => g.priority === 'normal'))
+const unmatchedGroups = computed(() => groupedSessions.value.filter(g => g.priority === null))
+
+// ── Project root API actions ───────────────────────────────────
+
+const projectRootLoading = ref(false)
+
+async function markAsRoot(path: string, priority: Priority = 'normal') {
+  projectRootLoading.value = true
+  try {
+    const resp = await fetch('/api/v1/project-roots', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, priority }),
+    })
+    const result = await resp.json()
+    if (!resp.ok) {
+      message.error(result.error || `Failed to mark as project root`)
+      return
+    }
+    message.success(`Marked as project root (${priority})`)
+    refresh() // refresh dashboard to get updated matched_root
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to mark as project root')
+  } finally {
+    projectRootLoading.value = false
+  }
+}
+
+async function unmarkRoot(path: string) {
+  projectRootLoading.value = true
+  try {
+    const resp = await fetch(`/api/v1/project-roots?path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+    })
+    const result = await resp.json()
+    if (!resp.ok) {
+      message.error(result.error || `Failed to unmark project root`)
+      return
+    }
+    message.success('Removed project root')
+    refresh()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to unmark project root')
+  } finally {
+    projectRootLoading.value = false
+  }
+}
+
+async function setPriority(path: string, priority: Priority) {
+  projectRootLoading.value = true
+  try {
+    const resp = await fetch('/api/v1/project-roots', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, priority }),
+    })
+    const result = await resp.json()
+    if (!resp.ok) {
+      message.error(result.error || `Failed to set priority`)
+      return
+    }
+    message.success(`Priority set to ${priority}`)
+    refresh()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to set priority')
+  } finally {
+    projectRootLoading.value = false
+  }
+}
+
+function handleCheckChange(group: SessionGroup, checked: boolean) {
+  if (checked) {
+    markAsRoot(group.fullPath)
+  } else {
+    unmarkRoot(group.fullPath)
+  }
+}
+
 const stats = computed(() => {
   const sessions = data.value?.sessions ?? []
   return {
@@ -179,6 +327,7 @@ const stats = computed(() => {
     active: sessions.filter((s) => s.is_active).length,
     waiting: sessions.filter((s) => s.status === 'waiting').length,
     idle: sessions.filter((s) => s.status === 'idle').length,
+    groups: groupedSessions.value.length,
   }
 })
 
@@ -315,7 +464,9 @@ function trafficColor(light: string): TagType {
   }
 }
 
-const columns: DataTableColumns<DashboardEntry> = [
+// ── Inner table columns (without Project, since it's the group header) ─
+
+const groupColumns: DataTableColumns<DashboardEntry> = [
   {
     title: '',
     key: 'agent',
@@ -333,23 +484,6 @@ const columns: DataTableColumns<DashboardEntry> = [
     },
   },
   {
-    title: 'Project',
-    key: 'project',
-    width: 140,
-    ellipsis: { tooltip: true },
-    sorter: (a, b) => {
-      const pa = (a.project || a.platform || '?').toLowerCase()
-      const pb = (b.project || b.platform || '?').toLowerCase()
-      if (pa < pb) return -1
-      if (pa > pb) return 1
-      return 0
-    },
-    render(row) {
-      const p = row.project || (row.platform ? row.platform : '?')
-      return h('span', p)
-    },
-  },
-  {
     title: 'Status',
     key: 'status',
     width: 110,
@@ -362,10 +496,10 @@ const columns: DataTableColumns<DashboardEntry> = [
   {
     title: 'Name',
     key: 'name',
-    width: 160,
+    width: 180,
     ellipsis: { tooltip: true },
     render(row) {
-      const name = escapeNewlines(truncate(row.name, 20))
+      const name = escapeNewlines(truncate(row.name, 24))
       return h('span', name || '—')
     },
   },
@@ -538,33 +672,107 @@ function rowProps(row: DashboardEntry) {
           </NSpace>
         </div>
 
-        <!-- Sessions table -->
+        <!-- Sessions grouped by project, with priority zones -->
         <NSpin :show="loading && !data">
-          <NDataTable
-            :columns="columns"
-            :data="filteredSessions"
-            :row-props="rowProps"
-            :bordered="false"
-            :single-line="false"
-            size="small"
-            :max-height="600"
-            virtual-scroll
-          />
-        </NSpin>
+          <div v-if="groupedSessions.length > 0" class="groups-container">
 
-        <!-- Empty state -->
-        <div v-if="!loading && !error && filteredSessions.length === 0" class="empty-state">
-          <p>No active sessions found in the selected time window.</p>
-          <p class="hint">Try increasing the window or checking if agents are running.</p>
-        </div>
+            <!-- ⭐ 主线项目 (Primary) — always expanded -->
+            <div v-if="primaryGroups.length > 0" class="zone-section">
+              <div class="zone-header zone-primary">
+                <span class="zone-title">⭐ 主线项目</span>
+                <span class="zone-count">{{ primaryGroups.length }}/1</span>
+              </div>
+              <GroupCard
+                v-for="group in primaryGroups"
+                :key="group.key"
+                :group="group"
+                :columns="groupColumns"
+                :row-props="rowProps"
+                :disabled="projectRootLoading"
+                @check="handleCheckChange"
+                @priority="(p: Priority) => setPriority(group.fullPath, p)"
+              />
+            </div>
+
+            <!-- 🚩 支线项目 (Secondary) — always expanded -->
+            <div v-if="secondaryGroups.length > 0" class="zone-section">
+              <div class="zone-header zone-secondary">
+                <span class="zone-title">🚩 支线项目</span>
+                <span class="zone-count">{{ secondaryGroups.length }}/3</span>
+              </div>
+              <GroupCard
+                v-for="group in secondaryGroups"
+                :key="group.key"
+                :group="group"
+                :columns="groupColumns"
+                :row-props="rowProps"
+                :disabled="projectRootLoading"
+                @check="handleCheckChange"
+                @priority="(p: Priority) => setPriority(group.fullPath, p)"
+              />
+            </div>
+
+            <!-- 📁 普通项目 (Normal) — collapsible -->
+            <NCollapse v-if="normalGroups.length > 0" class="zone-collapse" :default-expanded-names="['normal']">
+              <NCollapseItem name="normal">
+                <template #header>
+                  <span class="zone-title">📁 普通项目</span>
+                  <span class="zone-count">{{ normalGroups.length }}</span>
+                </template>
+                <GroupCard
+                  v-for="group in normalGroups"
+                  :key="group.key"
+                  :group="group"
+                  :columns="groupColumns"
+                  :row-props="rowProps"
+                  :disabled="projectRootLoading"
+                  @check="handleCheckChange"
+                  @priority="(p: Priority) => setPriority(group.fullPath, p)"
+                />
+              </NCollapseItem>
+            </NCollapse>
+
+            <!-- Unmatched sessions — collapsible, collapsed by default -->
+            <NCollapse v-if="unmatchedGroups.length > 0" class="zone-collapse">
+              <NCollapseItem name="unmatched">
+                <template #header>
+                  <span class="zone-title">📂 未归类</span>
+                  <span class="zone-count">{{ unmatchedGroups.length }}</span>
+                </template>
+                <GroupCard
+                  v-for="group in unmatchedGroups"
+                  :key="group.key"
+                  :group="group"
+                  :columns="groupColumns"
+                  :row-props="rowProps"
+                  :disabled="projectRootLoading"
+                  @check="handleCheckChange"
+                  @priority="(p: Priority) => setPriority(group.fullPath, p)"
+                />
+              </NCollapseItem>
+            </NCollapse>
+
+            <!-- Empty zones hint: show when everything is unmatched and no roots -->
+            <div v-if="primaryGroups.length === 0 && secondaryGroups.length === 0 && normalGroups.length === 0 && unmatchedGroups.length > 0" class="zone-hint">
+              <p>💡 Check the ☐ box next to a directory to mark it as a project root and assign priority.</p>
+            </div>
+
+          </div>
+
+          <!-- Empty state -->
+          <div v-if="!loading && !error && filteredSessions.length === 0" class="empty-state">
+            <p>No active sessions found in the selected time window.</p>
+            <p class="hint">Try increasing the window or checking if agents are running.</p>
+          </div>
+        </NSpin>
       </div>
     </NLayoutContent>
 
     <!-- Footer -->
     <NLayoutFooter bordered>
       <div class="footer">
-        <span>{{ stats.total }} sessions</span>
-        <span>🟢 busy/running &nbsp; 🟡 waiting &nbsp; ⚪ idle &nbsp; ⚫ inactive</span>
+        <span>{{ stats.total }} sessions in {{ stats.groups }} groups</span>
+        <span>🟢 active &nbsp; 🟡 waiting &nbsp; ⚪ idle &nbsp; ⚫ inactive</span>
         <span v-if="maxInactive > 0">(inactive limited to {{ maxInactive }} per project)</span>
       </div>
     </NLayoutFooter>
@@ -764,6 +972,76 @@ function rowProps(row: DashboardEntry) {
   font-size: 12px;
   color: var(--n-text-color-3);
   margin-left: 12px;
+}
+
+/* Zone layout */
+.groups-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.zone-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.zone-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.zone-primary {
+  background: rgba(24, 160, 88, 0.12);
+  color: #18a058;
+  border: 1px solid rgba(24, 160, 88, 0.3);
+}
+
+.zone-secondary {
+  background: rgba(240, 160, 32, 0.12);
+  color: #f0a020;
+  border: 1px solid rgba(240, 160, 32, 0.3);
+}
+
+.zone-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zone-count {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.zone-collapse {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.zone-collapse .zone-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.zone-collapse .zone-count {
+  margin-left: 8px;
+}
+
+.zone-hint {
+  text-align: center;
+  padding: 20px;
+  color: var(--n-text-color-4);
+  font-size: 13px;
+  background: var(--n-color-embedded);
+  border-radius: 8px;
+  border: 1px dashed var(--n-border-color);
 }
 
 /* Empty */

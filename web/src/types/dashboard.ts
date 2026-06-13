@@ -17,11 +17,18 @@ export interface DashboardEntry {
   platform?: string // Hermes only
   has_terminal: boolean
   terminal_tmux_name?: string
+  matched_root?: string // project root path if matched, empty = unmatched
+}
+
+export interface ProjectRoot {
+  path: string
+  priority: 'primary' | 'secondary' | 'normal'
 }
 
 export interface DashboardResponse {
   now: string // ISO 8601
   window: string
+  project_roots: ProjectRoot[]
   sessions: DashboardEntry[]
   errors?: string[]
 }
