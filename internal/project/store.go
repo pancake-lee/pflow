@@ -26,7 +26,7 @@ const (
 const MaxPrimary = 1
 
 // MaxSecondary is the maximum number of secondary project roots.
-const MaxSecondary = 3
+const MaxSecondary = 2
 
 // Root represents a single project root with its priority.
 type Root struct {

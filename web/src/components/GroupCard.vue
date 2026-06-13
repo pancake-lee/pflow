@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import {
   NDataTable,
-  NSelect,
   NTooltip,
   NCheckbox,
 } from 'naive-ui'
@@ -31,21 +31,34 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   check: [group: SessionGroup, checked: boolean]
-  priority: [priority: Priority]
 }>()
-
-const priorityOptions = [
-  { label: '⭐ 主线', value: 'primary' as Priority },
-  { label: '🚩 支线', value: 'secondary' as Priority },
-  { label: '📁 普通', value: 'normal' as Priority },
-]
 
 function onCheckChange(checked: boolean) {
   emit('check', props.group, checked)
 }
 
-function onPriorityChange(value: Priority) {
-  emit('priority', value)
+// Empty placeholder row for table stability
+const PLACEHOLDER_ROW: DashboardEntry = {
+  session_id: '-',
+  agent_type: 'claude',
+  project: '-',
+  status: '-',
+  is_active: false,
+  traffic_light: '⚪',
+  name: '-',
+  last_active: new Date().toISOString(),
+  last_req: '-',
+  last_resp: '-',
+  has_terminal: false,
+}
+
+const tableData = computed(() =>
+  props.group.sessions.length > 0 ? props.group.sessions : [PLACEHOLDER_ROW],
+)
+
+function wrappedRowProps(row: DashboardEntry) {
+  if (row.session_id === '-') return {}
+  return props.rowProps(row)
 }
 </script>
 
@@ -70,17 +83,6 @@ function onPriorityChange(value: Priority) {
       <div class="group-header-right">
         <span class="group-count">{{ group.sessions.length }} session{{ group.sessions.length > 1 ? 's' : '' }}</span>
 
-        <!-- Priority selector (only when marked as root) -->
-        <NSelect
-          v-if="group.isRoot"
-          size="tiny"
-          :value="group.priority"
-          :options="priorityOptions"
-          :disabled="disabled"
-          style="width: 110px"
-          @update:value="onPriorityChange"
-        />
-
         <!-- Checkbox: "识别为项目" -->
         <NTooltip placement="top">
           <template #trigger>
@@ -101,8 +103,8 @@ function onPriorityChange(value: Priority) {
     <!-- Group body: session table -->
     <NDataTable
       :columns="columns"
-      :data="group.sessions"
-      :row-props="rowProps"
+      :data="tableData"
+      :row-props="wrappedRowProps"
       :bordered="false"
       :single-line="false"
       size="small"

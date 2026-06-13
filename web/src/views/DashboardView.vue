@@ -14,9 +14,6 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NSpace,
-  NStatistic,
-  NGrid,
-  NGi,
   NIcon,
   NSpin,
   NAlert,
@@ -44,6 +41,8 @@ import { useDashboard } from '../composables/useDashboard'
 import { usePolling } from '../composables/usePolling'
 import { formatSince, truncate, escapeNewlines } from '../composables/format'
 import GroupCard from '../components/GroupCard.vue'
+import PrimaryCard from '../components/PrimaryCard.vue'
+import SecondaryCard from '../components/SecondaryCard.vue'
 import type { SessionGroup } from '../components/GroupCard.vue'
 
 // ── State ────────────────────────────────────────────────────────
@@ -82,7 +81,7 @@ const refreshOptions = [
 const showDetail = ref(false)
 const selectedSession = ref<DashboardEntry | null>(null)
 
-// Resizable drawer: min 1/4 screen, max 3/4 screen
+// Resizable drawer
 const drawerWidth = ref(Math.max(480, Math.floor(window.innerWidth / 4)))
 const minDrawerWidth = computed(() => Math.floor(window.innerWidth / 4))
 const maxDrawerWidth = computed(() => Math.floor(window.innerWidth * 3 / 4))
@@ -91,20 +90,17 @@ function startResize(e: MouseEvent) {
   e.preventDefault()
   const startX = e.clientX
   const startWidth = drawerWidth.value
-
   function onMove(ev: MouseEvent) {
-    const delta = startX - ev.clientX // moving left = wider drawer
+    const delta = startX - ev.clientX
     const newWidth = startWidth + delta
     drawerWidth.value = Math.min(maxDrawerWidth.value, Math.max(minDrawerWidth.value, newWidth))
   }
-
   function onUp() {
     document.removeEventListener('mousemove', onMove)
     document.removeEventListener('mouseup', onUp)
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
   }
-
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', onUp)
   document.body.style.cursor = 'col-resize'
@@ -121,8 +117,6 @@ const terminalVerified = ref(false)
 const terminalLookupHint = ref<string | null>(null)
 const terminalLookupWarning = ref<string | null>(null)
 const terminalLookupDone = ref(false)
-
-// Terminal modal
 const showTerminalModal = ref(false)
 
 function openTerminalModal() {
@@ -130,32 +124,24 @@ function openTerminalModal() {
     showTerminalModal.value = true
     return
   }
-  // Will start ttyd first, then open modal
   startTerminal()
 }
 
-// Open terminal directly from the table column button
 async function openTerminalFromTable(row: DashboardEntry) {
   selectedSession.value = row
-  showDetail.value = false // don't open drawer
-
-  // Reset terminal state
+  showDetail.value = false
   terminalUrl.value = null
   terminalError.value = null
   terminalLookupHint.value = null
   terminalLookupWarning.value = null
-
-  // If dashboard API already found a mapping, use it directly
   if (row.has_terminal && row.terminal_tmux_name) {
     terminalFound.value = true
     terminalVerified.value = false
     terminalName.value = row.terminal_tmux_name
     terminalLookupDone.value = true
-    await startTerminal() // this auto-opens modal on success
+    await startTerminal()
     return
   }
-
-  // Fallback: do a lookup (should not normally happen if backend populated mapping)
   if (row.agent_type === 'claude' && row.session_id) {
     await lookupTerminal(row.session_id)
     if (terminalFound.value) {
@@ -177,9 +163,6 @@ const filteredSessions = computed(() => {
   return data.value.sessions.filter((s) => s.agent_type === agentFilter.value)
 })
 
-// Group sessions by matched_root (with fallback to individual project path)
-type Priority = 'primary' | 'secondary' | 'normal'
-
 function projectBasename(path: string): string {
   if (!path || path === '?' || path === '/') return 'Other'
   const cleaned = path.replace(/\/+$/, '')
@@ -197,6 +180,8 @@ const rootPriorityMap = computed(() => {
   return map
 })
 
+type Priority = 'primary' | 'secondary' | 'normal'
+
 const groupedSessions = computed<SessionGroup[]>(() => {
   const sessions = filteredSessions.value
   const roots = data.value?.project_roots ?? []
@@ -204,7 +189,6 @@ const groupedSessions = computed<SessionGroup[]>(() => {
   const groups = new Map<string, DashboardEntry[]>()
 
   for (const s of sessions) {
-    // Use matched_root if available, otherwise group by individual project path
     const key = s.matched_root || s.project || 'Other'
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(s)
@@ -223,9 +207,7 @@ const groupedSessions = computed<SessionGroup[]>(() => {
   }))
 
   // Sort: primary first, then secondary, then normal, then unmatched
-  // Within each tier: active first, waiting next, then by recency
   const priorityOrder: Record<string, number> = { primary: 0, secondary: 1, normal: 2, unmatched: 3 }
-
   result.sort((a, b) => {
     const pa = priorityOrder[a.priority ?? 'unmatched']
     const pb = priorityOrder[b.priority ?? 'unmatched']
@@ -238,17 +220,53 @@ const groupedSessions = computed<SessionGroup[]>(() => {
   return result
 })
 
-// Split groups into zones
-const primaryGroups = computed(() => groupedSessions.value.filter(g => g.priority === 'primary'))
-const secondaryGroups = computed(() => groupedSessions.value.filter(g => g.priority === 'secondary'))
-const normalGroups = computed(() => groupedSessions.value.filter(g => g.priority === 'normal'))
-const unmatchedGroups = computed(() => groupedSessions.value.filter(g => g.priority === null))
+// Zone splits
+const primaryGroup = computed(() =>
+  groupedSessions.value.find(g => g.priority === 'primary') ?? null,
+)
+const secondaryGroups = computed(() => {
+  const list = groupedSessions.value.filter(g => g.priority === 'secondary')
+  // Pad to exactly 2 slots (null = empty placeholder)
+  while (list.length < 2) list.push(null as unknown as SessionGroup)
+  return list.slice(0, 2)
+})
+const normalGroups = computed(() =>
+  groupedSessions.value.filter(g => g.priority === 'normal'),
+)
+const unmatchedGroups = computed(() =>
+  groupedSessions.value.filter(g => g.priority === null),
+)
 
-// ── Project root API actions ───────────────────────────────────
+// ── Main session state (frontend-only, per-group) ──────────────
+
+const mainSessionIds = ref<Record<string, string>>({})
+
+function getMainSession(group: SessionGroup | null): DashboardEntry | null {
+  if (!group || group.sessions.length === 0) return null
+  const mainId = mainSessionIds.value[group.key]
+  if (mainId) {
+    const found = group.sessions.find(s => s.session_id === mainId)
+    if (found) return found
+  }
+  return group.sessions.find(s => s.is_active) || group.sessions[0]
+}
+
+const primaryMainSession = computed(() => getMainSession(primaryGroup.value))
+
+// ── Project selector options (all groups that could fill a slot) ──
+
+const projectSelectOptions = computed(() =>
+  groupedSessions.value.map(g => ({
+    label: g.basename + (g.fullPath !== 'Other' ? ' — ' + g.fullPath : ''),
+    value: g.fullPath,
+  })),
+)
+
+// ── Slot assignment ────────────────────────────────────────────
 
 const projectRootLoading = ref(false)
 
-async function markAsRoot(path: string, priority: Priority = 'normal') {
+async function assignSlot(path: string, priority: Priority) {
   projectRootLoading.value = true
   try {
     const resp = await fetch('/api/v1/project-roots', {
@@ -258,11 +276,76 @@ async function markAsRoot(path: string, priority: Priority = 'normal') {
     })
     const result = await resp.json()
     if (!resp.ok) {
+      message.error(result.error || `Failed to assign project`)
+      return
+    }
+    message.success(`Project set as ${priority}`)
+    refresh()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to assign project')
+  } finally {
+    projectRootLoading.value = false
+  }
+}
+
+async function clearSlot(path: string) {
+  // Demote to normal instead of deleting — keeps it as a project root
+  projectRootLoading.value = true
+  try {
+    const resp = await fetch('/api/v1/project-roots', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, priority: 'normal' }),
+    })
+    const result = await resp.json()
+    if (!resp.ok) {
+      message.error(result.error || `Failed to clear slot`)
+      return
+    }
+    message.success('Slot cleared (project demoted to normal)')
+    refresh()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to clear slot')
+  } finally {
+    projectRootLoading.value = false
+  }
+}
+
+function handleSelectPrimary(path: string | null) {
+  if (!path) {
+    // Clear: demote current primary
+    if (primaryGroup.value) clearSlot(primaryGroup.value.fullPath)
+    return
+  }
+  assignSlot(path, 'primary')
+}
+
+function handleSelectSecondary(path: string | null) {
+  if (!path) {
+    // Clear is more complex for secondary; find which one was selected and demote it
+    // For simplicity, look for the currently assigned secondary
+    return
+  }
+  assignSlot(path, 'secondary')
+}
+
+// ── Checkbox (normal/unmatched groups) ─────────────────────────
+
+async function markAsRoot(path: string) {
+  projectRootLoading.value = true
+  try {
+    const resp = await fetch('/api/v1/project-roots', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, priority: 'normal' }),
+    })
+    const result = await resp.json()
+    if (!resp.ok) {
       message.error(result.error || `Failed to mark as project root`)
       return
     }
-    message.success(`Marked as project root (${priority})`)
-    refresh() // refresh dashboard to get updated matched_root
+    message.success(`Marked as project root`)
+    refresh()
   } catch (e) {
     message.error(e instanceof Error ? e.message : 'Failed to mark as project root')
   } finally {
@@ -290,28 +373,6 @@ async function unmarkRoot(path: string) {
   }
 }
 
-async function setPriority(path: string, priority: Priority) {
-  projectRootLoading.value = true
-  try {
-    const resp = await fetch('/api/v1/project-roots', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, priority }),
-    })
-    const result = await resp.json()
-    if (!resp.ok) {
-      message.error(result.error || `Failed to set priority`)
-      return
-    }
-    message.success(`Priority set to ${priority}`)
-    refresh()
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : 'Failed to set priority')
-  } finally {
-    projectRootLoading.value = false
-  }
-}
-
 function handleCheckChange(group: SessionGroup, checked: boolean) {
   if (checked) {
     markAsRoot(group.fullPath)
@@ -320,25 +381,15 @@ function handleCheckChange(group: SessionGroup, checked: boolean) {
   }
 }
 
-const stats = computed(() => {
-  const sessions = data.value?.sessions ?? []
-  return {
-    total: sessions.length,
-    active: sessions.filter((s) => s.is_active).length,
-    waiting: sessions.filter((s) => s.status === 'waiting').length,
-    idle: sessions.filter((s) => s.status === 'idle').length,
-    groups: groupedSessions.value.length,
-  }
-})
+// ── Main session control ────────────────────────────────────────
 
-// ── Actions ──────────────────────────────────────────────────────
-
-function refresh() {
-  fetchDashboard(scanOpts.value)
+function handleSetMainSession(groupKey: string, sessionId: string) {
+  mainSessionIds.value = { ...mainSessionIds.value, [groupKey]: sessionId }
 }
 
+// ── Row click → detail drawer ───────────────────────────────────
+
 function openDetail(row: DashboardEntry) {
-  // Reset terminal state when opening a different session
   if (selectedSession.value?.session_id !== row.session_id) {
     terminalUrl.value = null
     terminalError.value = null
@@ -351,8 +402,6 @@ function openDetail(row: DashboardEntry) {
   }
   selectedSession.value = row
   showDetail.value = true
-
-  // Look up matching tmux session for Claude sessions
   if (row.agent_type === 'claude' && row.session_id) {
     lookupTerminal(row.session_id)
   } else {
@@ -361,13 +410,18 @@ function openDetail(row: DashboardEntry) {
   }
 }
 
+function handleOpenTerminalFromCard(row: DashboardEntry) {
+  openTerminalFromTable(row)
+}
+
+// ── Terminal logic ──────────────────────────────────────────────
+
 async function lookupTerminal(sessionId: string) {
   terminalLookupDone.value = false
   terminalFound.value = false
   terminalVerified.value = false
   terminalLookupHint.value = null
   terminalLookupWarning.value = null
-
   try {
     const resp = await fetch(`/api/v1/terminal/lookup?session_id=${encodeURIComponent(sessionId)}`)
     if (!resp.ok) {
@@ -375,22 +429,16 @@ async function lookupTerminal(sessionId: string) {
       terminalLookupDone.value = true
       return
     }
-    const data: TerminalLookupResponse = await resp.json()
+    const data2: TerminalLookupResponse = await resp.json()
     terminalLookupDone.value = true
-
-    if (data.found) {
+    if (data2.found) {
       terminalFound.value = true
-      terminalVerified.value = data.verified
-      terminalName.value = data.tmux_name ?? null
-      if (data.warning) {
-        terminalLookupWarning.value = data.warning
-      }
-      // If ttyd is already running, use it
-      if (data.ttyd_url) {
-        terminalUrl.value = data.ttyd_url
-      }
+      terminalVerified.value = data2.verified
+      terminalName.value = data2.tmux_name ?? null
+      if (data2.warning) terminalLookupWarning.value = data2.warning
+      if (data2.ttyd_url) terminalUrl.value = data2.ttyd_url
     } else {
-      terminalLookupHint.value = data.hint ?? 'No tmux session found for this Claude session'
+      terminalLookupHint.value = data2.hint ?? 'No tmux session found for this Claude session'
     }
   } catch (e) {
     terminalLookupHint.value = e instanceof Error ? e.message : 'Lookup error'
@@ -405,30 +453,25 @@ async function startTerminal() {
     terminalError.value = 'No valid working directory for this session'
     return
   }
-
   terminalLoading.value = true
   terminalError.value = null
-
   try {
-    // If we already found a tmux session via lookup, use its name
     const body: Record<string, string> = { work_dir: workDir }
     if (terminalFound.value && terminalName.value) {
       body['tmux_name'] = terminalName.value
     }
-
     const resp = await fetch('/api/v1/terminal/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-    const data: TerminalResponse = await resp.json()
-    if (!resp.ok || data.error) {
-      throw new Error(data.error || `HTTP ${resp.status}`)
+    const data2: TerminalResponse = await resp.json()
+    if (!resp.ok || data2.error) {
+      throw new Error(data2.error || `HTTP ${resp.status}`)
     }
-    terminalUrl.value = data.ttyd_url ?? null
-    terminalName.value = data.name ?? null
+    terminalUrl.value = data2.ttyd_url ?? null
+    terminalName.value = data2.name ?? null
     terminalFound.value = true
-    // Auto-open the terminal modal
     showTerminalModal.value = true
   } catch (e) {
     terminalError.value = e instanceof Error ? e.message : 'Failed to start terminal'
@@ -441,13 +484,27 @@ async function startTerminal() {
 
 // ── Lifecycle ────────────────────────────────────────────────────
 
-onMounted(() => {
-  refresh()
-})
-
+onMounted(() => { refresh() })
 usePolling(refresh, refreshInterval)
 
-// ── Table columns ────────────────────────────────────────────────
+function refresh() {
+  fetchDashboard(scanOpts.value)
+}
+
+// ── Stats ────────────────────────────────────────────────────────
+
+const stats = computed(() => {
+  const sessions = data.value?.sessions ?? []
+  return {
+    total: sessions.length,
+    active: sessions.filter((s) => s.is_active).length,
+    waiting: sessions.filter((s) => s.status === 'waiting').length,
+    idle: sessions.filter((s) => s.status === 'idle').length,
+    groups: groupedSessions.value.length,
+  }
+})
+
+// ── Agent icon helper ────────────────────────────────────────────
 
 function agentIcon(agentType: string): Component {
   return agentType === 'claude' ? DesktopOutline : HardwareChipOutline
@@ -460,11 +517,11 @@ function trafficColor(light: string): TagType {
     case '🟢': return 'success'
     case '🟡': return 'warning'
     case '⚪': return 'default'
-    default: return 'default' // ⚫ — no special color
+    default: return 'default'
   }
 }
 
-// ── Inner table columns (without Project, since it's the group header) ─
+// ── Group columns (for normal/unmatched GroupCard) ──────────────
 
 const groupColumns: DataTableColumns<DashboardEntry> = [
   {
@@ -499,8 +556,7 @@ const groupColumns: DataTableColumns<DashboardEntry> = [
     width: 180,
     ellipsis: { tooltip: true },
     render(row) {
-      const name = escapeNewlines(truncate(row.name, 24))
-      return h('span', name || '—')
+      return h('span', escapeNewlines(truncate(row.name, 24)) || '—')
     },
   },
   {
@@ -518,19 +574,10 @@ const groupColumns: DataTableColumns<DashboardEntry> = [
   {
     title: 'Last Req',
     key: 'last_req',
-    width: 180,
+    width: 250,
     ellipsis: { tooltip: true },
     render(row) {
-      return h('span', escapeNewlines(truncate(row.last_req, 15)) || '—')
-    },
-  },
-  {
-    title: 'Last Resp',
-    key: 'last_resp',
-    width: 180,
-    ellipsis: { tooltip: true },
-    render(row) {
-      return h('span', escapeNewlines(truncate(row.last_resp, 15)) || '—')
+      return h('span', escapeNewlines(truncate(row.last_req, 30)) || '—')
     },
   },
   {
@@ -555,8 +602,6 @@ const groupColumns: DataTableColumns<DashboardEntry> = [
   },
 ]
 
-// ── Row props for click ──────────────────────────────────────────
-
 function rowProps(row: DashboardEntry) {
   return {
     style: 'cursor: pointer',
@@ -567,27 +612,46 @@ function rowProps(row: DashboardEntry) {
 
 <template>
   <NLayout class="layout">
-    <!-- Header -->
+    <!-- Header with inline stats -->
     <NLayoutHeader bordered>
       <div class="header">
         <div class="header-left">
           <h1 class="title">⚔️ pflow</h1>
           <span class="subtitle">Agent Activity Dashboard</span>
         </div>
+
+        <!-- Stats in header -->
+        <div class="header-stats">
+          <div class="header-stat">
+            <span class="header-stat-value">{{ stats.total }}</span>
+            <span class="header-stat-label">Total</span>
+          </div>
+          <div class="header-stat header-stat--active">
+            <span class="header-stat-value">{{ stats.active }}</span>
+            <span class="header-stat-label">Active</span>
+          </div>
+          <div class="header-stat header-stat--waiting">
+            <span class="header-stat-value">{{ stats.waiting }}</span>
+            <span class="header-stat-label">Waiting</span>
+          </div>
+          <div class="header-stat header-stat--idle">
+            <span class="header-stat-value">{{ stats.idle }}</span>
+            <span class="header-stat-label">Idle</span>
+          </div>
+        </div>
+
         <div class="header-right">
-          <NSpace>
-            <NButton
-              size="small"
-              quaternary
-              @click="refresh"
-              :loading="loading"
-            >
-              <template #icon>
-                <NIcon><RefreshOutline /></NIcon>
-              </template>
-              Refresh
-            </NButton>
-          </NSpace>
+          <NButton
+            size="small"
+            quaternary
+            @click="refresh"
+            :loading="loading"
+          >
+            <template #icon>
+              <NIcon><RefreshOutline /></NIcon>
+            </template>
+            Refresh
+          </NButton>
         </div>
       </div>
     </NLayoutHeader>
@@ -604,30 +668,6 @@ function rowProps(row: DashboardEntry) {
           style="margin-bottom: 16px"
         />
 
-        <!-- Stats cards -->
-        <NGrid cols="4" x-gap="12" style="margin-bottom: 16px">
-          <NGi>
-            <div class="stat-card">
-              <NStatistic label="Total" :value="stats.total" />
-            </div>
-          </NGi>
-          <NGi>
-            <div class="stat-card stat-active">
-              <NStatistic label="🟢 Active" :value="stats.active" />
-            </div>
-          </NGi>
-          <NGi>
-            <div class="stat-card stat-waiting">
-              <NStatistic label="🟡 Waiting" :value="stats.waiting" />
-            </div>
-          </NGi>
-          <NGi>
-            <div class="stat-card stat-idle">
-              <NStatistic label="⚪ Idle" :value="stats.idle" />
-            </div>
-          </NGi>
-        </NGrid>
-
         <!-- Filter bar -->
         <div class="filter-bar">
           <NSpace align="center" wrap>
@@ -639,7 +679,6 @@ function rowProps(row: DashboardEntry) {
               style="width: 120px"
               @update:value="refresh"
             />
-
             <span class="filter-label">Inactive:</span>
             <NInputNumber
               v-model:value="maxInactive"
@@ -649,7 +688,6 @@ function rowProps(row: DashboardEntry) {
               style="width: 80px"
               @update:value="refresh"
             />
-
             <span class="filter-label">Agent:</span>
             <NSelect
               v-model:value="agentFilter"
@@ -657,7 +695,6 @@ function rowProps(row: DashboardEntry) {
               size="small"
               style="width: 130px"
             />
-
             <span class="filter-label">Refresh:</span>
             <NSelect
               v-model:value="refreshInterval"
@@ -665,54 +702,83 @@ function rowProps(row: DashboardEntry) {
               size="small"
               style="width: 80px"
             />
-
             <span v-if="data" class="filter-note">
               Last updated: {{ new Date(data.now).toLocaleTimeString() }}
             </span>
           </NSpace>
         </div>
 
-        <!-- Sessions grouped by project, with priority zones -->
+        <!-- Main content -->
         <NSpin :show="loading && !data">
           <div v-if="groupedSessions.length > 0" class="groups-container">
 
-            <!-- ⭐ 主线项目 (Primary) — always expanded -->
-            <div v-if="primaryGroups.length > 0" class="zone-section">
-              <div class="zone-header zone-primary">
-                <span class="zone-title">⭐ 主线项目</span>
-                <span class="zone-count">{{ primaryGroups.length }}/1</span>
+            <!-- ⭐ 主线项目 — full-width card, always visible -->
+            <div class="zone-section zone-section--primary">
+              <!-- Header: zone title + dropdown + main session metadata inline -->
+              <div class="zone-header-primary">
+                <div class="zhp-content">
+                  <span class="zone-title">⭐ 主线项目</span>
+                  <NSelect
+                    size="tiny"
+                    :value="primaryGroup?.isRoot ? primaryGroup.fullPath : null"
+                    :options="projectSelectOptions"
+                    :disabled="projectRootLoading"
+                    placeholder="Assign..."
+                    clearable
+                    style="width: 220px"
+                    @update:value="handleSelectPrimary"
+                  />
+                  <template v-if="primaryMainSession">
+                    <span class="zhp-sep">|</span>
+                    <NIcon :size="16" :component="agentIcon(primaryMainSession.agent_type)" />
+                    <span class="zhp-agent">{{ primaryMainSession.agent_type === 'claude' ? 'Claude' : 'Hermes' }}</span>
+                    <code class="zhp-sid">{{ primaryMainSession.session_id }}</code>
+                    <NButton
+                      v-if="primaryMainSession.has_terminal"
+                      size="tiny"
+                      quaternary
+                      title="Open terminal"
+                      @click.stop="handleOpenTerminalFromCard(primaryMainSession)"
+                    >
+                      🖥
+                    </NButton>
+                    <NTag :type="trafficColor(primaryMainSession.traffic_light)" size="small" :bordered="false">
+                      {{ primaryMainSession.traffic_light }} {{ primaryMainSession.status }}
+                    </NTag>
+                    <span class="zhp-time">{{ formatSince(primaryMainSession.last_active) }}</span>
+                  </template>
+                </div>
               </div>
-              <GroupCard
-                v-for="group in primaryGroups"
-                :key="group.key"
-                :group="group"
-                :columns="groupColumns"
-                :row-props="rowProps"
+              <PrimaryCard
+                :group="primaryGroup"
+                :main-session="primaryMainSession"
                 :disabled="projectRootLoading"
-                @check="handleCheckChange"
-                @priority="(p: Priority) => setPriority(group.fullPath, p)"
+                @set-main-session="(sid: string) => primaryGroup && handleSetMainSession(primaryGroup.key, sid)"
+                @row-click="openDetail"
+                @open-terminal="handleOpenTerminalFromCard"
               />
             </div>
 
-            <!-- 🚩 支线项目 (Secondary) — always expanded -->
-            <div v-if="secondaryGroups.length > 0" class="zone-section">
-              <div class="zone-header zone-secondary">
-                <span class="zone-title">🚩 支线项目</span>
-                <span class="zone-count">{{ secondaryGroups.length }}/3</span>
+            <!-- 🚩 支线项目 — 2 cards side by side, each with own title -->
+            <div class="zone-section">
+              <div class="secondary-grid">
+                <SecondaryCard
+                  v-for="(group, idx) in secondaryGroups"
+                  :key="group ? group.key : 'empty-secondary-' + idx"
+                  :group="group"
+                  :project-options="projectSelectOptions"
+                  :main-session="group ? getMainSession(group) : null"
+                  :disabled="projectRootLoading"
+                  :index="idx"
+                  @select-project="handleSelectSecondary"
+                  @set-main-session="(sid: string) => group && handleSetMainSession(group.key, sid)"
+                  @row-click="openDetail"
+                  @open-terminal="handleOpenTerminalFromCard"
+                />
               </div>
-              <GroupCard
-                v-for="group in secondaryGroups"
-                :key="group.key"
-                :group="group"
-                :columns="groupColumns"
-                :row-props="rowProps"
-                :disabled="projectRootLoading"
-                @check="handleCheckChange"
-                @priority="(p: Priority) => setPriority(group.fullPath, p)"
-              />
             </div>
 
-            <!-- 📁 普通项目 (Normal) — collapsible -->
+            <!-- 📁 普通项目 — collapsible, current GroupCard style -->
             <NCollapse v-if="normalGroups.length > 0" class="zone-collapse" :default-expanded-names="['normal']">
               <NCollapseItem name="normal">
                 <template #header>
@@ -727,12 +793,11 @@ function rowProps(row: DashboardEntry) {
                   :row-props="rowProps"
                   :disabled="projectRootLoading"
                   @check="handleCheckChange"
-                  @priority="(p: Priority) => setPriority(group.fullPath, p)"
                 />
               </NCollapseItem>
             </NCollapse>
 
-            <!-- Unmatched sessions — collapsible, collapsed by default -->
+            <!-- 📂 未归类 — collapsible, collapsed by default -->
             <NCollapse v-if="unmatchedGroups.length > 0" class="zone-collapse">
               <NCollapseItem name="unmatched">
                 <template #header>
@@ -747,14 +812,16 @@ function rowProps(row: DashboardEntry) {
                   :row-props="rowProps"
                   :disabled="projectRootLoading"
                   @check="handleCheckChange"
-                  @priority="(p: Priority) => setPriority(group.fullPath, p)"
                 />
               </NCollapseItem>
             </NCollapse>
 
-            <!-- Empty zones hint: show when everything is unmatched and no roots -->
-            <div v-if="primaryGroups.length === 0 && secondaryGroups.length === 0 && normalGroups.length === 0 && unmatchedGroups.length > 0" class="zone-hint">
-              <p>💡 Check the ☐ box next to a directory to mark it as a project root and assign priority.</p>
+            <!-- All-unmatched hint -->
+            <div
+              v-if="!primaryGroup && secondaryGroups.every(g => !g) && normalGroups.length === 0 && unmatchedGroups.length > 0"
+              class="zone-hint"
+            >
+              <p>💡 Use the dropdowns in the ⭐ primary / 🚩 secondary cards above to assign projects to priority slots. Or check the ☐ box next to a directory below to mark it as a project root first.</p>
             </div>
 
           </div>
@@ -780,7 +847,6 @@ function rowProps(row: DashboardEntry) {
     <!-- Session Detail Drawer -->
     <NDrawer v-model:show="showDetail" :width="drawerWidth" placement="right">
       <NDrawerContent v-if="selectedSession" title="Session Detail" closable>
-        <!-- Resize handle on left edge -->
         <div class="resize-handle" @mousedown="startResize"></div>
         <NDescriptions label-placement="left" :column="1" bordered size="small" label-style="width: 100px; min-width: 100px; white-space: nowrap">
           <NDescriptionsItem label="Session ID">
@@ -798,11 +864,7 @@ function rowProps(row: DashboardEntry) {
             {{ selectedSession.project || selectedSession.platform || '?' }}
           </NDescriptionsItem>
           <NDescriptionsItem label="Status">
-            <NTag
-              :type="trafficColor(selectedSession.traffic_light)"
-              size="small"
-              :bordered="false"
-            >
+            <NTag :type="trafficColor(selectedSession.traffic_light)" size="small" :bordered="false">
               {{ selectedSession.traffic_light }} {{ selectedSession.status }}
             </NTag>
           </NDescriptionsItem>
@@ -829,7 +891,7 @@ function rowProps(row: DashboardEntry) {
           </NDescriptionsItem>
         </NDescriptions>
 
-        <!-- Terminal Section (Claude only) -->
+        <!-- Terminal Section -->
         <div class="terminal-section" v-if="selectedSession?.agent_type === 'claude'">
           <NSpace>
             <NButton
@@ -842,25 +904,12 @@ function rowProps(row: DashboardEntry) {
               🖥 Terminal
             </NButton>
           </NSpace>
-
-          <NAlert
-            v-if="terminalError"
-            type="error"
-            size="tiny"
-            style="margin-top: 8px"
-          >
+          <NAlert v-if="terminalError" type="error" size="tiny" style="margin-top: 8px">
             {{ terminalError }}
           </NAlert>
-
-          <NAlert
-            v-if="terminalFound && !terminalVerified && !terminalError"
-            type="warning"
-            size="tiny"
-            style="margin-top: 8px"
-          >
+          <NAlert v-if="terminalFound && !terminalVerified && !terminalError" type="warning" size="tiny" style="margin-top: 8px">
             {{ terminalLookupWarning || 'Unable to verify this tmux session matches the current Claude session — it may have changed.' }}
           </NAlert>
-
           <div v-if="terminalLookupDone && !terminalFound && !terminalError" class="terminal-placeholder">
             <p>{{ terminalLookupHint || 'No tmux session found' }}</p>
             <p class="terminal-placeholder-hint">
@@ -881,16 +930,10 @@ function rowProps(row: DashboardEntry) {
       closable
     >
       <div v-if="terminalUrl" class="terminal-modal-body">
-        <iframe
-          :src="terminalUrl"
-          class="terminal-modal-iframe"
-          frameborder="0"
-          title="Web Terminal"
-        />
+        <iframe :src="terminalUrl" class="terminal-modal-iframe" frameborder="0" title="Web Terminal" />
       </div>
       <div v-else-if="terminalLoading" class="terminal-modal-loading">
-        <NSpin />
-        <p>Starting terminal...</p>
+        <NSpin /><p>Starting terminal...</p>
       </div>
       <div v-else class="terminal-modal-loading">
         <p>Terminal not available. Click "Open Terminal" to start.</p>
@@ -904,18 +947,29 @@ function rowProps(row: DashboardEntry) {
   min-height: 100vh;
 }
 
+/* ── Header ─────────────────────────────────── */
+
+:deep(.n-layout-header) {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--n-color-target);
+}
+
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
   height: 56px;
+  gap: 16px;
 }
 
 .header-left {
   display: flex;
   align-items: baseline;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .title {
@@ -929,35 +983,73 @@ function rowProps(row: DashboardEntry) {
   font-size: 14px;
 }
 
+/* Stats in header */
+.header-stats {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--n-border-color);
+}
+
+.header-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: var(--n-color-target);
+  border-right: 1px solid var(--n-border-color);
+}
+
+.header-stat:last-child {
+  border-right: none;
+}
+
+.header-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.header-stat-label {
+  font-size: 11px;
+  color: var(--n-text-color-4);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.header-stat--active .header-stat-value {
+  color: #18a058;
+}
+
+.header-stat--waiting .header-stat-value {
+  color: #f0a020;
+}
+
+.header-stat--idle .header-stat-value {
+  color: #999;
+}
+
+.header-right {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Content ────────────────────────────────── */
+
 .content {
-  padding: 16px 24px;
+  padding: 6px 24px;
   max-width: 1400px;
   margin: 0 auto;
 }
 
-/* Stats */
-.stat-card {
-  background: var(--n-color-target);
-  border-radius: 8px;
-  padding: 14px 18px;
-}
-
-.stat-active {
-  border-left: 3px solid #18a058;
-}
-
-.stat-waiting {
-  border-left: 3px solid #f0a020;
-}
-
-.stat-idle {
-  border-left: 3px solid #999;
-}
-
 /* Filters */
 .filter-bar {
-  margin-bottom: 12px;
-  padding: 10px 14px;
+  margin-bottom: 6px;
+  padding: 0px 0px;
   background: var(--n-color-target);
   border-radius: 8px;
 }
@@ -1009,6 +1101,55 @@ function rowProps(row: DashboardEntry) {
   border: 1px solid rgba(240, 160, 32, 0.3);
 }
 
+/* Zone section backgrounds */
+.zone-section--primary {
+  background: rgba(24, 160, 88, 0.06);
+  border-radius: 12px;
+  padding: 4px;
+  border: 1px solid rgba(24, 160, 88, 0.2);
+}
+
+/* Primary zone header (merged: project info + main session metadata + dropdown) */
+.zone-header-primary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  gap: 12px;
+}
+
+.zhp-content {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.zhp-sep {
+  color: var(--n-text-color-4);
+  font-size: 12px;
+}
+
+.zhp-agent {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--n-text-color-3);
+}
+
+.zhp-sid {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--n-text-color-2);
+}
+
+.zhp-time {
+  font-size: 11px;
+  color: var(--n-text-color-4);
+}
+
 .zone-title {
   display: flex;
   align-items: center;
@@ -1044,6 +1185,13 @@ function rowProps(row: DashboardEntry) {
   border: 1px dashed var(--n-border-color);
 }
 
+/* Secondary grid */
+.secondary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
 /* Empty */
 .empty-state {
   text-align: center;
@@ -1057,6 +1205,13 @@ function rowProps(row: DashboardEntry) {
 }
 
 /* Footer */
+:deep(.n-layout-footer) {
+  position: sticky;
+  bottom: 0;
+  z-index: 100;
+  background: var(--n-color-target);
+}
+
 .footer {
   display: flex;
   justify-content: center;
@@ -1068,7 +1223,7 @@ function rowProps(row: DashboardEntry) {
   color: var(--n-text-color-4);
 }
 
-/* Detail drawer text */
+/* Detail drawer */
 .detail-text {
   max-height: 200px;
   overflow-y: auto;
@@ -1079,7 +1234,6 @@ function rowProps(row: DashboardEntry) {
   word-break: break-all;
 }
 
-/* Resizable drawer handle */
 .resize-handle {
   position: absolute;
   left: 0;
@@ -1095,7 +1249,7 @@ function rowProps(row: DashboardEntry) {
   background: var(--n-color-target);
 }
 
-/* Terminal section in sidebar */
+/* Terminal section */
 .terminal-section {
   margin-top: 16px;
   border-top: 1px solid var(--n-border-color);

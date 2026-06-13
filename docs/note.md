@@ -4,6 +4,39 @@
 
 ## 当前周期（阶段三 项目策略管理）
 
+### Dashboard UI 全面重构（2026-06-14）
+
+**主/支线卡片重构**：
+
+- 统计区域（Total/Active/Waiting/Idle）从内容区移至顶部 Header 栏
+- `PrimaryCard.vue`：全宽主线卡片
+  - 主 session 区域：左侧纵向排列 agent/sessionID/status/name/time，右侧左右分栏展示 last req / last resp
+  - 其他 session 紧凑表格，操作列含 ⭐设为主session + 🖥终端图标
+  - 标题栏含项目分配下拉框（`NSelect`），替代原来的优先级菜单
+- `SecondaryCard.vue`：半宽支线卡片（2 列 grid 并排）
+  - 主 session req/resp 上下堆叠（宽度受限场景）
+  - 其他 session 表格不含 req/resp 列
+- `GroupCard.vue`：移除优先级下拉（仅保留 ☐ checkbox），供普通/未归类使用
+- 优先级切换交互变更：从卡片内下拉 → 主线/支线标题栏项目分配槽位
+  - 选择一个项目 → `PUT /api/v1/project-roots` 设定对应优先级
+  - 清除选择 → 降级为 `normal`
+- `MaxSecondary` 从 3 改为 2（`internal/project/store.go`）
+- 主线/支线卡片始终可见，无对应项目时显示占位状态
+
+**主 session 概念**：
+
+- 每个主线/支线项目有一个"主 session"（首个活跃 session 或第一个）
+- 非主 session 表格中提供 ⭐ 按钮将其提升为主 session（前端 in-memory 状态）
+- 主 session 和列表行均支持点击弹出侧边栏详情
+
+**P2-8 继续精修**（2026-06-14）：
+
+- 移除所有主 session 和表格中的 Last Resp 列（API 字段和详情侧拉栏不变）
+- 筛选栏紧凑化：减少 `padding` 和 `margin-bottom`
+- 标题栏省空间：用项目下拉框 NSelect 替代项目名+路径的文字展示，下拉框既展示当前项目又用于选择
+- 支线区域：去掉共享"🚩支线项目 1/2"分割线，每个卡片自己显示 `🚩 支线项目1` / `🚩 支线项目2` 标题（`:index` prop）
+- Last Req 区域：固定 3 行高度（`min-height: 4.5em; max-height: 4.5em`），移除 `-webkit-line-clamp` 弹性截断
+
 ### 设计方向调整（2026-06-13）
 
 核心理念明确：**最好的设计应该是无感的**。
