@@ -1,135 +1,160 @@
 # todo
 
-> 当前周期：阶段三 项目策略管理
+> 当前周期：阶段四 提醒分数算法 + 注意力遮罩层 MVP
 
 ## 目标
 
-让 Dashboard 从"扁平 session 列表"进化为以**项目路径**为维度的两级视图，支持用户设定 1 个主线 + 最多 2 个支线的注意力策略。
+实现 PRD 阶段四（智能调度）的核心基础设施：
 
-核心原则：
-- **路径即项目**：不引入独立的项目 ID/名称实体。路径天然唯一，且 session 元数据中已有 working directory。
-- **零手动归类**：用户不需要手动创建项目、命名、或把 session 拖到某个项目下。只需标记"哪些路径是项目根"，子目录 session 自动归入。
-- **最好的设计应该是无感的**：pflow 不替代用户的终端/VSCode，只负责信息的聚合和呈现。
+1. **提醒分数算法**：根据用户专注状态、等待时长、今日累计时间、项目优先级，为每个项目计算提醒分数（详见 [`docs/design/02-reminder_score_algorithm.md`](./docs/design/02-reminder_score_algorithm.md)）
+2. **注意力遮罩层**：在 Dashboard 项目卡片上叠加 `::before` 半透明遮罩，透明度随提醒分数动态变化（详见 [`docs/design/03-attention_mask.md`](./docs/design/03-attention_mask.md)）
 
-已完成：`pflow status` / `probe` / `serve` / `claude`、Web Dashboard、Web 终端（ttyd）。详见 [`docs/prd.md`](./docs/prd.md) 阶段三。
+MVP 范围：后端算法 + 前端遮罩。桌面通知、卡片动画、声音提示等高级提醒形式留待后续。
 
-## P0 — 数据层 + 自动归类 ✅
+## P0 — Activity Tracker（数据追踪基础设施）
 
-### P0-1 项目根存储
+### P0-1 `internal/attention/` 包骨架
 
-- [x] 新增 `internal/project/` 包
-- [x] `~/.pflow/project_roots.json` 文件结构（version + roots 列表，path 为唯一键）
-- [x] 读/写函数 + 原子化写入（tmp 文件 + rename）
+- [ ] 创建 `internal/attention/` 目录
+- [ ] `config.go`：常量定义（PROTECT_MIN=15, W_WAIT=1.0, W_STREAK=0.5, PRIMARY_BONUS=2.0, W_CORRECT=0.5, EXP_POWER=2.0, REMINDER_THRESHOLDS=[2,5,10]）
+- [ ] `activity.go`：`ProjectActivity` 结构体（streak 连续活跃分钟 / total 今日累计分钟 / lastActiveTime 最近活动时间戳）
+- [ ] `score.go`：`ReminderInput` 和 `ReminderOutput` 结构体
 
-### P0-2 Session 自动归类逻辑
+### P0-2 Activity 追踪逻辑
 
-- [x] 每个 session 已有 `Project` 字段（working directory，来自 Claude/Hermes scan）
-- [x] 最长前缀匹配算法（`MatchRootFromList`），含路径边界检测
-- [x] 根目录保护：`/` 不能被标记为项目根（API 层拒绝）
+- [ ] 以 session 状态作为用户活跃的代理指标：项目下有 busy/running session → 用户正在该项目的"前线"
+- [ ] `streak` 计算：最近活动距当前 < 5min 则继续累加，否则重置为 0
+- [ ] `total` 计算：当日 streak 增量的累加（每日 0 点重置）
+- [ ] `lastActiveTime` 记录：每次活跃时更新时间戳
+- [ ] `is_current` 判定：`streak > 0` 且 `lastActiveTime` 最大者为当前活跃项目
+- [ ] 由于 session 状态来自文件扫描（无实时事件），MVP 阶段在每次 Dashboard API 请求时重新计算
 
-### P0-3 策略引擎
+### P0-3 Waiting 时长提取
 
-- [x] `SetPriority(path, priority)` / `RemoveRoot(path)` / `Validate()`
-- [x] API 端点：`PUT` / `DELETE` / `GET` `/api/v1/project-roots`
+- [ ] 从现有 session 数据中获取 waiting 状态的持续时间
+- [ ] 每个项目取最长 waiting session 的时间作为 `waiting_i`
+- [ ] 无 waiting session 的项目 `waiting_i = 0`
 
-### P0-4 Dashboard API 升级
+### P0-4 配置支持
 
-- [x] `GET /api/v1/dashboard` 返回 `project_roots` + `matched_root` 字段
-- [x] 未归类 session 通过 `matched_root` 为空区分（非独立的 `unmatched_sessions` 字段）
+- [ ] 默认常量硬编码在 `config.go`
+- [ ] 可选：从 `~/.pflow/config.json` 的 `attention` 段读取用户自定义参数（与设计文档第 5 节对齐）
 
-## P1 — 前端视图重构 ✅
+## P1 — Score Calculator（提醒分数计算引擎）
 
-### P1-1 项目根标记交互
+### P1-1 核心算法实现
 
-- [x] GroupCard 头部 ☐ "识别为项目" checkbox + hover tooltip
-- [x] 勾选 → `PUT /api/v1/project-roots` (priority=normal)，取消勾选 → `DELETE`
+- [ ] 实现 `CalculateScores(projects, sessions, activities) -> map[projectPath]ScoreResult`
+- [ ] 按设计文档第 3 节逐步实现：
+  - [ ] 3.1 确定当前活跃任务 `cur`
+  - [ ] 3.2 基础等待分 `base_i = waiting_i * W_WAIT`
+  - [ ] 3.3 专注干扰因子（cur 非空时）
+    - `streak_cur < PROTECT_MIN` → `factor_i = 0`
+    - 否则 `factor_i = min((streak_cur / PROTECT_MIN) * W_STREAK, 2.0)`
+    - 支线活跃 + 目标是主线 → `factor_i *= PRIMARY_BONUS`
+  - [ ] 3.4 当前活跃调整
+    - `cur == null` → 仅主线 `adjusted_i = base_i`，其余为 0
+  - [ ] 3.5 今日累计矫正（主线 total < 支线平均 → 增加修正分）
+  - [ ] 3.6 幂函数差异化 `final = raw ^ EXP_POWER`（拉大差距）
+  - [ ] 3.7 映射提醒等级（无/低/中/高）
 
-### P1-2 Dashboard 项目分组视图（第一版）
+### P1-2 单元测试
 
-- [x] 按 `matched_root` 分组 → `GroupCard.vue` 组件
-- [x] 四区布局：⭐主线 / 🚩支线 / 📁普通 / 📂未归类
+- [ ] 测试用例 1：主线专注 25min + 支线等待（复现设计文档第 6 节场景 1）
+- [ ] 测试用例 2：无活跃任务 + 主线等待（复现场景 2）
+- [ ] 测试用例 3：保护期内不产生提醒（streak_cur < 15min）
+- [ ] 测试用例 4：支线活跃时主线 bonus
+- [ ] 测试用例 5：幂函数差异化效果验证
+- [ ] 测试用例 6：今日累计矫正（支线超时 → 主线加分）
+- [ ] 测试用例 7：空项目列表 / 无 session 项目等边界情况
 
-### P1-3 优先级管理（第一版）
+### P1-3 Dashboard API 集成
 
-- [x] 优先级下拉切换，主线自动降级，支线限额校验，Toast 反馈
+- [ ] 在 `GET /api/v1/dashboard` 响应中为每个 matched root 增加 `reminder_score` 和 `reminder_level` 字段
+- [ ] `reminder_level` 取值：`"none"` / `"low"` / `"medium"` / `"high"`
+- [ ] 初始阶段继续使用轮询刷新（每次请求重新计算分数）
 
-## P2 — UI 优化 ✅ (2026-06-14 完成)
+## P2 — Attention Mask（前端注意力遮罩层）
 
-### P2-1 统计区域移至标题栏
+### P2-1 TypeScript 类型 + Composable
 
-- [x] Total / Active / Waiting / Idle 四列统计内嵌到顶部 Header 中
-- [x] 带颜色标识的数值 + 标签，紧凑排版
+- [ ] `web/src/types/dashboard.ts`：增加 `reminder_score: number` 和 `reminder_level: string` 字段
+- [ ] `web/src/composables/useReminderScores.ts`：从 Dashboard 响应中提取分数，计算归一化 intensity（`min(1, score / 10)`）
+- [ ] 在 `DashboardView.vue` 中通过 props 传递给 PrimaryCard / SecondaryCard / GroupCard
 
-### P2-2 主线项目卡片重构
+### P2-2 遮罩层 CSS 基础
 
-- [x] 全宽 `PrimaryCard.vue` 组件
-- [x] 主 session 区域：左侧纵向字段（agent / session ID / status / name / time），右侧左右分栏展示 last req / last resp
-- [x] 其他 session 列表（紧凑表格）
-- [x] 操作列（⭐设为主session + 🖥终端图标）
+- [ ] PrimaryCard / SecondaryCard / GroupCard 已设置 `position: relative`（确认或添加）
+- [ ] 添加 `::before` 伪元素：
+  ```css
+  .project-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+    z-index: 1;
+  }
+  ```
+- [ ] 使用 CSS 变量控制遮罩 `background` 和 `opacity`
 
-### P2-3 支线项目卡片重构
+### P2-3 三级提醒视觉
 
-- [x] 2 个 `SecondaryCard.vue` 组件，左右并排（CSS grid 1fr 1fr）
-- [x] 主 session 区域：req/resp 上下堆叠（宽度受限场景）
-- [x] 其他 session 列表不展示 req/resp 列
+- [ ] 低提醒 (`reminder_level = "low"`)：`rgba(0,0,0,0.3)`
+- [ ] 中提醒 (`reminder_level = "medium"`)：`rgba(0,0,0,0.6)`
+- [ ] 高提醒 (`reminder_level = "high"`)：`rgba(0,0,0,0.9)`
+- [ ] 或使用动态 `--mask-opacity` 变量：`opacityFromScore(score) = min(0.8, score / 12)`
+- [ ] 无提醒时遮罩完全透明（`opacity: 0`）
 
-### P2-4 优先级分配交互重构
+### P2-4 交互细节
 
-- [x] 优先级选择器移至 PrimaryCard / SecondaryCard 标题栏右侧 `NSelect` 下拉
-- [x] 交互语义："将某个项目分配到主线/支线槽位"
-- [x] 选择 → `PUT /api/v1/project-roots` 设定对应 priority
-- [x] 清除 → 降级为 normal（保留为项目根）
-- [x] GroupCard 中移除优先级下拉（仅保留 ☐ 识别为项目 checkbox）
+- [ ] 卡片 `:hover` 时降低遮罩透明度（或完全清晰），方便查看内容
+- [ ] 确保遮罩层点击穿透（`pointer-events: none` 已在伪元素中设置）
+- [ ] `transition` 平滑过渡（已在基础 CSS 中设置 `0.2s ease`）
 
-### P2-5 主线/支线占位
+### P2-5 预留皮肤扩展接口
 
-- [x] 即使无对应优先级的项目，卡片也不消失，保持占位区域
-- [x] 空状态显示 "Assign a project to this slot..." 提示
+- [ ] 在 `:root` 或组件中定义 CSS 变量：
+  ```css
+  --mask-bg: rgba(0, 0, 0, 0.5);
+  --mask-blend: normal;
+  ```
+- [ ] 遮罩层背景引用变量：`background: var(--mask-bg); mix-blend-mode: var(--mask-blend);`
+- [ ] 不实现具体皮肤切换 UI，仅预留变量接口（为 [`docs/design/99-dual_layer_skinning_system.md`](./docs/design/99-dual_layer_skinning_system.md) 做铺垫）
 
-### P2-6 后端配合
+## P3 — 联调与收尾
 
-- [x] `MaxSecondary` 从 3 改为 2（`internal/project/store.go`）
+### P3-1 端到端验证
 
-### P2-7 视觉与布局精修（2026-06-14）
+- [ ] 模拟场景验证：不同项目状态组合 → 检查 API 返回的 reminder_score 正确性
+- [ ] 前端验证：确认遮罩层 opacity 随分数正确变化
+- [ ] 三级提醒视觉确认（低/中/高/无各状态均正确）
+- [ ] Hover 交互确认（降低遮罩后内容可读）
 
-- [x] 主线区域绿色背景（`zone-section--primary`）、支线区域黄色背景（`zone-section--secondary`）
-- [x] 主线标题栏重构：`⭐ 主线项目 [basename] [fullPath] --- [project ▼]` 内联布局，下拉框移至 zone header
-- [x] 主线主 session 元数据重构：第一行 ⭐+agent+sessionid+TTY，第二行 状态+时间，Name 3行截断
-- [x] 支线主 session 增加 TTY 图标（可连接时显示在 sessionid 后）
-- [x] 主线表格保留 last req / last resp 列（与普通/未归类表格列一致）
-- [x] 所有表格（主线/支线/普通/未归类）空数据时展示表头 + 一条 "-" 占位行
-- [x] Header 和 Footer 粘性定位（`position: sticky`），滚动页面不消失
+### P3-2 边界情况
 
-### P2-8 继续精修（2026-06-14）
+- [ ] 无项目根标记时（全部未归类）——系统正常运行，遮罩仅对主线有效
+- [ ] 所有 session 处于同一状态时
+- [ ] API 返回错误时前端优雅降级（遮罩保持透明）
 
-- [x] 移除所有主 session 区域和表格中的 Last Resp 列（API 字段和详情侧拉栏保留）
-- [x] 筛选栏紧凑化：`padding` 10px→6px，`margin-bottom` 16px→12px
-- [x] 主线/支线标题栏：用项目下拉框 NSelect 替代项目名+路径的文字展示（下拉框既展示又选择，省空间）
-- [x] 去掉"🚩支线项目...1/2"共享分割线，支线两个卡片各自显示标题 `🚩 支线项目1` / `🚩 支线项目2`（通过 `:index` prop 传入）
-- [x] 主 session 的 Last Req 区域固定 3 行高度（`min-height: 4.5em; max-height: 4.5em`），移除 `-webkit-line-clamp`
+### P3-3 文档收尾
 
-## 已实现文件清单
-
-| 文件 | 说明 |
-|------|------|
-| `internal/project/store.go` | `Manager` 结构体，项目根 JSON 文件的原子读写 |
-| `internal/project/strategy.go` | `SetPriority` / `RemoveRoot` / `Validate` / `MatchRootFromList` |
-| `internal/project/strategy_test.go` | 11 个测试用例 |
-| `internal/api/server.go` | 3 个 project-roots API + Dashboard 响应扩展 `matched_root` |
-| `web/src/types/dashboard.ts` | `ProjectRoot` / `matched_root` / `project_roots` 类型 |
-| `web/src/components/GroupCard.vue` | 普通/未归类分组卡片（checkbox，无优先级下拉） |
-| `web/src/components/PrimaryCard.vue` | ⭐主线项目卡片（主 session 展示 + 列表 + 项目分配下拉） |
-| `web/src/components/SecondaryCard.vue` | 🚩支线项目卡片（上下 req/resp + 列表 + 项目分配下拉） |
-| `web/src/views/DashboardView.vue` | 重构后的 Dashboard：Header 统计 + PrimaryCard + 2×SecondaryCard + 普通/未归类 |
+- [ ] 更新 `docs/note.md` 记录实现过程中的关键决策
+- [ ] 将完成的任务从 todo.md 回写到 `docs/backlog.md`
 
 ## 不包含（本周期）
 
-- `pflow attach` / `suggest` / `focus` CLI 子命令（设计原则：pflow 不替代用户工作软件）
-- 沉默提醒 / 军情哨主动推送（留待阶段四）
-- TUI Dashboard / 游戏化外壳（留待阶段五）
-- 深色路径显示 / 折叠状态 localStorage 记忆（留待后续优化）
+- 桌面通知（Notification API）/ 声音提示 / 居中弹窗 — 留待后续
+- 双层换肤系统完整实现（仅预留 CSS 变量接口）
+- Web AI 平台状态监控（浏览器扩展）
+- WebSocket 实时推送（继续使用轮询刷新）
+- 统帅偏好学习
+- 用户操作监听（鼠标/键盘事件）— MVP 使用 session 状态作为活跃代理
 
-1. 减少筛选控件上下空隙，紧凑一点
-2. ⭐/🚩 主线项目/支线项目 项目下拉框 agent图标/名字 session tty图标 status lastActive
-3. 去掉“🚩支线项目.....1/2”这个“分割线”
-4. 支线项目分左右区域，标题展示“🚩 支线项目1...”和“🚩 支线项目2...”
+## 设计文档
+
+- [`docs/design/02-reminder_score_algorithm.md`](./docs/design/02-reminder_score_algorithm.md) — 算法设计
+- [`docs/design/03-attention_mask.md`](./docs/design/03-attention_mask.md) — 遮罩层技术方案
+- [`docs/design/99-dual_layer_skinning_system.md`](./docs/design/99-dual_layer_skinning_system.md) — 远期换肤系统
+- [`docs/design/99-ai-chat-web-attach.md`](./docs/design/99-ai-chat-web-attach.md) — 远期浏览器扩展
+- [`docs/reference.md`](./docs/reference.md) — 设计参考理论知识

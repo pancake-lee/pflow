@@ -39,8 +39,12 @@ pflow/
 │   ├── hermes/                     # Hermes Agent 会话监控
 │   │   └── activity.go             # Session 活动扫描（从 sessions.json + request_dump 读取）
 │   ├── project/                    # 项目管理（阶段三新增）
-│   │   ├── store.go                # ~/.pflow/projects.json 读写
+│   │   ├── store.go                # ~/.pflow/project_roots.json 读写
 │   │   └── strategy.go             # 主线/支线策略校验与切换
+│   ├── attention/                  # 注意力管理（阶段四新增）
+│   │   ├── activity.go             # 用户活跃追踪（streak / total / lastActiveTime）
+│   │   ├── score.go                # 提醒分数计算引擎
+│   │   └── config.go               # 可配置常量（PROTECT_MIN, W_WAIT, ...）
 │   ├── session/                    # Tmux + ttyd 会话管理
 │   │   ├── manager.go              # Tmux/ttyd 进程生命周期管理
 │   │   ├── claude.go               # Claude statusline 配置 + 启动 + capture-pane 前缀解析
@@ -75,6 +79,8 @@ pflow/
 ┌──────────────────────────────────────────────────┐
 │  CLI / Web UI（cmd/pflow, web/）                  │  ← 用户界面
 ├──────────────────────────────────────────────────┤
+│  注意力层（internal/attention）                    │  ← 提醒分数计算、活跃追踪
+├──────────────────────────────────────────────────┤
 │  策略层（internal/project）                       │  ← 主线/支线策略、项目优先级管理
 ├──────────────────────────────────────────────────┤
 │  会话管理层（internal/session）                    │  ← tmux + ttyd + statusline 关联
@@ -89,18 +95,24 @@ pflow/
 
 ```
                     ┌──────────────────────┐
-                    │  projects.json       │  ← 项目定义 + 优先级策略
+                    │  project_roots.json  │  ← 项目定义 + 优先级策略
                     └──────┬───────────────┘
-                           │ projectId 关联
+                           │ priority + matched_root
                     ┌──────▼───────────────┐
 Claude transcript ──┤                      │
-Hermes sessions ─── │  SessionSummary      │──→ Dashboard API (JSON)
+Hermes sessions ─── │  SessionSummary      │──→ attention.Score() ──→ reminder_score
 Mappings ────────── │                      │
                     └──────────────────────┘
                            │
                     ┌──────▼───────────────┐
+                    │  Dashboard API (JSON)│
+                    │  sessions + scores   │
+                    └──────┬───────────────┘
+                           │
+                    ┌──────▼───────────────┐
                     │  Web Dashboard       │
                     │  项目卡片 → session  │
+                    │  遮罩层 ← score      │
                     │  主线/支线/普通分区   │
                     └──────────────────────┘
 ```
@@ -153,6 +165,28 @@ Roots:
 - 设为普通：从 primary/secondary 移除
 - 取消标记（DELETE）：从 roots 中移除，匹配该 root 的 session 重新归类
 
+### 2.4 注意力模块（`internal/attention/`）
+
+详见 [`docs/design/02-reminder_score_algorithm.md`](./design/02-reminder_score_algorithm.md) 和 [`docs/design/03-attention_mask.md`](./design/03-attention_mask.md)。
+
+**职责**：
+- **活跃追踪**（`activity.go`）：追踪每个项目的用户活跃状态（streak 连续活跃分钟数、total 今日累计分钟数、lastActiveTime 最近活动时间戳）
+- **提醒分数计算**（`score.go`）：综合 waiting 时长、streak、今日累计、优先级等因素，计算每个项目的提醒分数
+- **可配置常量**（`config.go`）：PROTECT_MIN、各类权重、阈值等
+
+**数据流**：
+```
+Session 状态（waiting/busy/idle）
+    + 项目优先级（primary/secondary/normal）
+    + 用户活跃追踪（streak/total）
+        ↓
+    attention.Score() → reminder_score
+        ↓
+    Dashboard API → 前端遮罩层 opacity
+```
+
+**MVP 简化**：初始版本用 session 状态变化作为用户活跃的代理指标（项目下有 busy session → 用户在该项目活跃），后续可接入更精确的操作监听（终端输入等）。
+
 ## 3. 实施阶段
 
 ### 3.1 阶段一：可行性验证 ✅ 已完成
@@ -163,7 +197,7 @@ Roots:
 
 Vue 3 + Naive UI 浏览器端面板。产出：`pflow serve` 单二进制部署、`pflow claude` tmux 托管、Web 终端集成。
 
-### 3.3 阶段三：项目策略管理 ← 当前阶段
+### 3.3 阶段三：项目策略管理 ✅ 已完成
 
 **目标**：从"扁平 session 列表"升级为按项目路径分组的视图，支持主线/支线策略。
 
@@ -175,12 +209,24 @@ Vue 3 + Naive UI 浏览器端面板。产出：`pflow serve` 单二进制部署�
 | 4. 前端标记交互 | 每个 distinct 工作目录旁的 ☐ "识别为项目" 勾选框 + hover tooltip | Vue 组件 |
 | 5. 前端分组视图 | 替换扁平表格为按 root 分组的项目视图，按优先级分区展示 | Vue 组件 |
 
-### 3.4 后续阶段
+### 3.4 阶段四：智能调度 ← 当前阶段
+
+**目标**：实现提醒分数算法 + 注意力遮罩层，为智能调度打下基础。
+
+| 步骤 | 内容 | 产出 |
+|------|------|------|
+| 1. Activity Tracker | `internal/attention/activity.go`：streak / total / lastActiveTime 追踪，每日重置 | Go 包 |
+| 2. Score Calculator | `internal/attention/score.go`：提醒分数计算引擎 + 单元测试 | Go 函数 |
+| 3. API 层 | Dashboard API 返回 `reminder_score` 字段 | REST API |
+| 4. 前端遮罩层 | PrimaryCard/SecondaryCard/GroupCard 添加 `::before` 遮罩伪元素，opacity 关联分数 | Vue/CSS |
+| 5. 提醒等级 | 低/中/高三级视觉区分（不同背景色/透明度） | Vue/CSS |
+
+### 3.5 后续阶段
 
 | 阶段 | 内容 |
 |------|------|
-| 阶段四：智能调度 | 沉默提醒、军情哨主动推送、偏好学习 |
-| 阶段五：体验层 | TUI Dashboard、游戏化外壳、跨设备同步 |
+| 阶段四后续 | 桌面通知、卡片动画、军情哨主动推送、偏好学习 |
+| 阶段五：体验层 | TUI Dashboard、双层换肤系统、浏览器扩展监控、游戏化外壳、跨设备同步 |
 
 ## 4. MIT 协议合规
 
