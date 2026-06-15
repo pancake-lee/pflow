@@ -7,6 +7,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import type { DashboardEntry } from '../types/dashboard'
+import { highlightToMarquee, fogPctToOpacity, FOG_CONFIG } from '../composables/useReminderScores'
 
 type Priority = 'primary' | 'secondary' | 'normal'
 
@@ -27,6 +28,8 @@ const props = defineProps<{
   columns: DataTableColumns<DashboardEntry>
   rowProps: (row: DashboardEntry) => Record<string, unknown>
   disabled: boolean
+  highlight?: number
+  fogPct?: number
 }>()
 
 const emit = defineEmits<{
@@ -46,6 +49,7 @@ const PLACEHOLDER_ROW: DashboardEntry = {
   is_active: false,
   traffic_light: '⚪',
   name: '-',
+  first_active: new Date().toISOString(),
   last_active: new Date().toISOString(),
   last_req: '-',
   last_resp: '-',
@@ -60,10 +64,32 @@ function wrappedRowProps(row: DashboardEntry) {
   if (row.session_id === '-') return {}
   return props.rowProps(row)
 }
+
+const marquee = computed(() => highlightToMarquee(props.highlight ?? 0))
+const fogOpacity = computed(() => fogPctToOpacity(props.fogPct ?? 0))
+
+const hlStyle = computed(() => {
+  const m = marquee.value
+  if (!m.visible) return {} as Record<string, string | number>
+  return {
+    '--hl-speed': m.speed + 's',
+    '--hl-width': m.width + 'px',
+    '--hl-opacity': m.opacity,
+  } as Record<string, string | number>
+})
+
+const fogStyle = computed(() => {
+  const opacity = fogOpacity.value
+  if (opacity <= 0 && !FOG_CONFIG.maskImage) return {} as Record<string, string | number>
+  return {
+    '--fog-opacity': opacity,
+    '--fog-image': FOG_CONFIG.maskImage ? `url(${FOG_CONFIG.maskImage})` : 'none',
+  } as Record<string, string | number>
+})
 </script>
 
 <template>
-  <div class="group-card">
+  <div class="group-card" :style="{ ...hlStyle, ...fogStyle }">
     <!-- Group header -->
     <div class="group-header">
       <div class="group-header-left">
@@ -114,11 +140,69 @@ function wrappedRowProps(row: DashboardEntry) {
 
 <style scoped>
 .group-card {
+  position: relative;
   background: var(--n-color-target);
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid var(--n-border-color);
   transition: border-color 0.2s;
+}
+
+/* ── Fog overlay (::before) ──────────────────── */
+
+.group-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--fog-image, none) 0 0 / cover no-repeat, var(--pflow-fog-bg, #18181b);
+  opacity: var(--fog-opacity, 0);
+  pointer-events: none;
+  z-index: 5;
+  transition: opacity 0.5s ease;
+}
+
+.group-card:hover::before {
+  opacity: calc(var(--fog-opacity, 0) * 0.3);
+}
+
+/* ── Highlight marquee (::after) ─────────────── */
+
+.group-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--hl-angle, 0deg),
+    transparent 0deg,
+    rgba(64, 128, 255, 1) 12deg,
+    transparent 24deg,
+    transparent 78deg,
+    rgba(64, 128, 255, 1) 90deg,
+    transparent 102deg,
+    transparent 168deg,
+    rgba(64, 128, 255, 1) 180deg,
+    transparent 192deg,
+    transparent 258deg,
+    rgba(64, 128, 255, 1) 270deg,
+    transparent 282deg,
+    transparent 348deg,
+    transparent 360deg
+  );
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  padding: var(--hl-width, 2px);
+  animation: hl-marquee var(--hl-speed, 3s) linear infinite;
+  pointer-events: none;
+  z-index: 10;
+  opacity: var(--hl-opacity, 0);
+  transition: opacity 0.3s ease;
 }
 
 .group-card:hover {

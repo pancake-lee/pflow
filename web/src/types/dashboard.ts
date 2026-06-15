@@ -9,6 +9,7 @@ export interface DashboardEntry {
   is_active: boolean
   traffic_light: string
   name: string
+  first_active: string // ISO 8601
   last_active: string // ISO 8601
   last_req: string        // truncated ~15 chars for table
   last_resp: string       // truncated ~15 chars for table
@@ -18,6 +19,17 @@ export interface DashboardEntry {
   has_terminal: boolean
   terminal_tmux_name?: string
   matched_root?: string // project root path if matched, empty = unmatched
+}
+
+export interface ReminderScoreInfo {
+  score: number
+  fog_score: number
+  highlight: number   // 0-100, log-mapped from score
+  fog_pct: number     // 0-100, fog_score * 100
+  level: 'none' | 'low' | 'medium' | 'high'
+  waiting_min: number
+  streak_min: number
+  is_current: boolean
 }
 
 export interface ProjectRoot {
@@ -30,7 +42,16 @@ export interface DashboardResponse {
   window: string
   project_roots: ProjectRoot[]
   sessions: DashboardEntry[]
+  reminder_scores: Record<string, ReminderScoreInfo>
+  focus?: FocusState
   errors?: string[]
+}
+
+export interface FocusState {
+  active: boolean
+  focused_project: string
+  minutes: number
+  since: string  // ISO 8601 timestamp when the current focus period started
 }
 
 export interface ScanOptions {

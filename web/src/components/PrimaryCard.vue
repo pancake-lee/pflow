@@ -2,6 +2,7 @@
 import { computed, h, type Component } from 'vue'
 import {
   NDataTable,
+  NSelect,
   NTooltip,
   NButton,
   NTag,
@@ -12,6 +13,7 @@ import type { DataTableColumns } from 'naive-ui'
 import type { DashboardEntry } from '../types/dashboard'
 import type { SessionGroup } from './GroupCard.vue'
 import { formatSince, truncate, escapeNewlines } from '../composables/format'
+import { highlightToMarquee, fogPctToOpacity, FOG_CONFIG, FOCUS_CONFIG } from '../composables/useReminderScores'
 
 function agentIcon(agentType: string): Component {
   return agentType === 'claude' ? DesktopOutline : HardwareChipOutline
@@ -32,12 +34,22 @@ const props = defineProps<{
   group: SessionGroup | null
   mainSession: DashboardEntry | null
   disabled: boolean
+  highlight?: number
+  fogPct?: number
+  projectOptions?: Array<{ label: string; value: string }>
+  focusActive?: boolean
+  focusFocusedProject?: string
+  focusLoading?: boolean
+  focusCountdown?: string
 }>()
 
 const emit = defineEmits<{
   setMainSession: [sessionId: string]
   rowClick: [row: DashboardEntry]
   openTerminal: [row: DashboardEntry]
+  selectProject: [path: string]
+  focusExtend: [projectKey: string]
+  focusStop: []
 }>()
 
 const otherSessions = computed(() => {
@@ -56,6 +68,7 @@ const PLACEHOLDER_ROW: DashboardEntry = {
   is_active: false,
   traffic_light: '⚪',
   name: '-',
+  first_active: new Date().toISOString(),
   last_active: new Date().toISOString(),
   last_req: '-',
   last_resp: '-',
@@ -69,6 +82,45 @@ const tableData = computed(() => {
 })
 
 const isEmpty = computed(() => !props.group || props.group.sessions.length === 0)
+
+const selectedProject = computed(() => {
+  if (!props.group) return null
+  return props.group.isRoot ? props.group.fullPath : null
+})
+
+const isFocusedProject = computed(() =>
+  props.focusActive && props.focusFocusedProject !== '' && props.group?.fullPath === props.focusFocusedProject,
+)
+
+/** Whether this card should be dimmed during focus mode. */
+const focusDimmed = computed(() => props.focusActive && !isFocusedProject.value)
+const focusDimOpacity = computed(() => FOCUS_CONFIG.dimOpacity)
+
+function onProjectSelect(path: string) {
+  emit('selectProject', path)
+}
+
+const marquee = computed(() => highlightToMarquee(props.highlight ?? 0))
+const fogOpacity = computed(() => fogPctToOpacity(props.fogPct ?? 0))
+
+const hlStyle = computed(() => {
+  const m = marquee.value
+  if (!m.visible) return {} as Record<string, string | number>
+  return {
+    '--hl-speed': m.speed + 's',
+    '--hl-width': m.width + 'px',
+    '--hl-opacity': m.opacity,
+  } as Record<string, string | number>
+})
+
+const fogStyle = computed(() => {
+  const opacity = fogOpacity.value
+  if (opacity <= 0 && !FOG_CONFIG.maskImage) return {} as Record<string, string | number>
+  return {
+    '--fog-opacity': opacity,
+    '--fog-image': FOG_CONFIG.maskImage ? `url(${FOG_CONFIG.maskImage})` : 'none',
+  } as Record<string, string | number>
+})
 
 // ── Table columns with last_req/last_resp ──
 
@@ -163,7 +215,53 @@ function rowProps(row: DashboardEntry) {
 </script>
 
 <template>
-  <div class="primary-card" :class="{ 'primary-card--empty': isEmpty }">
+  <div class="primary-card" :class="{ 'primary-card--empty': isEmpty }" :style="{ ...hlStyle, ...fogStyle }">
+    <!-- Focus mode dimming overlay (when focus is on a different project) -->
+    <div v-if="focusDimmed" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
+    <!-- Header: zone title + dropdown + main session metadata + focus controls -->
+    <div class="card-header">
+      <div class="card-header-content">
+        <span class="zone-title">⭐ 主线项目</span>
+        <NSelect
+          size="tiny"
+          :value="selectedProject"
+          :options="projectOptions ?? []"
+          :disabled="disabled"
+          placeholder="Assign..."
+          clearable
+          style="width: 220px"
+          @update:value="onProjectSelect"
+        />
+        <template v-if="mainSession">
+          <span class="h-sep">|</span>
+          <NIcon :size="16" :component="agentIcon(mainSession.agent_type)" />
+          <span class="h-agent">{{ mainSession.agent_type === 'claude' ? 'Claude' : 'Hermes' }}</span>
+          <code class="h-sid">{{ mainSession.session_id }}</code>
+          <NButton
+            v-if="mainSession.has_terminal"
+            size="tiny"
+            quaternary
+            title="Open terminal"
+            @click.stop="emit('openTerminal', mainSession)"
+          >
+            🖥
+          </NButton>
+          <NTag :type="trafficColor(mainSession.traffic_light)" size="small" :bordered="false">
+            {{ mainSession.traffic_light }} {{ mainSession.status }}
+          </NTag>
+          <span class="h-time">{{ formatSince(mainSession.last_active) }}</span>
+        </template>
+        <!-- Focus controls -->
+        <span class="h-sep">|</span>
+        <NButton size="tiny" quaternary @click.stop="emit('focusExtend', group?.fullPath ?? '')" :loading="focusLoading">🎯 专注 +15min</NButton>
+        <template v-if="isFocusedProject">
+          <NButton size="tiny" quaternary @click.stop="emit('focusStop')" :loading="focusLoading">退出专注</NButton>
+          <span class="h-focus-countdown">⏱ {{ focusCountdown }}</span>
+        </template>
+      </div>
+    </div>
+
+    <!-- Body -->
     <template v-if="!isEmpty && mainSession">
       <!-- Name: full version, clickable -->
       <div class="ms-name-row" @click="emit('rowClick', mainSession)">
@@ -201,12 +299,129 @@ function rowProps(row: DashboardEntry) {
 
 <style scoped>
 .primary-card {
+  position: relative;
   background: transparent;
   overflow: hidden;
 }
 
+/* ── Fog overlay (::before) ──────────────────── */
+
+.primary-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--fog-image, none) 0 0 / cover no-repeat, var(--pflow-fog-bg, #18181b);
+  opacity: var(--fog-opacity, 0);
+  pointer-events: none;
+  z-index: 5;
+  transition: opacity 0.5s ease;
+}
+
+.primary-card:hover::before {
+  opacity: calc(var(--fog-opacity, 0) * 0.3);
+}
+
+/* ── Highlight marquee (::after) ─────────────── */
+
+.primary-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--hl-angle, 0deg),
+    transparent 0deg,
+    rgba(24, 160, 88, 1) 12deg,
+    transparent 24deg,
+    transparent 78deg,
+    rgba(24, 160, 88, 1) 90deg,
+    transparent 102deg,
+    transparent 168deg,
+    rgba(24, 160, 88, 1) 180deg,
+    transparent 192deg,
+    transparent 258deg,
+    rgba(24, 160, 88, 1) 270deg,
+    transparent 282deg,
+    transparent 348deg,
+    transparent 360deg
+  );
+  /* Mask: only expose the border strip */
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  padding: var(--hl-width, 2px);
+  animation: hl-marquee var(--hl-speed, 3s) linear infinite;
+  pointer-events: none;
+  z-index: 10;
+  opacity: var(--hl-opacity, 0);
+  transition: opacity 0.3s ease;
+}
+
 .primary-card--empty {
   opacity: 0.6;
+}
+
+/* ── Header ─────────────────────────────────── */
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  gap: 12px;
+  border-bottom: 1px solid rgba(24, 160, 88, 0.15);
+}
+
+.card-header-content {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.zone-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: #18a058;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.h-sep {
+  color: var(--n-text-color-4);
+  font-size: 12px;
+}
+
+.h-agent {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--n-text-color-3);
+}
+
+.h-sid {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--n-text-color-2);
+}
+
+.h-time {
+  font-size: 11px;
+  color: var(--n-text-color-4);
+}
+
+.h-focus-countdown {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f0a020;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Name row ──────────────────────────────── */
@@ -277,5 +492,16 @@ function rowProps(row: DashboardEntry) {
   text-align: center;
   color: var(--n-text-color-4);
   font-size: 13px;
+}
+
+/* ── Focus mode overlay ─────────────────────── */
+
+.focus-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--n-color-target, #18181b);
 }
 </style>

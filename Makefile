@@ -1,4 +1,4 @@
-.PHONY: build env clean vet test dev run install
+.PHONY: build env clean vet test go dev run install
 
 # Default target
 .DEFAULT_GOAL := build
@@ -19,6 +19,10 @@ build:
 	go build -o $(BINARY) ./cmd/pflow/
 	@echo "==> Done: $(BINARY)"
 
+# --------------------------------------------------
+# 以下都只处理go的
+# --------------------------------------------------
+
 ## env: install all dependencies (Go + Node.js)
 env:
 	@echo "==> Installing Go dependencies..."
@@ -34,6 +38,12 @@ vet:
 ## test: run Go tests
 test:
 	go test ./...
+
+go:
+	@echo "==> Building backend (Go)..."
+	mkdir -p $(BIN_DIR)
+	go build -o $(BINARY) ./cmd/pflow/
+	@echo "==> Done: $(BINARY)"
 
 ## clean: remove build artifacts
 clean:

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, h, type Component } from 'vue'
+import { ref, computed, onMounted, onUnmounted, h, type Component } from 'vue'
 import {
   NLayout,
   NLayoutHeader,
@@ -44,11 +44,95 @@ import GroupCard from '../components/GroupCard.vue'
 import PrimaryCard from '../components/PrimaryCard.vue'
 import SecondaryCard from '../components/SecondaryCard.vue'
 import type { SessionGroup } from '../components/GroupCard.vue'
+import type { ReminderScoreInfo } from '../types/dashboard'
+import { FOCUS_CONFIG } from '../composables/useReminderScores'
 
 // ── State ────────────────────────────────────────────────────────
 
 const { data, loading, error, fetchDashboard } = useDashboard()
 const message = useMessage()
+
+// Reminder scores from API response
+const reminderScores = computed(() => data.value?.reminder_scores ?? {})
+
+/** Get reminder score info for a project group by its key. */
+function getGroupScore(groupKey: string): ReminderScoreInfo | undefined {
+  return reminderScores.value[groupKey]
+}
+
+// ── Focus mode ──────────────────────────────────────────────────
+
+const focusActive = computed(() => data.value?.focus?.active ?? false)
+const focusFocusedProject = computed(() => data.value?.focus?.focused_project ?? '')
+const focusMinutes = computed(() => data.value?.focus?.minutes ?? 0)
+const focusSince = computed(() => data.value?.focus?.since ?? '')
+const focusLoading = ref(false)
+
+// Reactive "now" updated every second to drive the countdown computed.
+const now = ref(Date.now())
+let nowTimer: ReturnType<typeof setInterval> | null = null
+onMounted(() => { nowTimer = setInterval(() => { now.value = Date.now() }, 1000) })
+onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
+
+const focusCountdown = computed(() => {
+  if (!focusActive.value) return ''
+  const since = focusSince.value
+  if (!since) return '...'
+  const start = new Date(since).getTime()
+  const end = start + focusMinutes.value * 60 * 1000
+  const remaining = end - now.value
+  if (remaining <= 0) return '0:00'
+  const mins = Math.floor(remaining / 60000)
+  const secs = Math.floor((remaining % 60000) / 1000)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+})
+
+/** Focus-mode dimming opacity (from config, used as inline style). */
+const focusDimOpacity = computed(() => FOCUS_CONFIG.dimOpacity)
+
+async function focusExtend(projectKey: string) {
+  if (!projectKey) {
+    message.error('No project selected for focus')
+    return
+  }
+  focusLoading.value = true
+  try {
+    const resp = await fetch('/api/v1/focus/extend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: projectKey }),
+    })
+    const result = await resp.json()
+    if (!resp.ok) {
+      message.error(result.error || 'Failed to extend focus')
+      return
+    }
+    message.success(`Focus extended to ${result.minutes}min`)
+    refresh()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to extend focus')
+  } finally {
+    focusLoading.value = false
+  }
+}
+
+async function focusStop() {
+  focusLoading.value = true
+  try {
+    const resp = await fetch('/api/v1/focus/stop', { method: 'POST' })
+    const result = await resp.json()
+    if (!resp.ok) {
+      message.error(result.error || 'Failed to stop focus')
+      return
+    }
+    message.success('Focus mode exited')
+    refresh()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to stop focus')
+  } finally {
+    focusLoading.value = false
+  }
+}
 
 // Filter params
 const windowOptions = [
@@ -611,7 +695,8 @@ function rowProps(row: DashboardEntry) {
 </script>
 
 <template>
-  <NLayout class="layout">
+  <div class="app-shell" :class="{ 'focus-mode': focusActive }">
+    <NLayout class="layout">
     <!-- Header with inline stats -->
     <NLayoutHeader bordered>
       <div class="header">
@@ -622,6 +707,7 @@ function rowProps(row: DashboardEntry) {
 
         <!-- Stats in header -->
         <div class="header-stats">
+          <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
           <div class="header-stat">
             <span class="header-stat-value">{{ stats.total }}</span>
             <span class="header-stat-label">Total</span>
@@ -670,6 +756,7 @@ function rowProps(row: DashboardEntry) {
 
         <!-- Filter bar -->
         <div class="filter-bar">
+          <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
           <NSpace align="center" wrap>
             <span class="filter-label">Window:</span>
             <NSelect
@@ -712,50 +799,25 @@ function rowProps(row: DashboardEntry) {
         <NSpin :show="loading && !data">
           <div v-if="groupedSessions.length > 0" class="groups-container">
 
-            <!-- ⭐ 主线项目 — full-width card, always visible -->
+            <!-- ⭐ 主线项目 — full-width card, always visible (header now inside PrimaryCard) -->
             <div class="zone-section zone-section--primary">
-              <!-- Header: zone title + dropdown + main session metadata inline -->
-              <div class="zone-header-primary">
-                <div class="zhp-content">
-                  <span class="zone-title">⭐ 主线项目</span>
-                  <NSelect
-                    size="tiny"
-                    :value="primaryGroup?.isRoot ? primaryGroup.fullPath : null"
-                    :options="projectSelectOptions"
-                    :disabled="projectRootLoading"
-                    placeholder="Assign..."
-                    clearable
-                    style="width: 220px"
-                    @update:value="handleSelectPrimary"
-                  />
-                  <template v-if="primaryMainSession">
-                    <span class="zhp-sep">|</span>
-                    <NIcon :size="16" :component="agentIcon(primaryMainSession.agent_type)" />
-                    <span class="zhp-agent">{{ primaryMainSession.agent_type === 'claude' ? 'Claude' : 'Hermes' }}</span>
-                    <code class="zhp-sid">{{ primaryMainSession.session_id }}</code>
-                    <NButton
-                      v-if="primaryMainSession.has_terminal"
-                      size="tiny"
-                      quaternary
-                      title="Open terminal"
-                      @click.stop="handleOpenTerminalFromCard(primaryMainSession)"
-                    >
-                      🖥
-                    </NButton>
-                    <NTag :type="trafficColor(primaryMainSession.traffic_light)" size="small" :bordered="false">
-                      {{ primaryMainSession.traffic_light }} {{ primaryMainSession.status }}
-                    </NTag>
-                    <span class="zhp-time">{{ formatSince(primaryMainSession.last_active) }}</span>
-                  </template>
-                </div>
-              </div>
               <PrimaryCard
                 :group="primaryGroup"
                 :main-session="primaryMainSession"
                 :disabled="projectRootLoading"
+                :highlight="primaryGroup ? (getGroupScore(primaryGroup.key)?.highlight ?? 0) : 0"
+                :fog-pct="primaryGroup ? (getGroupScore(primaryGroup.key)?.fog_pct ?? 0) : 0"
+                :project-options="projectSelectOptions"
+                :focus-active="focusActive"
+                :focus-focused-project="focusFocusedProject"
+                :focus-loading="focusLoading"
+                :focus-countdown="focusCountdown"
                 @set-main-session="(sid: string) => primaryGroup && handleSetMainSession(primaryGroup.key, sid)"
                 @row-click="openDetail"
                 @open-terminal="handleOpenTerminalFromCard"
+                @select-project="handleSelectPrimary"
+                @focus-extend="(key: string) => focusExtend(key)"
+                @focus-stop="focusStop"
               />
             </div>
 
@@ -770,16 +832,27 @@ function rowProps(row: DashboardEntry) {
                   :main-session="group ? getMainSession(group) : null"
                   :disabled="projectRootLoading"
                   :index="idx"
+                  :highlight="group ? (getGroupScore(group.key)?.highlight ?? 0) : 0"
+                  :fog-pct="group ? (getGroupScore(group.key)?.fog_pct ?? 0) : 0"
+                  :focus-active="focusActive"
+                  :focus-focused-project="focusFocusedProject"
+                  :focus-minutes="focusMinutes"
+                  :focus-loading="focusLoading"
+                  :focus-countdown="focusCountdown"
                   @select-project="handleSelectSecondary"
                   @set-main-session="(sid: string) => group && handleSetMainSession(group.key, sid)"
                   @row-click="openDetail"
                   @open-terminal="handleOpenTerminalFromCard"
+                  @focus-extend="(key: string) => focusExtend(key)"
+                  @focus-stop="focusStop"
                 />
               </div>
             </div>
 
             <!-- 📁 普通项目 — collapsible, current GroupCard style -->
-            <NCollapse v-if="normalGroups.length > 0" class="zone-collapse" :default-expanded-names="['normal']">
+            <div v-if="normalGroups.length > 0" class="zone-collapse-wrap">
+              <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
+            <NCollapse class="zone-collapse" :default-expanded-names="['normal']">
               <NCollapseItem name="normal">
                 <template #header>
                   <span class="zone-title">📁 普通项目</span>
@@ -792,13 +865,18 @@ function rowProps(row: DashboardEntry) {
                   :columns="groupColumns"
                   :row-props="rowProps"
                   :disabled="projectRootLoading"
+                  :highlight="getGroupScore(group.key)?.highlight ?? 0"
+                  :fog-pct="getGroupScore(group.key)?.fog_pct ?? 0"
                   @check="handleCheckChange"
                 />
               </NCollapseItem>
             </NCollapse>
+            </div>
 
             <!-- 📂 未归类 — collapsible, collapsed by default -->
-            <NCollapse v-if="unmatchedGroups.length > 0" class="zone-collapse">
+            <div v-if="unmatchedGroups.length > 0" class="zone-collapse-wrap">
+              <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
+            <NCollapse class="zone-collapse">
               <NCollapseItem name="unmatched">
                 <template #header>
                   <span class="zone-title">📂 未归类</span>
@@ -811,10 +889,13 @@ function rowProps(row: DashboardEntry) {
                   :columns="groupColumns"
                   :row-props="rowProps"
                   :disabled="projectRootLoading"
+                  :highlight="getGroupScore(group.key)?.highlight ?? 0"
+                  :fog-pct="getGroupScore(group.key)?.fog_pct ?? 0"
                   @check="handleCheckChange"
                 />
               </NCollapseItem>
             </NCollapse>
+            </div>
 
             <!-- All-unmatched hint -->
             <div
@@ -838,9 +919,7 @@ function rowProps(row: DashboardEntry) {
     <!-- Footer -->
     <NLayoutFooter bordered>
       <div class="footer">
-        <span>{{ stats.total }} sessions in {{ stats.groups }} groups</span>
         <span>🟢 active &nbsp; 🟡 waiting &nbsp; ⚪ idle &nbsp; ⚫ inactive</span>
-        <span v-if="maxInactive > 0">(inactive limited to {{ maxInactive }} per project)</span>
       </div>
     </NLayoutFooter>
 
@@ -939,7 +1018,8 @@ function rowProps(row: DashboardEntry) {
         <p>Terminal not available. Click "Open Terminal" to start.</p>
       </div>
     </NModal>
-  </NLayout>
+    </NLayout>
+  </div>
 </template>
 
 <style scoped>
@@ -1109,47 +1189,6 @@ function rowProps(row: DashboardEntry) {
   border: 1px solid rgba(24, 160, 88, 0.2);
 }
 
-/* Primary zone header (merged: project info + main session metadata + dropdown) */
-.zone-header-primary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  gap: 12px;
-}
-
-.zhp-content {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  flex: 1;
-  flex-wrap: wrap;
-}
-
-.zhp-sep {
-  color: var(--n-text-color-4);
-  font-size: 12px;
-}
-
-.zhp-agent {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--n-text-color-3);
-}
-
-.zhp-sid {
-  font-size: 10px;
-  font-family: monospace;
-  color: var(--n-text-color-2);
-}
-
-.zhp-time {
-  font-size: 11px;
-  color: var(--n-text-color-4);
-}
-
 .zone-title {
   display: flex;
   align-items: center;
@@ -1303,5 +1342,28 @@ function rowProps(row: DashboardEntry) {
   justify-content: center;
   gap: 12px;
   color: var(--n-text-color-3);
+}
+
+/* ── Focus mode dimming ──────────────────────── */
+
+.focus-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--n-color-target, #18181b);
+}
+
+/* Containers that hold focus overlays need positioning */
+.header-stats,
+.filter-bar,
+.zone-collapse-wrap {
+  position: relative;
+}
+
+.zone-collapse-wrap {
+  border-radius: 8px;
+  overflow: hidden;
 }
 </style>

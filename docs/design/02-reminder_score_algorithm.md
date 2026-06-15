@@ -1,174 +1,220 @@
-# pflow 提醒分数算法设计文档
+# pflow 提醒分数算法设计文档（双维度版）
+
+---
 
 ## 1. 概述
 
-本文档定义 pflow 中用于**渐进式提醒**的核心算法。该算法根据用户当前的专注状态、任务的等待时长、今日累计投入时间以及任务优先级（主线/支线/普通），计算每个任务的“提醒分数”。提醒分数决定用户界面中任务卡片的视觉突出程度以及是否触发桌面通知。
+本文档定义 pflow 中用于**渐进式注意力引导**的双维度核心算法。算法为每个任务（项目）输出两个独立的分数：
 
-**设计目标**：
-- 保护主线任务的深度工作，初始 15 分钟内完全不打扰。
-- 随着专注时间延长，逐渐提高支线任务的可见性，引导用户适时切换。
-- 防止多任务同时高亮，通过非线性变换拉大分数差距。
-- 当用户没有活跃任务时，只突出主线任务。
-- 校准时间分配偏差（支线占用过多时间时，增加主线提醒分数）。
+- **提醒分数**（`reminder_score`）：表示任务需要用户**立即关注**的紧急程度。数值越高，视觉上越应该“主动吸引”用户（如发光、脉冲、缩放）。
+- **迷雾分数**（`fog_score`）：表示任务应当被**视觉抑制**的程度。数值越高，遮罩层越浓（半透明、模糊、灰度），让任务显得“不重要”或“应暂时忽略”。
+
+双维度分离使得系统可以**同时表达“拉住你”和“推开你”两种注意力导向**，比单一透明度更符合人类视觉注意机制。
 
 ---
 
-## 2. 输入变量
+## 2. 设计原则
 
-针对每个任务（项目） `i`，算法需要以下输入：
+1. **当前活跃项目**（用户正在操作的那个）永远：
+   - `reminder_score = 0`（不需要提醒自己）
+   - `fog_score = 0`（不需要遮住自己）
 
-| 变量 | 类型 | 含义 | 获取方式 |
-|------|------|------|----------|
-| `waiting_i` | 浮点数（分钟） | 任务下所有会话中最长的 waiting 持续时间（无 waiting 则为 0） | 从 session 状态中的 `waitingSince` 计算当前时间差 |
-| `streak_i` | 浮点数（分钟） | 用户在当前任务上的**连续活跃分钟数**。若最近一次活动距当前时间小于 5 分钟，则继续累加；否则重置为 0 | 监听 Dashboard 上的用户操作（点击、终端输入、切换 session 等），记录最近活动时间戳 |
-| `total_i` | 浮点数（分钟） | 今日累计专注分钟数（自 0 点起，`streak_i` 增量的累加） | 每日重置，每次活跃增加时长 |
-| `is_primary_i` | 布尔 | 是否为主线任务 | 用户设定 |
-| `is_current` | 布尔 | 是否为当前活跃任务（用户最近操作的那个） | 根据 `streak_i > 0` 且最近活动时间戳最大者判定 |
+2. **保护期**（用户显式开启专注模式且专注时长未达到设定值）：
+   - 非当前项目的 `fog_score` 被强制提高（主动“推开”），`reminder_score` 保持低值。
+   - 保护期结束后，`fog_score` 逐渐降低，`reminder_score` 逐渐升高。
 
-全局常量（可配置）：
+3. **无活跃任务时**：只对主线项目计算 `reminder_score`，其他项目 `reminder_score = 0` 且 `fog_score` 较高。
+
+4. **支线任务长时间等待** → `reminder_score` 升高（拉你过去）。
+5. **主线被支线过度占用时间** → 主线 `reminder_score` 升高（补偿机制）。
+
+6. **两个分数正交**：提醒分数高 ≠ 迷雾分数低，但通常情况下呈负相关（因为需要清晰呈现）。保护期是打破负相关的特例：此时迷雾分数高而提醒分数低。
+
+---
+
+## 3. 输入变量
+
+每个任务 `i` 的输入与单维度版相同：
+
+| 变量 | 类型 | 含义 |
+|------|------|------|
+| `waiting_i` | float64 (min) | 最长 waiting 持续时间 |
+| `streak_i` | float64 (min) | 当前连续活跃分钟数 |
+| `total_i` | float64 (min) | 今日累计专注分钟数 |
+| `is_primary_i` | bool | 是否为主线 |
+| `last_active` | time.Time | 最后活动时间 |
+
+全局状态：
+
+| 变量 | 含义 |
+|------|------|
+| `curProject` | 当前活跃项目路径（`streak` 最大且 `last_active` 在 `CurWindow` 内） |
+| `focusActive` | 是否显式开启专注模式 |
+| `focusMinutes` | 专注模式设定的保护时长（分钟） |
+
+常量（同单维度版）：
 
 | 常量 | 默认值 | 含义 |
 |------|--------|------|
-| `PROTECT_MIN` | 15 | 专注保护期（分钟），此期间其他任务不产生提醒 |
-| `W_WAIT` | 1.0 | 等待时间权重 |
-| `W_STREAK` | 0.5 | 专注时间乘数系数（每 15 分钟） |
-| `PRIMARY_BONUS` | 2.0 | 支线活跃时，主线的额外乘数 |
-| `W_CORRECT` | 0.5 | 今日累计时间矫正系数 |
-| `EXP_POWER` | 2.0 | 差异化指数（幂函数指数） |
-| `REMINDER_THRESHOLDS` | [2, 5, 10] | 低/中/高提醒分数阈值 |
+| `CurWindow` | 60 min | cur 判定窗口 |
+| `ProtectMin` | 5 min | 专注保护期参考阈值（用于因子计算） |
+| `WWait` | 1.0 | 等待时间权重 |
+| `WStreak` | 0.5 | streak 因子系数 |
+| `PrimaryBonus` | 2.0 | 支线→主线战略乘数 |
+| `WCorrect` | 0.5 | 今日累计校正系数 |
+| `ExpPower` | 2.0 | 提醒分数幂指数 |
+| `MinFactor` | 0.5 | streak 不可测量时的兜底因子 |
+| `FogProtectMax` | 0.9 | 保护期最大迷雾分数 |
+| `FogBaseNonProtect` | 0.3 | 非保护期基础迷雾分数（用于无提醒时） |
 
 ---
 
-## 3. 计算步骤
+## 4. 提醒分数计算（`reminder_score`）
 
-### 3.1 确定当前活跃任务
+沿用单维度版算法，最终值记为 `reminder_raw`，再应用幂函数得到 `reminder_score`。
 
-找出所有 `streak_i > 0` 的任务中，最近活动时间戳最大的那一个，记为 `cur`。如果没有任何任务有 `streak_i > 0`，则 `cur = null`。
+### 4.1 步骤摘要
 
-### 3.2 基础等待分
+1. 确定 `curProject`。
+2. `base_i = waiting_i * WWait`。
+3. 干扰因子 `factor_i`：
+   - 若 `curProject == nil`：仅主线 `factor=1`，其他 `factor=0`。
+   - 若 `i == curProject`：`factor=0`。
+   - 其他：
+     - 若 `focusActive && streak_cur < focusMinutes`：`factor=0`（保护期完全抑制提醒）。
+     - 否则 `streak_ratio = min( (streak_cur / ProtectMin) * WStreak, 2.0 )`。
+     - 若当前为支线且目标为主线，`streak_ratio *= PrimaryBonus`。
+     - `factor = max(streak_ratio, MinFactor)`（当 `streak_cur` 测量为 0 时使用 `MinFactor`）。
+4. `adjusted_i = base_i * factor_i`。
+5. 今日累计校正（仅主线）：`correction = max(0, median(secondary_total) - primary_total) * WCorrect`，加至 `adjusted_primary`。
+6. `reminder_score_i = adjusted_i ^ ExpPower`（若 `adjusted_i > 0`，否则 0）。
+
+**关键改动**：保护期内 `factor=0` → `reminder_score=0`。此时所有注意力应被迷雾抑制，而非提醒。
+
+---
+
+## 5. 迷雾分数计算（`fog_score`）
+
+`fog_score` 是一个 `[0, 1]` 区间的值，0 表示完全清晰（无遮罩），1 表示完全被迷雾覆盖。
+
+### 5.1 基础规则
+
+- **当前项目**：`fog_score = 0`（永远清晰）。
+- **无当前项目时**：主线 `fog_score = 0`，其他项目 `fog_score = 0.7`（基本遮蔽）。
+- **保护期**（`focusActive && streak_cur < focusMinutes`）：
+  - 非当前项目的 `fog_score` 按保护期剩余比例计算，取值范围 `[FogProtectMin, FogProtectMax]`。
+  - 剩余因子 `remain_ratio = 1 - (streak_cur / focusMinutes)`（保护期越长，剩余比例越小？streak_cur 是已专注时间，剩余时间 = focusMinutes - streak_cur，注意保护期定义是“streak_cur < focusMinutes”，剩余比例 = (focusMinutes - streak_cur) / focusMinutes）。
+  - `fog_score = FogProtectMax * remain_ratio + FogProtectMin * (1 - remain_ratio)`。
+  - 例如 `FogProtectMax=0.9, FogProtectMin=0.5`，刚开始 streak_cur=0 → remain=1 → fog=0.9；快结束时 streak_cur≈focusMinutes → fog≈0.5。
+
+- **非保护期**（包括未开启专注模式或已过保护期）：
+  - 首先计算“无关紧要度” `unimportance_i`，基于等待时间和提醒分数排名。
+  - 若 `reminder_score_i` 较大，则迷雾应低。定义 `unimportance_i = 1 - clamp(reminder_score_i / max_reminder, 0, 1)`，其中 `max_reminder` 是当前所有非当前项目的 `reminder_score` 最大值（若为 0 则用 1 避免除零）。
+  - 但还需要考虑等待时间极短且无提醒的项目：它们应该被适度遮蔽。因此基础迷雾值为 `FogBaseNonProtect`（例如 0.3），然后根据提醒分数比例进一步降低：
+    `fog_score = FogBaseNonProtect * (1 - unimportance_i)`。
+  - 也可以更直接：`fog_score = max(0, FogBaseNonProtect - reminder_score_i / (max_reminder + 1))`，但这样提醒分数最大的项目 fog 可能为负，需 clamp。
+  - 简化版：`fog_score = clamp(FogBaseNonProtect * (1 - (reminder_score_i / (max_reminder + 1))), 0, 1)`。
+
+- **等待时间为 0 且 streak=0 且非当前**：这些项目可能是闲置会话，给予较高迷雾（0.6）。
+
+### 5.2 推荐公式（MVP 简洁版）
 
 ```
-base_i = waiting_i * W_WAIT
-```
-
-### 3.3 专注干扰因子（仅当 `cur` 非空时）
-
-对于 `cur` 任务本身：`factor_cur = 0`（自己不因专注而增加提醒）。
-
-对于其他任务 `i != cur`：
-- 若 `streak_cur < PROTECT_MIN`，则 `factor_i = 0`（保护期内，不产生任何提醒因子）。
-- 否则 `factor_i = min( (streak_cur / PROTECT_MIN) * W_STREAK, 2.0 )`。
-- 若 `cur` 是支线任务（`is_primary_cur == false`）且 `i` 是主线任务（`is_primary_i == true`），则 `factor_i = factor_i * PRIMARY_BONUS`。
-
-### 3.4 当前活跃调整分
-
-```
-adjusted_i = base_i * factor_i
-```
-
-若 `cur == null`（无活跃任务），则：
-- 主线任务：`adjusted_primary = base_primary`（因子为 1）
-- 其他任务：`adjusted_i = 0`
-
-### 3.5 今日累计时间矫正（仅针对主线任务）
-
-如果主线任务的今日累计时间 `total_primary` 小于**所有支线任务的平均今日累计时间** `avg_secondary_total`，则增加一个修正分：
-
-```
-correction = max(0, (avg_secondary_total - total_primary) * W_CORRECT)
-adjusted_primary = adjusted_primary + correction
-```
-
-### 3.6 差异化拉大差距（幂函数）
-
-为防止多个任务同时拥有相近的提醒分数，对正数分数进行指数放大：
-
-```
-raw_i = adjusted_i
-if raw_i > 0:
-    final_score_i = raw_i ^ EXP_POWER
+if i == curProject:
+    fog = 0
+elif curProject == nil:
+    fog = 0 if is_primary else 0.7
+elif focusActive and streak_cur < focusMinutes:
+    remain = (focusMinutes - streak_cur) / focusMinutes
+    fog = FogProtectMax * remain + 0.5 * (1 - remain)   // FogProtectMin=0.5
 else:
-    final_score_i = 0
+    maxRem = max(reminder_score[j] for j != curProject) or 1
+    if maxRem == 0:
+        fog = FogBaseNonProtect   // 0.3
+    else:
+        // reminder_score 越高，fog 越低，线性插值范围 [0, FogBaseNonProtect]
+        fog = FogBaseNonProtect * (1 - min(1, reminder_score_i / maxRem))
 ```
 
-指数 `EXP_POWER > 1` 会使分数差距扩大，高分更高，低分更低。
-
-### 3.7 提醒等级
-
-根据 `final_score_i` 对照阈值确定提醒强度：
-
-| 等级 | 条件 | 界面表现 |
-|------|------|----------|
-| 无提醒 | `final_score_i < REMINDER_THRESHOLDS[0]` | 仅更新 Dashboard 角标（若有） |
-| 低提醒 | `REMINDER_THRESHOLDS[0] ≤ final_score_i < REMINDER_THRESHOLDS[1]` | 卡片背景色变化/边框闪烁 |
-| 中提醒 | `REMINDER_THRESHOLDS[1] ≤ final_score_i < REMINDER_THRESHOLDS[2]` | 桌面通知 + 卡片呼吸灯效果 |
-| 高提醒 | `final_score_i ≥ REMINDER_THRESHOLDS[2]` | 声音 + 居中弹窗，建议切换任务 |
-
-**同一时间只对 `final_score_i` 最高的一个任务发出中/高提醒**，避免信息过载。
+**说明**：保护期内 `reminder_score_i` 均为 0，所以上述非保护期分支不会进入，保护期独立控制。
 
 ---
 
-## 4. 算法特性与符合性说明
+## 6. 视觉映射规则
 
-| 用户期望 | 算法体现 |
-|----------|----------|
-| 刚切换到主线任务，至少 15 分钟不被打扰 | `factor_i = 0` 当 `streak_cur < PROTECT_MIN` |
-| 长时间专注主线 → 支线提醒分数增加 | `factor_i` 随 `streak_cur` 线性增长 |
-| 长时间专注支线 → 主线和另一支线分数增加，主线额外乘 `PRIMARY_BONUS` | 支线活跃时主线 `factor_i` 额外乘以 `PRIMARY_BONUS` |
-| 无任何任务活跃 → 只提醒主线 | `cur == null` 时仅主线 `adjusted` 非零 |
-| 支线占用时间超过主线 → 主线提醒分数增加 | 今日累计矫正，`correction` 为正 |
-| 避免多任务同时强提醒 | 幂函数拉大差距，且实际提醒只取最高分任务 |
+前端根据两个分数分别应用视觉效果：
+
+| 分数 | 取值范围 | 视觉表现 | 实现方式 |
+|------|----------|----------|----------|
+| `reminder_score` | 0 ~ ∞（通常 >10 即很高） | **高亮强度**：边框发光、饱和色提升、脉冲动画频率/幅度 | CSS `box-shadow` 强度线性；`animation` 时长反比于分数；`filter: brightness()` 增量 |
+| `fog_score` | 0 ~ 1 | **遮罩浓度**：半透明黑色层不透明度、模糊程度、灰度程度 | 伪元素 `background-color` 的 alpha = `fog_score`；可选 `backdrop-filter: blur(fog_score * 4px)` |
+
+**叠加规则**：
+- 迷雾遮罩位于卡片上方（伪元素），高亮效果通常作用于卡片边框或内容（独立于遮罩）。两者可以共存，但为了高亮清晰，当 `reminder_score` 很高时，可以临时降低 `fog_score`（例如强制 fog=0）。不过由于提醒分数高时迷雾分数已经很低，自然不冲突。
+- 当前项目（`isCurrent`）不应用任何高亮或迷雾（保持默认样式）。
 
 ---
 
-## 5. 配置示例（`~/.pflow/config.json`）
+## 7. 配置常量扩展
+
+在 `~/.pflow/config.json` 中增加：
 
 ```json
 {
   "attention": {
-    "protect_min": 15,
-    "w_wait": 1.0,
-    "w_streak": 0.5,
-    "primary_bonus": 2.0,
-    "w_correct": 0.5,
-    "exp_power": 2.0,
-    "reminder_thresholds": [2, 5, 10]
+    // ... 原有常量 ...
+    "fog": {
+      "protect_max": 0.9,
+      "protect_min": 0.5,
+      "base_non_protect": 0.3,
+      "no_current_other": 0.7
+    }
   }
 }
 ```
 
-用户可自行调整这些参数以适应个人工作节奏。例如，希望更敏感可降低 `protect_min` 或增大 `w_wait`。
+---
+
+## 8. 计算示例（双维度）
+
+### 示例 A：主线专注 20 分钟，支线 waiting 30 分钟（无 focus 模式）
+
+- `cur = P`, `streak_cur = 20`, `focusActive=false`
+- 提醒分数：按原算法，支线 `reminder_score = 3600`（超高）
+- 迷雾分数：`maxRem = 3600`，支线 `fog = 0.3 * (1 - min(1, 3600/3600)) = 0`（完全清晰）
+- 主线 `fog = 0`，`reminder = 0`。
+- 视觉效果：支线高亮（强烈脉冲），主线无特效。用户自然被支线吸引。
+
+### 示例 B：显式专注模式，刚启动 3 分钟
+
+- `focusActive=true, focusMinutes=15, streak_cur=3`
+- 提醒分数：支线 `reminder_score = 0`（保护期内 factor=0）
+- 迷雾分数：`remain = (15-3)/15 = 0.8`，`fog = 0.9*0.8 + 0.5*0.2 = 0.72+0.1=0.82`
+- 主线 `fog=0`。
+- 视觉效果：主线清晰，支线被浓雾遮蔽。用户继续专注主线。
+
+### 示例 C：无当前任务，主线 waiting 5 分钟
+
+- `cur = nil`
+- 提醒分数：主线 `reminder_score = 25`，其他支线 0。
+- 迷雾分数：主线 `fog=0`，支线 `fog=0.7`。
+- 视觉效果：主线清晰且高亮（25 分对应中高提醒），支线灰暗。引导用户回到主线。
 
 ---
 
-## 6. 计算示例
+## 9. 与单维度版的对比优势
 
-**场景**：主线 P 专注中，`streak_P = 25` 分钟；支线 S1 等待 12 分钟，S2 等待 3 分钟；今日累计：P=40，S1=60，S2=20。常量采用默认值。
-
-- `base_P = 0`, `base_S1 = 12`, `base_S2 = 3`。
-- `streak_P = 25 ≥ 15`，`factor_S1 = (25/15)*0.5 = 0.833`，`factor_S2` 相同。主线因子为 0。
-- `adjusted_P = 0`, `adjusted_S1 = 12*0.833 = 10`, `adjusted_S2 = 3*0.833 = 2.5`。
-- 支线平均 `(60+20)/2 = 40`，主线累计 40，差值 0，无矫正。
-- `final_S1 = 10^2 = 100`（高提醒），`final_S2 = 2.5^2 = 6.25`（中提醒），`final_P = 0`。
-- 结果：S1 触发高提醒，S2 中提醒，主线无提醒。
-
-**另一种场景**：无活跃任务，主线等待 5 分钟，支线等待 10 分钟。
-- `base_P = 5`, `base_S1 = 10`。
-- `cur = null` → `adjusted_P = 5`, `adjusted_S1 = 0`。
-- `final_P = 25`（中高提醒），S1 为 0。
-- 仅主线获得提醒。
+- **保护期内不再有“分数低导致迷雾轻”的矛盾**：保护期强制高迷雾、低提醒，清晰表达“别看其他任务”。
+- **高提醒项目获得主动吸引**：不再是“仅仅不被遮住”，而是主动发光/脉冲。
+- **支持更丰富的注意力梯度**：例如一个项目提醒分数中等（微亮），另一个项目迷雾中等（半透明），用户可以自然排序。
 
 ---
 
-## 7. 相关心理模型
+## 10. 实现注意事项
 
-本算法借鉴了以下心理学理论：
-- **耶克斯-多德森定律**：中等唤醒水平表现最佳；渐进提醒逐步提升唤醒。
-- **注意恢复理论**：长时间专注后需要切换；算法在专注超时后提高支线可见度。
-- **记忆提取-放弃模型**：通过逐渐增强提醒帮助用户维持对挂起任务的元认知。
-
-详见《pflow 设计参考理论知识》文档。
+- 后端 `CalculateScores` 函数应返回结构体 `{ReminderScore float64, FogScore float64}` 的 map。
+- 前端需维护两个独立的响应式变量，分别绑定到卡片的样式（`--reminder-intensity` 和 `--fog-opacity`）。
+- 高亮动画应使用 CSS `will-change` 和 `transform` 以保证性能。
+- 迷雾层使用 `pointer-events: none` 确保点击穿透。
 
 ---
-
-*本文档对应 pflow 版本 v0.2+*

@@ -9,6 +9,22 @@
 - **`pflow claude` CLI 子命令** — 一键创建 tmux + Claude 托管会话，自动配置 statusline、提取 session 前缀、保存关联映射。支持 `-name` / `-dir` / `-force` / `-no-attach` 参数
 - **Web 终端集成（ttyd + tmux）** — 侧边栏通过 ttyd 嵌入 Web 终端，通过 Claude statusline 的 8 位 session ID 前缀关联 tmux↔Claude session，Dashboard 可自动 lookup 并打开终端交互
 - **Session 管理与映射持久化** — `internal/session` 包：tmux + ttyd 进程生命周期管理、`~/.pflow/mappings.json` 映射持久化、statusline 自动配置、capture-pane 前缀解析
+- **阶段四：提醒分数算法 + 注意力遮罩层** — 双维度设计（Highlight 高亮跑马灯 + Fog 雾化遮罩），专注模式（Focus Mode）统一遮罩覆盖非关注区域。详见 [`docs/design/02-reminder_score_algorithm.md`](./design/02-reminder_score_algorithm.md)
+
+  - **后端 `internal/attention/` 包**：
+    - `config.go` — 算法常量（CurWindow=60, ProtectMin=5, WWait=1.0, WStreak=0.5, PrimaryBonus=2.0, ExpPower=2.0）
+    - `types.go` — `ReminderInput` / `ReminderOutput` 双维度输出（highlight 0-100 + fog_pct 0-100）
+    - `score.go` — `CalculateScores()` 核心算法：当前活跃判定 → 等待基础分 → 专注干扰因子 → 今日累计矫正 → 幂函数差异化 → 雾化分计算
+    - `focus.go` — `FocusState` 专注模式状态管理（全局单例，extend/stop/snapshot）
+    - `score_test.go` — 7 个测试用例覆盖核心场景
+    - API：`reminder_scores` 字段集成到 `/api/v1/dashboard`；`POST /api/v1/focus/extend` / `POST /api/v1/focus/stop`
+
+  - **前端注意力可视层**：
+    - `web/src/types/dashboard.ts` — `ReminderScoreInfo`、`FocusState` TypeScript 类型
+    - `web/src/config/attention.ts` — 集中可调参数（MARQUEE 动画 / FOG 雾化 / FOCUS 专注模式 `dimOpacity`）
+    - `web/src/composables/useReminderScores.ts` — 双维度映射函数（`highlightToMarquee` 线性映射 speed/width/opacity；`fogPctToOpacity` 线性映射 fog opacity）
+    - PrimaryCard / SecondaryCard：`::before` 雾化遮罩 + `::after` 高亮跑马灯动画（conic-gradient + mask）
+    - 专注模式：非聚焦区域统一遮罩（header-stats / filter-bar / zone-collapse / 非聚焦卡片），遮罩颜色 `var(--n-color-target)` 与页面背景一致，opacity 统一由 `FOCUS.dimOpacity` 控制
 
 ## P0 — 核心体验，不做产品不完整
 
@@ -24,8 +40,8 @@
 
 ## P1 — 明显提效，用户高频受益
 
-- [ ] （优先）**提醒分数算法** — 综合等待时长、专注持续、今日累计、项目优先级计算每个项目的提醒分数。设计文档：[`docs/design/02-reminder_score_algorithm.md`](./design/02-reminder_score_algorithm.md)。保护期 15min 不打扰，幂函数差异化防止多任务同时高亮。
-- [ ] （优先）**注意力遮罩层** — 在项目卡片上叠加 `::before` 伪元素半透明遮罩，透明度随提醒分数动态变化。三级提醒（低/中/高），hover 降低遮罩。预留 CSS 变量接口供后续换肤系统。设计文档：[`docs/design/03-attention_mask.md`](./design/03-attention_mask.md)。
+- [X] （优先）**提醒分数算法** — 综合等待时长、专注持续、今日累计、项目优先级计算每个项目的提醒分数。设计文档：[`docs/design/02-reminder_score_algorithm.md`](./design/02-reminder_score_algorithm.md)。保护期 15min 不打扰，幂函数差异化防止多任务同时高亮。
+- [X] （优先）**注意力遮罩层** — 双维度设计：雾化遮罩（Fog，透明度随提醒分数变化）+ 高亮跑马灯（Marquee，边框动画）。专注模式统一遮罩覆盖非关注区域，颜色与页面背景一致。CSS 变量接口预留供后续换肤系统。设计文档：[`docs/design/03-attention_mask.md`](./design/03-attention_mask.md)。
 - [ ] **桌面通知 + 卡片动画** — 分数超阈值时触发浏览器 Notification API + 卡片呼吸灯/边框闪烁效果
 - [ ] **项目折叠/展开** — 记忆用户对普通项目和归档项目的折叠状态
 - [ ] Shell 补齐脚本（`pflow` 子命令 + session ID）

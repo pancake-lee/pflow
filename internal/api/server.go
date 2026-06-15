@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/pancake-lee/pflow/internal/attention"
 	"github.com/pancake-lee/pflow/internal/claude"
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
@@ -26,6 +27,7 @@ type DashboardEntry struct {
 	IsActive         bool      `json:"is_active"`
 	TrafficLight     string    `json:"traffic_light"`
 	Name             string    `json:"name"`
+	FirstActive      time.Time `json:"first_active"`
 	LastActive       time.Time `json:"last_active"`
 	LastReq          string    `json:"last_req"`          // truncated ~15 chars for table
 	LastResp         string    `json:"last_resp"`         // truncated ~15 chars for table
@@ -45,11 +47,13 @@ type ProjectRootJSON struct {
 
 // DashboardResponse is the JSON response for GET /api/v1/dashboard.
 type DashboardResponse struct {
-	Now          time.Time          `json:"now"`
-	Window       string             `json:"window"`
-	ProjectRoots []ProjectRootJSON  `json:"project_roots"`
-	Sessions     []DashboardEntry   `json:"sessions"`
-	Errors       []string           `json:"errors,omitempty"`
+	Now            time.Time                          `json:"now"`
+	Window         string                             `json:"window"`
+	ProjectRoots   []ProjectRootJSON                  `json:"project_roots"`
+	Sessions       []DashboardEntry                   `json:"sessions"`
+	ReminderScores map[string]attention.ReminderOutput `json:"reminder_scores"`
+	Focus          *attention.FocusSnapshot           `json:"focus,omitempty"`
+	Errors         []string                           `json:"errors,omitempty"`
 }
 
 // Server is the pflow HTTP API server.
@@ -80,6 +84,10 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	s.HandleFunc("GET /api/v1/project-roots", s.handleGetProjectRoots)
 	s.HandleFunc("PUT /api/v1/project-roots", s.handlePutProjectRoot)
 	s.HandleFunc("DELETE /api/v1/project-roots", s.handleDeleteProjectRoot)
+
+	// Focus mode endpoints
+	s.HandleFunc("POST /api/v1/focus/extend", s.handleFocusExtend)
+	s.HandleFunc("POST /api/v1/focus/stop", s.handleFocusStop)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -169,6 +177,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				IsActive:     s.IsActive(),
 				TrafficLight: s.TrafficLight(),
 				Name:         s.Name,
+					FirstActive:  s.FirstActive,
 				LastActive:   s.LastActive,
 				LastReq:      s.LastReq,
 				LastResp:     s.LastResp,
@@ -199,6 +208,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				IsActive:     s.IsActive(),
 				TrafficLight: s.TrafficLight(),
 				Name:         s.Name,
+					FirstActive:  s.FirstActive,
 				LastActive:   s.LastActive,
 				LastReq:      s.LastReq,
 				LastResp:     s.LastResp,
@@ -233,6 +243,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+
+	// Compute reminder scores per project.
+	resp.ReminderScores = computeReminderScores(resp.Sessions, rootsFile, resp.Now)
+
+	// Include focus state
+	if focusActive, focusedProject, focusMinutes, focusSince := attention.GetFocus().Snapshot(); focusActive {
+		resp.Focus = &attention.FocusSnapshot{Active: true, FocusedProject: focusedProject, Minutes: focusMinutes, Since: focusSince.Format(time.RFC3339)}
 	}
 
 	if len(errors) > 0 {
@@ -541,6 +559,199 @@ func truncate8(s string) string {
 		return s[:8]
 	}
 	return s
+}
+
+// computeReminderScores groups sessions by matched_root (or project dir),
+// extracts per-project metrics (waiting, streak, total), and calls the
+// attention score algorithm. Returns a map of project key → ReminderOutput.
+func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFile, now time.Time) map[string]attention.ReminderOutput {
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	// Build project root priority lookup
+	primarySet := make(map[string]bool)
+	if rootsFile != nil {
+		for _, r := range rootsFile.Roots {
+			if r.Priority == project.PriorityPrimary {
+				primarySet[r.Path] = true
+			}
+		}
+	}
+
+	// Group sessions by project key (matched_root or project dir)
+	type sessionMetrics struct {
+		sessions   []DashboardEntry
+		isPrimary  bool
+	}
+	groups := make(map[string]*sessionMetrics)
+	var groupOrder []string
+
+	for _, s := range sessions {
+		key := s.MatchedRoot
+		if key == "" {
+			key = s.Project
+		}
+		if key == "" {
+			continue
+		}
+
+		if _, ok := groups[key]; !ok {
+			groups[key] = &sessionMetrics{isPrimary: primarySet[key]}
+			groupOrder = append(groupOrder, key)
+		}
+		groups[key].sessions = append(groups[key].sessions, s)
+	}
+
+	// Compute per-project metrics
+	plogger.Infof("[api] ======== Extracting per-project metrics ========")
+	inputs := make(map[string]attention.ReminderInput, len(groups))
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	for key, gm := range groups {
+		plogger.Infof("[api] project: %s (primary=%v, %d sessions)", key, gm.isPrimary, len(gm.sessions))
+		var waitingMax float64
+		var streakEstimate float64
+		var totalToday float64
+		var lastActiveTime time.Time
+
+		for _, s := range gm.sessions {
+			// waiting: max duration of waiting sessions in minutes
+			var waitingMin float64
+			if s.Status == "waiting" {
+				waitingMin = now.Sub(s.LastActive).Minutes()
+				if waitingMin > waitingMax {
+					waitingMax = waitingMin
+				}
+			}
+
+			// Track most recent activity
+			if s.LastActive.After(lastActiveTime) {
+				lastActiveTime = s.LastActive
+			}
+
+			// Estimate individual session contribution to today's total
+			var sessionContribution float64
+			if s.FirstActive.After(todayStart) || s.LastActive.After(todayStart) {
+				start := s.FirstActive
+				if start.Before(todayStart) {
+					start = todayStart
+				}
+				end := s.LastActive
+				if end.After(now) {
+					end = now
+				}
+				if end.After(start) {
+					sessionContribution = end.Sub(start).Minutes()
+					totalToday += sessionContribution
+				}
+			}
+			plogger.Infof("[api]   session %s: status=%s waiting=%.0fm contrib=%.0fm",
+				truncate8(s.SessionID), s.Status, waitingMin, sessionContribution)
+		}
+
+		// Cap waiting at 120 minutes (2 hours) — beyond that the
+		// session is likely abandoned rather than actively waiting.
+		uncappedWaiting := waitingMax
+		if waitingMax > 120 {
+			waitingMax = 120
+		}
+
+		// Estimate streak (continuous focus minutes) from busy sessions.
+		//
+		// NOTE: streak is a lower bound — we can only measure "agent busy"
+		// duration (Claude processing after user submits input). We cannot
+		// observe user thinking time or prompt-writing time in the CLI.
+		// When the server just started, historical streak data is missing;
+		// the score algorithm applies a floor based on last_active recency
+		// to avoid falsely triggering the protection period.
+		hasBusy := false
+		for _, s := range gm.sessions {
+			if s.Status == "busy" {
+				hasBusy = true
+				break
+			}
+		}
+		if hasBusy {
+			// Estimate streak from the earliest busy session's first
+			// activity today. The "status: busy" metadata field is
+			// authoritative; last_active may be slightly stale because
+			// the history file reflects the last user message, not the
+			// current processing timestamp.
+			var earliestBusy time.Time
+			for _, s := range gm.sessions {
+				if s.Status == "busy" {
+					if earliestBusy.IsZero() || s.FirstActive.Before(earliestBusy) {
+						earliestBusy = s.FirstActive
+					}
+				}
+			}
+			if !earliestBusy.IsZero() {
+				if earliestBusy.Before(todayStart) {
+					earliestBusy = todayStart
+				}
+				streakEstimate = now.Sub(earliestBusy).Minutes()
+				// Cap at 120 minutes as reasonable max session
+				if streakEstimate > 120 {
+					streakEstimate = 120
+				}
+			} else {
+				// Fallback: busy but no first_active — assume 5min minimum
+				streakEstimate = 5
+			}
+		}
+
+		inputs[key] = attention.ReminderInput{
+			Waiting:    waitingMax,
+			Streak:     streakEstimate,
+			Total:      totalToday,
+			LastActive: lastActiveTime,
+			IsPrimary:  gm.isPrimary,
+		}
+		plogger.Infof("[api]   => input: waiting=%.0fm(capped from %.0fm) streak=%.0fm total=%.0fm last=%s",
+			waitingMax, uncappedWaiting, streakEstimate, totalToday,
+			lastActiveTime.Format("15:04:05"))
+	}
+
+	focusActive, focusedProject, focusMinutes, _ := attention.GetFocus().Snapshot()
+	return attention.CalculateScores(inputs, now, focusActive, focusedProject, focusMinutes)
+}
+
+// ── Focus mode handlers ──────────────────────────────────────────
+
+type focusResponse struct {
+	OK      bool    `json:"ok"`
+	Active  bool    `json:"active"`
+	Minutes float64 `json:"minutes"`
+}
+
+// handleFocusExtend handles POST /api/v1/focus/extend.
+// Activates focus mode for the given project and adds 15 minutes to the
+// protection window. Each click extends the focus by 15 minutes.
+// Request body: {"project": "/path/to/project"}
+func (s *Server) handleFocusExtend(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Project string `json:"project"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Allow empty body for backward compatibility with global header focus button
+		req.Project = ""
+	}
+	if req.Project == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project is required"})
+		return
+	}
+	active, minutes := attention.GetFocus().Extend(req.Project)
+	plogger.Infof("api: focus extend project=%s → active=%v minutes=%.0f", req.Project, active, minutes)
+	writeJSON(w, http.StatusOK, focusResponse{OK: true, Active: active, Minutes: minutes})
+}
+
+// handleFocusStop handles POST /api/v1/focus/stop.
+// Deactivates focus mode and resets the protection window.
+func (s *Server) handleFocusStop(w http.ResponseWriter, r *http.Request) {
+	active, minutes := attention.GetFocus().Stop()
+	plogger.Infof("api: focus stop → active=%v minutes=%.0f", active, minutes)
+	writeJSON(w, http.StatusOK, focusResponse{OK: true, Active: active, Minutes: minutes})
 }
 
 func writeTerminalError(w http.ResponseWriter, msg string, code int) {
