@@ -146,9 +146,35 @@ func setupStatusline(force bool) error {
 
 // ── Claude session management ──────────────────────────────────────
 
-// claudePrefixRegex matches the 8-char hex session ID prefix in the status line.
-// Format: "  3ca06c7d | model | ctx ..." (may have leading whitespace).
-var claudePrefixRegex = regexp.MustCompile(`(?m)^\s*([a-f0-9]{8})\s*[| ]`)
+// claudePrefixRegex matches the 8-char hex session ID prefix in a Claude
+// status line. Format: "3ca06c7d | model | ctx ...".
+//
+// The regex requires a `|` separator after the hex prefix — this avoids
+// false positives from git hashes, hex dumps, or other 8-char hex sequences
+// that appear in conversation output.
+//
+// When a pane contains multiple statuslines (e.g. from /clear leaving old
+// output in scrollback), only the bottom-most (visually latest) one reflects
+// the currently running Claude session. Use extractClaudePrefix() which
+// scans lines from bottom to top.
+var claudePrefixRegex = regexp.MustCompile(`^\s*([a-fA-F0-9]{8})\s*\|\s`)
+
+// extractClaudePrefix scans pane text from bottom to top and returns the
+// first 8-char hex prefix found. Scanning bottom-up ensures we find the
+// current statusline even when old statuslines or false-positive matches
+// exist higher up in the scrollback.
+func extractClaudePrefix(text string) string {
+	lines := strings.Split(text, "\n")
+	// Scan from bottom (last line) upwards — the current statusline is
+	// always at the bottom of the visible pane.
+	for i := len(lines) - 1; i >= 0; i-- {
+		m := claudePrefixRegex.FindStringSubmatch(lines[i])
+		if m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
 
 // captureClaudePrefix uses tmux capture-pane to extract the 8-char Claude
 // session ID prefix from the status line within a tmux session.
@@ -168,10 +194,10 @@ func captureClaudePrefix(tmuxName string, maxWait time.Duration) (string, error)
 		}
 
 		text := string(out)
-		matches := claudePrefixRegex.FindStringSubmatch(text)
-		if len(matches) >= 2 {
-			plogger.Debugf("captureClaudePrefix: attempt %d: found prefix=%s", attempt, matches[1])
-			return matches[1], nil
+		prefix := extractClaudePrefix(text)
+		if prefix != "" {
+			plogger.Debugf("captureClaudePrefix: attempt %d: found prefix=%s", attempt, prefix)
+			return prefix, nil
 		}
 
 		// Log first attempt and every 5th to see what's on screen

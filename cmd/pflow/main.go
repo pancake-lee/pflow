@@ -355,6 +355,27 @@ func runServeCmd(args []string) {
 		os.Exit(0)
 	}()
 
+	// Background mapping sync: periodically re-capture Claude session ID
+	// prefixes from live tmux sessions and update the tmux↔Claude mapping.
+	// This handles /clear, /resume, and Claude restarts which change the
+	// session ID within the same tmux session.
+	go func() {
+		// Wait for initial startup before first sync
+		time.Sleep(5 * time.Second)
+
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			updated, err := session.SyncMappings()
+			if err != nil {
+				plogger.Debugf("bg sync error: %v", err)
+			} else if updated > 0 {
+				plogger.Infof("bg sync: %d mapping(s) updated", updated)
+			}
+		}
+	}()
+
 	if err := http.ListenAndServe(addr, server); err != nil {
 		log.Fatalf("server: %v", err)
 	}

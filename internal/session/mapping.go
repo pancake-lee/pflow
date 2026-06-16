@@ -213,3 +213,63 @@ func LoadMappings() ([]Mapping, error) {
 	}
 	return store.Mappings, nil
 }
+
+// SyncMappings refreshes all tmux↔Claude session mappings by re-capturing
+// the current Claude session ID prefix from each live tmux session.
+//
+// This handles the case where /clear or /resume (or a Claude restart)
+// changes the Claude session ID while the tmux session remains the same.
+// The old mapping is updated to point to the new Claude session prefix,
+// and stale mappings (whose tmux sessions no longer exist) are removed.
+//
+// Returns the number of mappings whose prefix was updated.
+func SyncMappings() (int, error) {
+	mm, err := newMappingManager()
+	if err != nil {
+		return 0, err
+	}
+
+	store, err := mm.load()
+	if err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for i := range store.Mappings {
+		m := &store.Mappings[i]
+		if !tmuxSessionExists(m.TmuxName) {
+			continue // will be cleaned up by cleanStale below
+		}
+
+		// Capture current prefix from the live tmux session.
+		// Use a short timeout — if Claude is not running or the
+		// statusline isn't visible within 3s, skip this session.
+		currentPrefix, _ := captureClaudePrefix(m.TmuxName, 3*time.Second)
+		if currentPrefix == "" {
+			// Claude might not be running, or statusline not visible
+			continue
+		}
+
+		if currentPrefix != m.ClaudePrefix {
+			plogger.Infof("sync: tmux=%s prefix changed: %s → %s",
+				m.TmuxName, m.ClaudePrefix, currentPrefix)
+			m.ClaudePrefix = currentPrefix
+			m.CreatedAt = time.Now()
+			updated++
+		}
+	}
+
+	if updated > 0 {
+		if err := mm.save(store); err != nil {
+			return updated, fmt.Errorf("sync: save failed after %d updates: %w", updated, err)
+		}
+		plogger.Infof("sync: updated %d mapping(s)", updated)
+	}
+
+	// Also remove mappings for tmux sessions that no longer exist.
+	if cleaned, _ := mm.cleanStale(); cleaned > 0 {
+		plogger.Infof("sync: cleaned %d stale mapping(s)", cleaned)
+	}
+
+	return updated, nil
+}

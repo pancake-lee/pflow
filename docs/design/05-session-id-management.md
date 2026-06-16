@@ -264,3 +264,139 @@ pflow 的设计理念是"路径即项目"——不使用额外的项目 ID 或�
 - **mappings.json 中存储 `work_dir`** 而不是 project name
 - **仪表盘通过 `work_dir` 匹配 project roots**（`project.MatchRootFromList`）
 - 一个目录可以有多个历史 Claude session（每个有不同 session ID），但都映射到同一个 tmux 环境
+
+---
+
+## 9. 后台映射同步
+
+### 9.1 动机
+
+`/clear`、`/resume` 或 Claude 重启会导致 Claude Session ID 变更，但 tmux session 保持不变。`SyncMappings()` 定期从每个 tmux pane 重新捕获 statusline 中的 8-char prefix，检测到变更时自动更新 `mappings.json`，使 Web UI 的终端绑定保持正确。
+
+### 9.2 同步流程
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ serve 启动后 5s → 启动后台 goroutine                              │
+│                                                                  │
+│ 每 15s 一次循环：                                                  │
+│   1. 加载 mappings.json 中所有映射                                  │
+│   2. 对每个活着的 tmux session：                                    │
+│      capture-pane (3s 超时) → 提取当前 prefix                      │
+│      如果 prefix 非空且与保存的不同 → 更新 mapping                  │
+│   3. 如果有更新 → 保存到 mappings.json                              │
+│   4. 清理已死 tmux 的过期映射                                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 9.3 关键参数
+
+| 参数 | 值 | 理由 |
+|------|-----|------|
+| 同步间隔 | 15s | 平衡及时性和资源消耗 |
+| 捕获超时 | 3s | Claude 运行时 statusline 立即可见；超时表示 Claude 未运行 |
+| 启动延迟 | 5s | 等待 server 完全就绪 |
+
+---
+
+## 10. 手动测试用例
+
+> 以下用例依赖真实的 tmux 和 Claude Code 环境，需手动执行。
+
+### 前置条件
+
+```bash
+# 1. 构建并启动 pflow server
+make build
+./bin/pflow serve -port 8080
+
+# 2. 在另一个终端中，用 pflow 启动一个 Claude session
+./bin/pflow claude -dir /path/to/some/project
+
+# 3. 打开浏览器访问 http://localhost:8080，确认 Dashboard 可见
+#    展开该项目的 session detail，确认 Terminal 按钮可用
+```
+
+### TC-1: `/clear` 后映射自动更新
+
+260616 测试通过
+
+**目的**：验证 `/clear` 导致 session ID 变更后，后台 sync 自动更新映射，Dashboard 中新 session 的 Terminal 按钮可用。
+
+| 步骤 | 操作 | 预期结果 |
+|------|------|----------|
+| 1 | 在 tmux 中的 Claude 里记下当前 session ID（statusline 第一列，如 `3ca06c7d`） | — |
+| 2 | 在 Claude 中输入 `/clear` 并回车 | Claude 开始新对话，statusline 显示新的 8-char prefix |
+| 3 | 等待最多 15 秒 | 后台 sync 检测到 prefix 变更，日志输出：`sync: tmux=pflow-xxx prefix changed: <旧> → <新>` |
+| 4 | 刷新 Dashboard 页面 | 旧 session（`/clear` 前）的 `has_terminal` 变为 `false`；新 session 的 `has_terminal` 变为 `true` |
+| 5 | 点击新 session 的 Terminal 按钮 | 能正常打开 Web Terminal，连接到同一个 tmux session |
+
+### TC-2: `/resume` 后映射自动更新
+
+260616 测试通过
+
+**目的**：验证 `/resume` 切换回历史 session 后，映射也能正确更新。
+
+| 步骤 | 操作 | 预期结果 |
+|------|------|----------|
+| 1 | 在 Claude 中执行 `/resume`，选择一个不同的历史 session | Claude 切换到该历史 session，statusline 显示对应的 8-char prefix |
+| 2 | 等待最多 15 秒 | 后台 sync 检测到 prefix 变更并更新映射 |
+| 3 | 刷新 Dashboard | 当前活跃 session 获得 `has_terminal: true`，之前的 session 失去绑定 |
+
+### TC-3: Claude 退出后重启
+
+**目的**：验证 Claude 进程退出后重新启动，新 session 能自动绑定到同一 tmux。
+
+| 步骤 | 操作 | 预期结果 |
+|------|------|----------|
+| 1 | 在 Claude 中按 `Ctrl+D`（或输入 `/exit`）退出 Claude | tmux session 仍存活（bash 还在），但 Claude 已退出 |
+| 2 | 在 tmux 中重新运行 `claude` | 新的 Claude 进程启动，statusline 显示新的 prefix |
+| 3 | 等待最多 15 秒 | 后台 sync 检测到 prefix 变更，更新映射 |
+| 4 | 刷新 Dashboard | 新 session 的 Terminal 可用；如果旧 session 仍在 Dashboard 中（如窗口期内），其 `has_terminal` 为 `false` |
+
+### TC-4: 无 Claude 运行时不误报
+
+**目的**：验证当 tmux session 存活但 Claude 未运行时，sync 不会误删映射或报错。
+
+| 步骤 | 操作 | 预期结果 |
+|------|------|----------|
+| 1 | 退出 Claude（`Ctrl+D`），但保持 tmux session | tmux session 存在，Claude 不在运行 |
+| 2 | 等待 15 秒，观察 pflow server 日志 | 无错误日志；sync 因 `captureClaudePrefix` 返回空而跳过该 session |
+| 3 | 在 tmux 中重新启动 `claude` | Claude 运行，statusline 显示新的 prefix |
+| 4 | 等待 15 秒 | 映射被更新为新 prefix，无异常 |
+
+### TC-5: 多 tmux session 各自独立同步
+
+**目的**：验证同时管理多个项目时，每个项目的映射独立更新，互不干扰。
+
+| 步骤 | 操作 | 预期结果 |
+|------|------|----------|
+| 1 | 用 `pflow claude -dir /path/to/project-a` 启动项目 A 的 Claude | 创建 tmux session `pflow-project-a`，prefix 为 A 的 session ID |
+| 2 | 用 `pflow claude -dir /path/to/project-b` 启动项目 B 的 Claude | 创建 tmux session `pflow-project-b`，prefix 为 B 的 session ID |
+| 3 | 在项目 A 的 tmux 中执行 `/clear` | 仅项目 A 的 Claude session ID 变更 |
+| 4 | 等待 15 秒 | 仅 `pflow-project-a` 的映射被更新；`pflow-project-b` 的映射不变 |
+| 5 | 刷新 Dashboard | 两个项目的 Terminal 按钮均正确指向各自的 tmux session |
+
+### TC-6: 映射持久化跨 server 重启
+
+**目的**：验证 pflow server 重启后，映射仍能正确恢复和同步。
+
+| 步骤 | 操作 | 预期结果 |
+|------|------|----------|
+| 1 | 确认已有至少一个活跃的 pflow tmux session（Claude 在运行） | — |
+| 2 | 停止 pflow server（`Ctrl+C`） | — |
+| 3 | 重新启动 `./bin/pflow serve -port 8080` | server 启动，5s 后首次 sync |
+| 4 | 等待首个 sync 周期完成 | 日志显示从 `mappings.json` 恢复了映射，且 live capture 确认 prefix 未变（无更新） |
+| 5 | 打开 Dashboard | Terminal 按钮正常工作 |
+
+### 日志观察要点
+
+执行上述用例时，关注 pflow server 的日志输出（默认写入 `./logs/` 目录）：
+
+```
+sync: tmux=pflow-xxx prefix changed: 3ca06c7d → a1b2c3d4    # prefix 变更
+sync: updated 1 mapping(s)                                    # 更新计数
+sync: cleaned 0 stale mapping(s)                              # 过期清理计数
+```
+
+如果 sync 周期内无变更，则不输出日志（静默）。
