@@ -14,6 +14,9 @@ import type { DashboardEntry } from '../types/dashboard'
 import type { SessionGroup } from './GroupCard.vue'
 import { formatSince, truncate, escapeNewlines } from '../composables/format'
 import { highlightToMarquee, fogPctToOpacity, FOG_CONFIG, FOCUS_CONFIG } from '../composables/useReminderScores'
+import { STAR_BONUS_MINUTES } from '../config/attention'
+
+const starTooltip = `星标后只要闲置时间比其他对话不长于 ${STAR_BONUS_MINUTES}min 即可保持主要对话`
 
 function agentIcon(agentType: string): Component {
   return agentType === 'claude' ? DesktopOutline : HardwareChipOutline
@@ -34,6 +37,7 @@ const props = defineProps<{
   group: SessionGroup | null
   projectOptions: Array<{ label: string; value: string }>
   mainSession: DashboardEntry | null
+  starredSessionId: string | null
   disabled: boolean
   index: number
   highlight?: number
@@ -47,12 +51,16 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   selectProject: [path: string]
-  setMainSession: [sessionId: string]
+  starSession: [sessionId: string]
   rowClick: [row: DashboardEntry]
   openTerminal: [row: DashboardEntry]
   focusExtend: [projectKey: string]
   focusStop: []
 }>()
+
+const isMainStarred = computed(() =>
+  !!props.mainSession && props.mainSession.session_id === props.starredSessionId,
+)
 
 const otherSessions = computed(() => {
   if (!props.group) return []
@@ -181,9 +189,11 @@ const tableColumns: DataTableColumns<DashboardEntry> = [
       if (row.session_id === '-') return h('span', '—')
       return h('div', { style: { display: 'flex', gap: '2px', alignItems: 'center' } }, [
         h(NButton, {
-          size: 'tiny', quaternary: true, title: 'Set as main session',
-          onClick: (e: MouseEvent) => { e.stopPropagation(); emit('setMainSession', row.session_id) },
-        }, { default: () => '⭐' }),
+          size: 'tiny',
+          quaternary: true,
+          title: row.session_id === props.starredSessionId ? '取消星标' : starTooltip,
+          onClick: (e: MouseEvent) => { e.stopPropagation(); emit('starSession', row.session_id) },
+        }, { default: () => row.session_id === props.starredSessionId ? '🌟' : '⭐' }),
         row.has_terminal
           ? h(NButton, {
             size: 'tiny', quaternary: true, title: 'Open terminal',
@@ -229,6 +239,14 @@ function rowProps(row: DashboardEntry) {
           <NIcon :size="14" :component="agentIcon(mainSession.agent_type)" />
           <span class="h-agent">{{ mainSession.agent_type === 'claude' ? 'Claude' : 'Hermes' }}</span>
           <code class="h-sid">{{ mainSession.session_id }}</code>
+          <NButton
+            size="tiny"
+            quaternary
+            :title="isMainStarred ? '取消星标' : starTooltip"
+            @click.stop="emit('starSession', mainSession.session_id)"
+          >
+            {{ isMainStarred ? '🌟' : '⭐' }}
+          </NButton>
           <NButton
             v-if="mainSession.has_terminal"
             size="tiny"

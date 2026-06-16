@@ -46,6 +46,7 @@ import SecondaryCard from '../components/SecondaryCard.vue'
 import type { SessionGroup } from '../components/GroupCard.vue'
 import type { ReminderScoreInfo } from '../types/dashboard'
 import { FOCUS_CONFIG } from '../composables/useReminderScores'
+import { STAR_BONUS_MINUTES } from '../config/attention'
 
 // ── State ────────────────────────────────────────────────────────
 
@@ -322,17 +323,31 @@ const unmatchedGroups = computed(() =>
 )
 
 // ── Main session state (frontend-only, per-group) ──────────────
+// Star = user preference mark, NOT a hard override. The starred session
+// gets STAR_BONUS_MINUTES added to its last_active when competing for
+// main session — a "tolerance window", not a permanent assignment.
 
-const mainSessionIds = ref<Record<string, string>>({})
+const starredSessionIds = ref<Record<string, string>>({})
 
 function getMainSession(group: SessionGroup | null): DashboardEntry | null {
   if (!group || group.sessions.length === 0) return null
-  const mainId = mainSessionIds.value[group.key]
-  if (mainId) {
-    const found = group.sessions.find(s => s.session_id === mainId)
-    if (found) return found
+
+  let best: DashboardEntry | null = null
+  let bestTime = -Infinity
+
+  for (const s of group.sessions) {
+    const base = new Date(s.last_active).getTime()
+    const bonus = s.session_id === starredSessionIds.value[group.key]
+      ? STAR_BONUS_MINUTES * 60_000
+      : 0
+    const effective = base + bonus
+    if (effective > bestTime) {
+      bestTime = effective
+      best = s
+    }
   }
-  return group.sessions.find(s => s.is_active) || group.sessions[0]
+
+  return best
 }
 
 const primaryMainSession = computed(() => getMainSession(primaryGroup.value))
@@ -465,10 +480,20 @@ function handleCheckChange(group: SessionGroup, checked: boolean) {
   }
 }
 
-// ── Main session control ────────────────────────────────────────
+// ── Star session control ────────────────────────────────────────
 
-function handleSetMainSession(groupKey: string, sessionId: string) {
-  mainSessionIds.value = { ...mainSessionIds.value, [groupKey]: sessionId }
+function handleStarSession(groupKey: string, sessionId: string) {
+  if (starredSessionIds.value[groupKey] === sessionId) {
+    // Unstar: clicking the already-starred session
+    const { [groupKey]: _, ...rest } = starredSessionIds.value
+    starredSessionIds.value = rest
+  } else {
+    starredSessionIds.value = { ...starredSessionIds.value, [groupKey]: sessionId }
+  }
+}
+
+function getStarredSessionId(groupKey: string): string | null {
+  return starredSessionIds.value[groupKey] ?? null
 }
 
 // ── Row click → detail drawer ───────────────────────────────────
@@ -804,6 +829,7 @@ function rowProps(row: DashboardEntry) {
               <PrimaryCard
                 :group="primaryGroup"
                 :main-session="primaryMainSession"
+                :starred-session-id="primaryGroup ? getStarredSessionId(primaryGroup.key) : null"
                 :disabled="projectRootLoading"
                 :highlight="primaryGroup ? (getGroupScore(primaryGroup.key)?.highlight ?? 0) : 0"
                 :fog-pct="primaryGroup ? (getGroupScore(primaryGroup.key)?.fog_pct ?? 0) : 0"
@@ -812,7 +838,7 @@ function rowProps(row: DashboardEntry) {
                 :focus-focused-project="focusFocusedProject"
                 :focus-loading="focusLoading"
                 :focus-countdown="focusCountdown"
-                @set-main-session="(sid: string) => primaryGroup && handleSetMainSession(primaryGroup.key, sid)"
+                @star-session="(sid: string) => primaryGroup && handleStarSession(primaryGroup.key, sid)"
                 @row-click="openDetail"
                 @open-terminal="handleOpenTerminalFromCard"
                 @select-project="handleSelectPrimary"
@@ -830,6 +856,7 @@ function rowProps(row: DashboardEntry) {
                   :group="group"
                   :project-options="projectSelectOptions"
                   :main-session="group ? getMainSession(group) : null"
+                  :starred-session-id="group ? getStarredSessionId(group.key) : null"
                   :disabled="projectRootLoading"
                   :index="idx"
                   :highlight="group ? (getGroupScore(group.key)?.highlight ?? 0) : 0"
@@ -840,7 +867,7 @@ function rowProps(row: DashboardEntry) {
                   :focus-loading="focusLoading"
                   :focus-countdown="focusCountdown"
                   @select-project="handleSelectSecondary"
-                  @set-main-session="(sid: string) => group && handleSetMainSession(group.key, sid)"
+                  @star-session="(sid: string) => group && handleStarSession(group.key, sid)"
                   @row-click="openDetail"
                   @open-terminal="handleOpenTerminalFromCard"
                   @focus-extend="(key: string) => focusExtend(key)"

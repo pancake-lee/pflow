@@ -83,6 +83,19 @@ export const FOG = {
   debugFogPct: -1,
 } as const
 
+// ── Main session star bonus ─────────────────────────────────────────
+
+/**
+ * 主 Session 星标加成（分钟）。
+ *
+ * 被 ⭐ 标记的 session 在竞争主 Session 时，其 last_active 会
+ * 获得此分钟数的虚拟偏移。只要该 session 的闲置时间不比其他
+ * session 长超过此值，它就会保持为主 Session。
+ *
+ * 设为 0 则星标无效果（等效于纯按 last_active 排序）。
+ */
+export const STAR_BONUS_MINUTES = 30
+
 // ── Focus mode (专注模式 统一遮罩) ───────────────────────────────────
 
 export const FOCUS = {
