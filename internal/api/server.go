@@ -201,7 +201,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for _, s := range hermesResult.Sessions {
 			entry := DashboardEntry{
-				SessionID:    truncate8(s.SessionID),
+				SessionID:    hermes.SuffixID(s.SessionID, 8),
 				AgentType:    "hermes",
 				Project:      s.Project,
 				Status:       hermesRawStatus(s),
@@ -266,8 +266,9 @@ func parseQueryParams(r *http.Request) config.ScanOptions {
 	q := r.URL.Query()
 
 	opts := config.ScanOptions{
-		Window:      config.DefaultWindow,
-		MaxInactive: config.DefaultMaxInactive,
+		Window:       config.DefaultWindow,
+		MaxInactive:  config.DefaultMaxInactive,
+		SourceFilter: config.DefaultHermesSourceFilter,
 	}
 
 	if w := q.Get("window"); w != "" {
@@ -280,6 +281,10 @@ func parseQueryParams(r *http.Request) config.ScanOptions {
 		if n, err := strconv.Atoi(m); err == nil && n >= 0 {
 			opts.MaxInactive = n
 		}
+	}
+
+	if s := q.Get("source"); s != "" {
+		opts.SourceFilter = s
 	}
 
 	return opts

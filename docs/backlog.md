@@ -27,7 +27,7 @@
 | Pending  | 19   | 通知系统   | 桌面通知                              | 分数超阈值时触发浏览器 Notification API                                                                                                                  |
 | Pending  | 20   | 智能分析   | 军情哨主动推送                        | 后台守护进程主动推送提醒（需守护进程支持）                                                                                                               |
 | Pending  | 21   | 智能分析   | 统帅偏好学习                          | 推送频率自适应，根据用户行为学习偏好                                                                                                                     |
-| Pending  | 22   | 扩展能力   | Hermes Last Resp 提取                 | 接入 `~/.hermes/state.db` SQLite，查询 messages 表获取 assistant 回复内容，填充 `LastResp` 字段（当前仅提取了 `LastReq`）                          |
+| Done     | 22   | 扩展能力   | Hermes 会话扫描系统                   | 通过 `hermes sessions export` CLI 获取全量会话数据（含 LastReq/LastResp/时间戳/CWD），支持 source 过滤（默认排除 cron）、时间窗口过滤、项目匹配       |
 | Pending  | 23   | 扩展能力   | 双层换肤系统                          | 内容层 + 遮罩层独立换肤，支持社区皮肤。设计文档已完成（[`99-dual_layer_skinning_system.md`](./design/99-dual_layer_skinning_system.md)）                  |
 | Pending  | 24   | 扩展能力   | Web AI 平台状态监控                   | 浏览器扩展监控 DeepSeek/Kimi/ChatGPT 等平台的 AI 对话状态。设计文档已完成（[`99-ai-chat-web-attach.md`](./design/99-ai-chat-web-attach.md)）              |
 | Pending  | 25   | 扩展能力   | 跨设备同步                            | 手机/平板看状态、点批准                                                                                                                                  |
@@ -45,9 +45,15 @@
 
 双维度设计：雾化遮罩（Fog，透明度随提醒分数变化）+ 高亮跑马灯（Marquee，边框动画）。专注模式统一遮罩覆盖非关注区域，颜色与页面背景一致。CSS 变量接口预留供后续换肤系统。设计文档：[`docs/design/03-attention_mask.md`](./design/03-attention_mask.md)。
 
-### 22. Hermes Last Resp 提取
+### 22. Hermes 会话扫描系统
 
-接入 `~/.hermes/state.db` SQLite，查询 messages 表获取 assistant 回复内容，填充 `LastResp` 字段。当前仅从 request_dump body 提取了 `LastReq`。
+**已实现。** 通过 `hermes sessions export` CLI 获取全量会话数据（替代原计划的 SQLite 直读方案），以 JSONL 格式导出含 messages、system_prompt、last_active、source 等完整信息。支持：
+- **会话 ID 去重**：hermes ID 前缀 8 位为日期（重复），改取后缀 8/16 位作为唯一标识（与 `hermes sessions list` 行为一致）
+- **Source 过滤**：`--source` 参数按来源类型过滤（cli/weixin/cron），默认排除 cron
+- **时间窗口过滤**：`-window` 参数限制最近活跃的会话
+- **项目匹配**：从 system_prompt 提取 CWD，匹配到对应项目卡片
+- **LastReq/LastResp 提取**：从 export 的 messages 数组提取最后一条 user/assistant 消息
+- **Gateway 状态富化**：结合 sessions.json 补充 suspended/running 状态和 token 统计
 
 ### 23. 双层换肤系统
 

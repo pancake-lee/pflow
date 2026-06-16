@@ -15,6 +15,10 @@ const DefaultWindow = 24 * time.Hour
 // 0 means no limit (show all).
 const DefaultMaxInactive = 0
 
+// DefaultHermesSourceFilter is the default source filter for hermes sessions.
+// Excludes cron sessions by default; use empty string to show all.
+const DefaultHermesSourceFilter = "cli,weixin"
+
 // ScanOptions configures a scan for agent activity.
 type ScanOptions struct {
 	// Window is the time window for filtering sessions by last activity.
@@ -25,6 +29,11 @@ type ScanOptions struct {
 	// are shown per project. Active sessions are always shown in full.
 	// 0 means no limit.
 	MaxInactive int
+
+	// SourceFilter is a comma-separated list of source types to include.
+	// Empty means all sources. Example: "cli,weixin" excludes cron.
+	// Known hermes sources: cli, cron, weixin.
+	SourceFilter string
 }
 
 // ParseWindow parses a human-readable time window string like "1h", "3h", "1d",

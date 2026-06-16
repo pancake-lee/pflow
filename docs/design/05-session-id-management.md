@@ -345,6 +345,8 @@ make build
 
 ### TC-3: Claude 退出后重启
 
+260616 测试通过
+
 **目的**：验证 Claude 进程退出后重新启动，新 session 能自动绑定到同一 tmux。
 
 | 步骤 | 操作 | 预期结果 |
@@ -355,6 +357,8 @@ make build
 | 4 | 刷新 Dashboard | 新 session 的 Terminal 可用；如果旧 session 仍在 Dashboard 中（如窗口期内），其 `has_terminal` 为 `false` |
 
 ### TC-4: 无 Claude 运行时不误报
+
+260616 测试通过
 
 **目的**：验证当 tmux session 存活但 Claude 未运行时，sync 不会误删映射或报错。
 
@@ -367,6 +371,8 @@ make build
 
 ### TC-5: 多 tmux session 各自独立同步
 
+260616 测试通过
+
 **目的**：验证同时管理多个项目时，每个项目的映射独立更新，互不干扰。
 
 | 步骤 | 操作 | 预期结果 |
@@ -378,6 +384,8 @@ make build
 | 5 | 刷新 Dashboard | 两个项目的 Terminal 按钮均正确指向各自的 tmux session |
 
 ### TC-6: 映射持久化跨 server 重启
+
+260616 测试通过
 
 **目的**：验证 pflow server 重启后，映射仍能正确恢复和同步。
 

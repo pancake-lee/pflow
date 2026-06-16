@@ -1,6 +1,6 @@
 # Hermes Agent 集成调研
 
-> 周期：2026-06-11 | 状态：✅ 已完成调研，Last Resp 待实现
+> 周期：2026-06-11 ~ 2026-06-16 | 状态：✅ 会话扫描系统已实现
 
 ## 集成可行性
 
@@ -87,8 +87,57 @@
 ### 关键结论
 
 - Hermes **没有**原生的 cwd/project 字段（sessions.json 不含、无 `.hermes/config` project 设置）
-- **cwd 的唯一可靠来源**：request_dump 文件内 system prompt 中的 `Current working directory: <path>` 行
+- **cwd 的可靠来源**：
+  - 主：`hermes sessions export` 中 system_prompt 的 `Current working directory:` 行 ✅
+  - 辅：request_dump 文件（用于 export 中不含 cwd 的旧 session fallback）✅
   - CLI session → 真实项目目录（如 `/root/code/pancake`）✅ 已实现提取
   - weixin/cron session → `/`（无意义，回退 platform 名）✅ 已实现
 - cron job 配置中 `workdir` 字段为 `null`（当前未使用），后续若 cron 配置了 workdir 可优先使用
-- assistant 回复内容在 `state.db` SQLite 中（`messages` 表），Last Resp 暂未接入（见 backlog P2）
+- assistant 回复内容已通过 `hermes sessions export` 的 messages 数组提取 ✅
+
+---
+
+## 实现记录（2026-06-16）
+
+### 方案选择
+
+Hermes 会话扫描曾有三个可行方案：
+| 方案 | 数据源 | 优点 | 缺点 |
+|------|--------|------|------|
+| A: 文件扫描 | sessions.json + request_dump | 不依赖外部命令 | LastResp 缺失，时间戳不准 |
+| B: SQLite | `~/.hermes/state.db` | 完整消息历史 | 引入 `modernc.org/sqlite` 依赖，需 Go ≥ 1.25，解析内部格式 |
+| C: CLI | `hermes sessions export` | 最完整、最可靠 | 依赖 hermes 命令 |
+
+**最终选择 C**，原因：
+- CLI 提供的 JSONL 输出包含所有需要的数据（messages、system_prompt、last_active、source）
+- 无需解析内部文件格式（方案 B 的内部格式变更会直接导致集成断裂）
+- 无需引入新的 Go 依赖
+
+### 实现的 `Scan()` 函数数据流
+
+```
+hermes sessions export <tmpfile>
+       │
+       ▼ (JSONL parse: id, source, title, last_active, messages[], system_prompt)
+  ┌────────────────────────┐
+  │ Source 过滤             │  ← ScanOptions.SourceFilter (默认 cli,weixin)
+  │ 时间窗口过滤            │  ← ScanOptions.Window (cutoff = now - window)
+  │ 提取 last user/assistant│  ← extractLastMessages()
+  │ 提取 CWD               │  ← extractCWD(system_prompt) + dump fallback
+  │ Gateway 富化            │  ← sessions.json (suspended/active status, tokens)
+  └────────────────────────┘
+       │
+       ▼
+  ── Gateway fallback ──▶ gwSessionsByID 中未被 export 覆盖的 session
+  ── Dump fallback ─────▶ request_dump 中未被上述覆盖的 session
+       │
+       ▼
+  MaxInactive 截断 → 排序 → ScanResult
+```
+
+### 关键设计决策
+
+- **会话 ID 取后缀而非前缀**：hermes ID 格式 `YYYYMMDD_HHMMSS_suffix`，前缀 8 位是日期（同日会话会重复），后缀 8 位才是唯一标识。`SuffixID()` 实现此逻辑，与 `hermes sessions list` 显示行为一致
+- **默认排除 cron**：`DefaultHermesSourceFilter = "cli,weixin"`，因为 cron 会话量大且通常不需要关注
+- **三个数据源循环均需 source 过滤**：export → gateway fallback → dump fallback，过滤掉的 session 也标记 `seen`，防止被后续循环捡起
+- **临时缓存文件**：`~/.hermes/.pflow_cache_export.jsonl` 用完即删，不持久化

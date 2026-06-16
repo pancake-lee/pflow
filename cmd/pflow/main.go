@@ -32,7 +32,7 @@ func main() {
 
 	if len(os.Args) < 2 {
 		// Default: status with defaults
-		runStatus(config.DefaultWindow, config.DefaultMaxInactive)
+		runStatus(config.DefaultWindow, config.DefaultMaxInactive, "")
 		return
 	}
 
@@ -95,6 +95,7 @@ func runStatusCmd(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	windowStr := fs.String("window", "1d", "Time window (e.g. 1h, 3h, 1d, 2d)")
 	maxInactive := fs.Int("max-inactive", 1, "Max inactive sessions per project (0=all)")
+	source := fs.String("source", "", "Filter hermes sessions by source (comma-separated: cli,cron,weixin)")
 	fs.Parse(args)
 
 	window, err := config.ParseWindow(*windowStr)
@@ -103,11 +104,14 @@ func runStatusCmd(args []string) {
 		os.Exit(1)
 	}
 
-	runStatus(window, *maxInactive)
+	runStatus(window, *maxInactive, *source)
 }
 
-func runStatus(window time.Duration, maxInactive int) {
-	opts := config.ScanOptions{Window: window, MaxInactive: maxInactive}
+func runStatus(window time.Duration, maxInactive int, source string) {
+	if source == "" {
+		source = config.DefaultHermesSourceFilter
+	}
+	opts := config.ScanOptions{Window: window, MaxInactive: maxInactive, SourceFilter: source}
 
 	// Scan Claude Code sessions
 	claudeResult, claudeErr := claude.Scan(opts)

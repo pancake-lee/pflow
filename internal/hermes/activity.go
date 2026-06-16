@@ -2,9 +2,11 @@
 package hermes
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -101,8 +103,49 @@ func hermesDir() (string, error) {
 	return filepath.Join(home, ".hermes"), nil
 }
 
-// Scan reads Hermes Agent's local data and returns summaries for sessions
-// that were active within the configured window.
+// exportSession mirrors one line of `hermes sessions export` JSONL output.
+type exportSession struct {
+	ID           string          `json:"id"`
+	Source       string          `json:"source"`
+	Title        string          `json:"title"`
+	StartedAt    float64         `json:"started_at"`
+	EndedAt      *float64        `json:"ended_at"`
+	LastActive   float64         `json:"last_active"`
+	MessageCount int             `json:"message_count"`
+	Messages     []exportMessage `json:"messages"`
+	SystemPrompt string          `json:"system_prompt"`
+}
+
+// exportMessage mirrors one message in the export JSONL.
+type exportMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"` // string or []contentBlock
+}
+
+// extractMessageText converts an exportMessage's Content (string or []any) to a
+// plain text string.
+func extractMessageText(msg exportMessage) string {
+	switch c := msg.Content.(type) {
+	case string:
+		return c
+	case []any:
+		var parts []string
+		for _, item := range c {
+			if block, ok := item.(map[string]any); ok {
+				if t, _ := block["type"].(string); t == "text" {
+					if text, _ := block["text"].(string); text != "" {
+						parts = append(parts, text)
+					}
+				}
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+	return ""
+}
+
+// Scan reads Hermes Agent's local data via `hermes sessions export`
+// and returns summaries for sessions active within the configured window.
 func Scan(opts config.ScanOptions) (*ScanResult, error) {
 	hd, err := hermesDir()
 	if err != nil {
@@ -112,39 +155,148 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 	now := time.Now()
 	cutoff := now.Add(-opts.Window)
 
-	// Scan dump files first to build a cwd lookup map for gateway sessions.
+	// Read gateway state and gateway-tracked sessions (for enrichment)
+	gw := readGatewayState(hd)
+	gwSessionsByKey := readActiveSessions(hd)
+	gwSessionsByID := make(map[string]ActiveSession)
+	for _, s := range gwSessionsByKey {
+		if s.SessionID != "" {
+			gwSessionsByID[s.SessionID] = s
+		}
+	}
+
+	// Scan dump files for cwd lookup and legacy fallback
 	dumpSessions := scanDumpFiles(hd, cutoff)
-	dumpCWD := make(map[string]string) // session_id → cwd from dump files
+	dumpCWD := make(map[string]string)
 	for _, ds := range dumpSessions {
 		if ds.Project != "" {
 			dumpCWD[ds.SessionID] = ds.Project
 		}
 	}
 
-	// Read active sessions from sessions.json (gateway-tracked)
-	sessions := readActiveSessions(hd)
-
-	// Read gateway state
-	gw := readGatewayState(hd)
-
-	// Track session IDs we've already seen (from sessions.json)
+	// ── Primary data source: hermes sessions export ────────────────
+	var summaries []SessionSummary
 	seen := make(map[string]bool)
 
-	// Build summaries, filtering by active window
-	var summaries []SessionSummary
-	for _, s := range sessions {
+	// Parse source filter
+	var sourceFilter map[string]bool
+	if opts.SourceFilter != "" {
+		sourceFilter = make(map[string]bool)
+		for _, src := range strings.Split(opts.SourceFilter, ",") {
+			sourceFilter[strings.TrimSpace(src)] = true
+		}
+	}
+
+	exported, exportErr := runSessionsExport(hd)
+	if exportErr == nil {
+		for _, es := range exported {
+			if seen[es.ID] {
+				continue
+			}
+
+			// Apply source filter
+			if sourceFilter != nil {
+				if !sourceFilter[es.Source] {
+					seen[es.ID] = true // suppress from fallback loops
+					continue
+				}
+			}
+
+			// Determine timestamps
+			startedAt := unixToTime(es.StartedAt)
+			lastActive := startedAt
+			if es.LastActive > 0 {
+				lastActive = unixToTime(es.LastActive)
+			} else if es.EndedAt != nil && *es.EndedAt > 0 {
+				lastActive = unixToTime(*es.EndedAt)
+			}
+
+			// Apply time window filter
+			if !lastActive.After(cutoff) {
+				seen[es.ID] = true // suppress from fallback loops
+				continue
+			}
+
+			// Extract last user/assistant messages
+			lastUser, lastAssistant := extractLastMessages(es.Messages)
+
+			// Name: use title, fallback to last user message
+			name := ""
+			if es.Title != "" {
+				name = truncateRunes(es.Title, 15)
+			} else if lastUser != "" {
+				name = truncateRunes(lastUser, 15)
+			}
+
+			// Project: try cwd from dump files, then from system prompt
+			project := es.Source
+			if cwd, ok := dumpCWD[es.ID]; ok && cwd != "" {
+				project = cwd
+			} else if cwd := extractCWD(es.SystemPrompt); cwd != "" && cwd != "/" {
+				project = cwd
+			}
+			if project == "" {
+				project = es.Source
+			}
+
+			summary := SessionSummary{
+				SessionID:   es.ID,
+				Project:     project,
+				Platform:    platformFromSource(es.Source),
+				ChatType:    "dm",
+				DisplayName: es.Title,
+				MessageCount: es.MessageCount,
+				FirstActive: startedAt,
+				LastActive:  lastActive,
+				Name:        name,
+				LastReq:     truncateRunes(lastUser, 15),
+				LastReqFull: lastUser,
+				LastResp:    truncateRunes(lastAssistant, 15),
+				LastRespFull: lastAssistant,
+			}
+
+			// Enrich with gateway metadata if available
+			if gwSess, ok := gwSessionsByID[es.ID]; ok {
+				summary.IsGatewayTracked = true
+				summary.IsSuspended = gwSess.Suspended
+				summary.InputTokens = gwSess.InputTokens
+				summary.OutputTokens = gwSess.OutputTokens
+				summary.ChatType = gwSess.ChatType
+
+				if gwLastActive := lastActiveFromSessionsJSON(gwSess, summary.LastActive); gwLastActive.After(summary.LastActive) {
+					summary.LastActive = gwLastActive
+				}
+				if summary.DisplayName == "" && gwSess.DisplayName != nil {
+					summary.DisplayName = *gwSess.DisplayName
+				}
+				if summary.Name == "" && gwSess.DisplayName != nil {
+					summary.Name = truncateRunes(*gwSess.DisplayName, 15)
+				}
+			}
+
+			seen[es.ID] = true
+			summaries = append(summaries, summary)
+		}
+	}
+
+	// ── Add gateway-only sessions not in the export ─────────────────
+	for _, s := range gwSessionsByID {
+		if seen[s.SessionID] {
+			continue
+		}
+		// Apply source filter
+		if sourceFilter != nil && !sourceFilter[s.Platform] {
+			continue
+		}
 		updatedAt, err := parseTime(s.UpdatedAt)
 		if err != nil {
 			updatedAt = now
 		}
-
-		// Skip sessions that haven't been touched within the active window
 		if !updatedAt.After(cutoff) {
 			continue
 		}
 
 		createdAt, _ := parseTime(s.CreatedAt)
-
 		name := ""
 		if s.DisplayName != nil {
 			name = *s.DisplayName
@@ -156,14 +308,7 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 			name = *s.Origin.UserName
 		}
 
-		// Session name: use DisplayName if set (e.g. WeChat user name), otherwise empty
-		sessionName := ""
-		if name != "" {
-			sessionName = truncateRunes(name, 15)
-		}
-
-		// Try to get working directory from matching dump file
-		project := s.Platform // fallback
+		project := s.Platform
 		if cwd, ok := dumpCWD[s.SessionID]; ok {
 			project = cwd
 		}
@@ -175,27 +320,30 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 			Platform:         s.Platform,
 			ChatType:         s.ChatType,
 			IsSuspended:      s.Suspended,
-			IsGatewayTracked: true, // tracked by gateway
+			IsGatewayTracked: true,
 			DisplayName:      name,
-			InputTokens:  s.InputTokens,
-			OutputTokens: s.OutputTokens,
-			FirstActive:  createdAt,
-			LastActive:   updatedAt,
-			Name:         sessionName,
+			InputTokens:      s.InputTokens,
+			OutputTokens:     s.OutputTokens,
+			FirstActive:      createdAt,
+			LastActive:       updatedAt,
+			Name:             truncateRunes(name, 15),
 		})
 	}
 
-	// Add dump-based sessions (CLI/cron not tracked by gateway)
+	// ── Add dump-based sessions not already in summaries ─────────────
 	for _, ds := range dumpSessions {
 		if seen[ds.SessionID] {
 			continue
 		}
-		// For dump-based sessions, use the user message as name (no explicit title)
+		// Apply source filter
+		if sourceFilter != nil && !sourceFilter[ds.Platform] {
+			continue
+		}
+
 		dumpName := ""
 		if ds.LastReq != "" {
 			dumpName = ds.LastReq
 		}
-
 		project := ds.Project
 		if project == "" {
 			project = ds.Platform
@@ -233,6 +381,61 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 		GatewayAlive: gwAlive,
 		Sessions:     summaries,
 	}, nil
+}
+
+// runSessionsExport runs `hermes sessions export` and returns parsed sessions.
+func runSessionsExport(hd string) ([]exportSession, error) {
+	tmpFile := filepath.Join(hd, ".pflow_cache_export.jsonl")
+
+	// Remove stale cache if exists
+	os.Remove(tmpFile)
+
+	cmd := exec.Command("hermes", "sessions", "export", tmpFile)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("hermes sessions export failed: %w\n%s", err, string(out))
+	}
+
+	f, err := os.Open(tmpFile)
+	if err != nil {
+		return nil, fmt.Errorf("open export file: %w", err)
+	}
+	defer f.Close()
+
+	var sessions []exportSession
+	scanner := bufio.NewScanner(f)
+	// Lines can be large (system_prompt contains full prompt text)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+
+	for scanner.Scan() {
+		var es exportSession
+		if err := json.Unmarshal(scanner.Bytes(), &es); err != nil {
+			continue // skip malformed lines
+		}
+		sessions = append(sessions, es)
+	}
+
+	// Clean up temp file
+	os.Remove(tmpFile)
+
+	return sessions, scanner.Err()
+}
+
+// extractLastMessages finds the last user and last assistant message
+// from the exported messages array.
+func extractLastMessages(messages []exportMessage) (lastUser, lastAssistant string) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		text := extractMessageText(m)
+		if m.Role == "user" && lastUser == "" {
+			lastUser = text
+		} else if m.Role == "assistant" && lastAssistant == "" {
+			lastAssistant = text
+		}
+		if lastUser != "" && lastAssistant != "" {
+			break
+		}
+	}
+	return
 }
 
 // readActiveSessions reads ~/.hermes/sessions/sessions.json.
@@ -497,12 +700,54 @@ func (s SessionSummary) PlatformIcon() string {
 	}
 }
 
-// ShortID returns a truncated session ID.
+// ShortID returns a truncated session ID (last n characters).
+// Hermes session IDs start with an 8-digit date (YYYYMMDD), which makes
+// the prefix non-unique across sessions on the same day. Taking the suffix
+// instead gives better uniqueness — matching how `hermes sessions list`
+// displays session IDs.
 func (s SessionSummary) ShortID() string {
-	return TruncateID(s.SessionID, 16)
+	return SuffixID(s.SessionID, 16)
 }
 
-// TruncateID truncates a session ID to n characters.
+// SuffixID returns the last n characters of id, or the full id if it's
+// shorter than n.
+func SuffixID(id string, n int) string {
+	if len(id) <= n {
+		return id
+	}
+	return id[len(id)-n:]
+}
+
+// unixToTime converts a Unix timestamp (seconds as float64) to time.Time.
+func unixToTime(ts float64) time.Time {
+	sec := int64(ts)
+	nsec := int64((ts - float64(sec)) * 1e9)
+	return time.Unix(sec, nsec)
+}
+
+// platformFromSource maps hermes source values to pflow platform names.
+func platformFromSource(source string) string {
+	switch source {
+	case "weixin":
+		return "weixin"
+	case "cron":
+		return "cron"
+	default:
+		return "cli"
+	}
+}
+
+// lastActiveFromSessionsJSON returns the updated_at timestamp from a
+// gateway-tracked session, or fallback on error.
+func lastActiveFromSessionsJSON(s ActiveSession, fallback time.Time) time.Time {
+	t, err := parseTime(s.UpdatedAt)
+	if err != nil {
+		return fallback
+	}
+	return t
+}
+
+// TruncateID truncates a session ID to its first n characters.
 func TruncateID(id string, n int) string {
 	if len(id) <= n {
 		return id

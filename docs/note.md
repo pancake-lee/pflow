@@ -55,15 +55,22 @@ Claude 在启动时读取 `~/.claude/settings.json`，因此 statusline 配置**
 | `~/.pflow/config.json` | 用户自定义配置（提醒参数等） | `internal/attention/config.go`（规划中） |
 | `~/.claude/settings.json` | Claude statusline 配置 | `internal/session/claude.go` |
 | `~/.claude/projects/<project>/<session>.jsonl` | Claude transcript | `internal/claude/activity.go` |
-| `~/.hermes/sessions/sessions.json` | Hermes session 列表 | `internal/hermes/activity.go` |
-| `~/.hermes/sessions/request_dump_*.json` | Hermes API 请求快照（含 cwd） | `internal/hermes/activity.go` |
-| `~/.hermes/state.db` | Hermes SQLite（messages 表含 Last Resp） | 待接入（backlog P2） |
+| `~/.hermes/sessions/sessions.json` | Hermes gateway 管理的活跃 session（富化用） | `internal/hermes/activity.go` |
+| `~/.hermes/sessions/request_dump_*.json` | Hermes API 请求快照（含 cwd，fallback 数据源） | `internal/hermes/activity.go` |
+| `~/.hermes/gateway_state.json` | Hermes gateway 平台连接状态 | `internal/hermes/activity.go` |
+| `hermes sessions export` 输出 | Hermes 全量会话（JSONL，含 messages + system_prompt） | `internal/hermes/activity.go` |
 
 ## 已知注意事项
 
-### Hermes cwd 提取
+### Hermes 会话扫描
 
-Hermes 没有原生的 cwd/project 字段。cwd 的唯一可靠来源是 request_dump 文件内 system prompt 中的 `Current working directory: <path>` 行。CLI session → 真实目录，weixin/cron session → `/`（无意义，回退到 platform 名称）。详见 [`cycles/02-hermes-integration.md`](./cycles/02-hermes-integration.md)。
+**主数据源**：`hermes sessions export` 输出的 JSONL（含 `id`/`source`/`title`/`last_active`/`messages[]`/`system_prompt`），通过临时缓存文件 `~/.hermes/.pflow_cache_export.jsonl` 读取。此数据源提供最完整的 LastReq/LastResp/时间戳/CWD 信息。
+
+**会话 ID 处理**：hermes ID 格式为 `YYYYMMDD_HHMMSS_suffix`，前缀 8 位是日期（同日会话会重复），**改取后缀 8/16 位**作为 ShortID（与 `hermes sessions list` 行为一致）。`SuffixID()` 实现此逻辑。
+
+**CWD 提取优先级**：1) request_dump 文件（fallback 循环中）→ 2) export 中的 system_prompt `Current working directory:` 行 → 3) 回退到 source 名称（如 "cli"）。CLI session → 真实目录，weixin/cron session → `/`（无意义，回退到 platform 名称）。
+
+**Source 过滤**：`ScanOptions.SourceFilter` 支持按来源类型过滤（cli/weixin/cron），默认 `"cli,weixin"` 排除 cron。三个数据源循环（export → gateway fallback → dump fallback）均应用过滤。
 
 ### Claude session ID 前缀
 
