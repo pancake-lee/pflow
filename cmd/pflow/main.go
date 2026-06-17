@@ -45,6 +45,8 @@ func main() {
 		runServeCmd(os.Args[2:])
 	case "claude":
 		runClaudeCmd(os.Args[2:])
+	case "hermes":
+		runHermesCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -83,7 +85,8 @@ Commands:
   status   Show agent activity dashboard (default if no command given)
   probe    Probe a single session's detailed state
   serve    Start HTTP Dashboard API server
-  claude   Start a managed Claude session in tmux (with statusline integration)
+  claude   Start a managed Claude Code session in tmux (with statusline integration)
+  hermes   Start a managed Hermes Agent session in tmux
   help     Show this help
 
 Run 'pflow <command> -h' for detailed flags.`)
@@ -433,6 +436,67 @@ func runClaudeCmd(args []string) {
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "pflow claude: tmux attach failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Session %s is still running. Reattach with: tmux attach -t %s\n", sess.Name, sess.Name)
+		}
+	}
+}
+
+// ── hermes ────────────────────────────────────────────────────────────
+
+func runHermesCmd(args []string) {
+	flagSet := flag.NewFlagSet("hermes", flag.ExitOnError)
+	name := flagSet.String("name", "", "Name suffix for the tmux session (sanitized)")
+	dir := flagSet.String("dir", "", "Working directory (default: current directory)")
+	model := flagSet.String("model", "", "Model to use (e.g., deepseek-v4-flash)")
+	resume := flagSet.String("resume", "", "Resume an existing Hermes session by ID")
+	noAttach := flagSet.Bool("no-attach", false, "Don't attach to the tmux session after creation")
+	flagSet.Parse(args)
+
+	// Resolve working directory
+	workDir := *dir
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pflow hermes: cannot get current directory: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// Create session manager and start Hermes session
+	mgr := session.NewManager(0, "127.0.0.1")
+	opts := session.HermesOptions{
+		Model:  *model,
+		Resume: *resume,
+	}
+	sess, err := mgr.StartHermesSession(*name, workDir, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pflow hermes: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Print session info
+	fmt.Printf("=== Hermes Session Started ===\n")
+	fmt.Printf("  Tmux session:  %s\n", sess.Name)
+	fmt.Printf("  Work dir:      %s\n", sess.WorkDir)
+	if opts.Model != "" {
+		fmt.Printf("  Model:         %s\n", opts.Model)
+	}
+	if opts.Resume != "" {
+		fmt.Printf("  Resume:        %s\n", opts.Resume)
+	}
+	fmt.Println()
+
+	// Attach to tmux session (unless -no-attach)
+	if !*noAttach {
+		fmt.Printf("Attaching to tmux session %s...\n", sess.Name)
+		fmt.Println("(Press Ctrl+B then D to detach without stopping Hermes)")
+		cmd := exec.Command("tmux", "attach", "-t", sess.Name)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "pflow hermes: tmux attach failed: %v\n", err)
 			fmt.Fprintf(os.Stderr, "Session %s is still running. Reattach with: tmux attach -t %s\n", sess.Name, sess.Name)
 		}
 	}

@@ -7,4 +7,4 @@
 | Pending | 15   | 交互体验   | 项目折叠/展开                      | 记忆用户对普通项目和归档项目的折叠状态                                                                   |
 | ✅ Done  | 16   | 会话管理   | tmux 会话绑定同步                  | tmux 定期截图刷新 sessionId，`/clear` 和 `/resume` 或重启导致 session 绑定更换，同步到页面做重新绑定     |
 | Pending | 17   | 智能分析   | 军情哨分析建议（`pflow suggest`）  | 基于会话状态和历史数据，主动给出分析建议                                                                 |
-| Pending | 18   | Agent 管理 | 多 Agent 类型启动（`pflow hermes`） | 支持启动不同类型的 AI Agent（Claude Code 以外的其他 Agent）                                              |
+| ✅ Done  | 18   | Agent 管理 | 多 Agent 类型启动（`pflow hermes`） | 支持启动不同类型的 AI Agent（Claude Code 以外的其他 Agent）                                              |

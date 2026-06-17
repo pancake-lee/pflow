@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"path/filepath"
@@ -226,21 +227,37 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Annotate Claude sessions with terminal mapping info.
+	// Annotate sessions with terminal mapping info.
+	// Build a lookup map from (agentType, sessionID prefix/suffix) → tmuxName.
 	if mappings, err := session.LoadMappings(); err == nil && len(mappings) > 0 {
-		prefixToTmux := make(map[string]string, len(mappings))
+		// Build multi-key lookup: for each mapping, add entries for:
+		//   - agentType + full session ID (exact match)
+		//   - "claude" + SessionIDPrefix (8-char prefix, for dashboard SessionID)
+		//   - "hermes" + SessionIDPrefix (8-char prefix)
+		type tmuxKey struct {
+			agentType string
+			sessionID string
+		}
+		keyToTmux := make(map[tmuxKey]string, len(mappings)*2)
 		for _, m := range mappings {
-			// Only include mappings with live tmux sessions
-			if m.ClaudePrefix != "" {
-				prefixToTmux[m.ClaudePrefix] = m.TmuxName
+			prefix := m.SessionIDPrefix()
+			if m.AgentType != "" && m.AgentSessionID != "" {
+				keyToTmux[tmuxKey{m.AgentType, m.AgentSessionID}] = m.TmuxName
+			}
+			if prefix != "" {
+				// Map by agent type + prefix
+				agentType := m.AgentType
+				if agentType == "" {
+					agentType = "claude" // legacy mappings are Claude
+				}
+				keyToTmux[tmuxKey{agentType, prefix}] = m.TmuxName
 			}
 		}
 		for i := range resp.Sessions {
-			if resp.Sessions[i].AgentType == "claude" {
-				if tmuxName, ok := prefixToTmux[resp.Sessions[i].SessionID]; ok {
-					resp.Sessions[i].HasTerminal = true
-					resp.Sessions[i].TerminalTmuxName = tmuxName
-				}
+			entry := &resp.Sessions[i]
+			if tmuxName, ok := keyToTmux[tmuxKey{entry.AgentType, entry.SessionID}]; ok {
+				entry.HasTerminal = true
+				entry.TerminalTmuxName = tmuxName
 			}
 		}
 	}
@@ -512,8 +529,9 @@ type terminalLookupResponse struct {
 	Warning  string `json:"warning,omitempty"`   // shown when found but not verified
 }
 
-// handleTerminalLookup handles GET /api/v1/terminal/lookup?session_id=<claude-session-id>.
-// It finds a pflow-managed tmux session associated with the given Claude session.
+// handleTerminalLookup handles GET /api/v1/terminal/lookup?session_id=<id>&agent_type=<type>.
+// It finds a pflow-managed tmux session associated with the given agent session.
+// agent_type defaults to "claude" for backward compatibility.
 func (s *Server) handleTerminalLookup(w http.ResponseWriter, r *http.Request) {
 	if s.sessionMgr == nil {
 		writeTerminalError(w, "terminal management not enabled", http.StatusInternalServerError)
@@ -526,26 +544,32 @@ func (s *Server) handleTerminalLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plogger.Debugf("api: terminal lookup request session_id=%s", truncate8(sessionID))
-	result, err := s.sessionMgr.LookupByClaudeSessionID(sessionID)
+	agentType := r.URL.Query().Get("agent_type")
+	if agentType == "" {
+		agentType = "claude" // backward compatible default
+	}
+
+	plogger.Debugf("api: terminal lookup request session_id=%s agent_type=%s", truncate8(sessionID), agentType)
+
+	result, err := s.sessionMgr.LookupBySessionID(agentType, sessionID)
 	if err != nil {
-		plogger.Warnf("api: terminal lookup error session_id=%s: %v", truncate8(sessionID), err)
+		plogger.Warnf("api: terminal lookup error session_id=%s agent=%s: %v", truncate8(sessionID), agentType, err)
 		writeTerminalError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if result.Session == nil {
-		plogger.Infof("api: terminal lookup NOT FOUND session_id=%s", truncate8(sessionID))
+		plogger.Infof("api: terminal lookup NOT FOUND session_id=%s agent=%s", truncate8(sessionID), agentType)
 		json.NewEncoder(w).Encode(terminalLookupResponse{
 			Found: false,
-			Hint:  "No pflow-managed tmux session found for this Claude session. Start one with: pflow claude",
+			Hint:  fmt.Sprintf("No pflow-managed tmux session found for this %s session. Start one with: pflow %s", agentType, agentType),
 		})
 		return
 	}
 
-	plogger.Infof("api: terminal lookup FOUND session_id=%s tmux=%s verified=%v",
-		truncate8(sessionID), result.Session.Name, result.Verified)
+	plogger.Infof("api: terminal lookup FOUND session_id=%s agent=%s tmux=%s verified=%v",
+		truncate8(sessionID), agentType, result.Session.Name, result.Verified)
 	resp := terminalLookupResponse{
 		Found:    true,
 		Verified: result.Verified,

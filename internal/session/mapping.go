@@ -13,13 +13,29 @@ import (
 )
 
 // Mapping records the association between a pflow-managed tmux session
-// and a Claude Code session (via the 8-char session ID prefix shown in
-// Claude's status line).
+// and an AI agent session (Claude Code, Hermes, etc.).
+//
+// For Claude sessions, the AgentSessionID is the full Claude session ID and
+// ClaudePrefix holds the first 8 chars (used for statusline-based lookup).
+// For Hermes sessions, the AgentSessionID is the full Hermes session ID
+// (e.g., "20260617_001042_a5375f") and ClaudePrefix is empty.
 type Mapping struct {
-	TmuxName     string    `json:"tmux_name"`
-	WorkDir      string    `json:"work_dir"`
-	ClaudePrefix string    `json:"claude_prefix"` // first 8 chars of Claude session ID
-	CreatedAt    time.Time `json:"created_at"`
+	TmuxName       string    `json:"tmux_name"`
+	WorkDir        string    `json:"work_dir"`
+	AgentType      string    `json:"agent_type,omitempty"`      // "claude" or "hermes"
+	AgentSessionID string    `json:"agent_session_id,omitempty"` // full session ID
+	ClaudePrefix   string    `json:"claude_prefix"`             // legacy: first 8 chars of Claude session ID
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// SessionIDPrefix returns the best available short prefix for matching.
+// For new mappings: first 8 chars of AgentSessionID.
+// For legacy Claude mappings: ClaudePrefix.
+func (m Mapping) SessionIDPrefix() string {
+	if m.AgentSessionID != "" && len(m.AgentSessionID) >= 8 {
+		return m.AgentSessionID[:8]
+	}
+	return m.ClaudePrefix
 }
 
 // mappingStore is the persisted state file.
@@ -91,7 +107,7 @@ func (mm *mappingManager) save(store *mappingStore) error {
 	return nil
 }
 
-// addMapping appends a new mapping and persists.
+// addMapping appends a new mapping and persists (upsert by tmux name).
 func (mm *mappingManager) addMapping(m Mapping) error {
 	store, err := mm.load()
 	if err != nil {
@@ -108,8 +124,8 @@ func (mm *mappingManager) addMapping(m Mapping) error {
 	filtered = append(filtered, m)
 	store.Mappings = filtered
 
-	plogger.Infof("mapping: added tmux=%s prefix=%s workDir=%s (total=%d)",
-		m.TmuxName, m.ClaudePrefix, m.WorkDir, len(filtered))
+	plogger.Infof("mapping: added tmux=%s agent=%s sessionID=%s prefix=%s workDir=%s (total=%d)",
+		m.TmuxName, m.AgentType, m.AgentSessionID, m.ClaudePrefix, m.WorkDir, len(filtered))
 	return mm.save(store)
 }
 
@@ -127,7 +143,9 @@ func (mm *mappingManager) findByTmuxName(tmuxName string) (*Mapping, error) {
 	return nil, nil
 }
 
-// findByClaudePrefix looks up a mapping by Claude session ID prefix (8 chars).
+// findByClaudePrefix looks up mappings by Claude session ID prefix (8 chars).
+// For backward compatibility, it matches against both the legacy ClaudePrefix
+// field and the first 8 chars of AgentSessionID.
 func (mm *mappingManager) findByClaudePrefix(prefix string) ([]Mapping, error) {
 	store, err := mm.load()
 	if err != nil {
@@ -137,9 +155,40 @@ func (mm *mappingManager) findByClaudePrefix(prefix string) ([]Mapping, error) {
 	for _, m := range store.Mappings {
 		if m.ClaudePrefix == prefix {
 			matches = append(matches, m)
+		} else if m.AgentSessionID != "" && len(m.AgentSessionID) >= 8 && m.AgentSessionID[:8] == prefix {
+			matches = append(matches, m)
 		}
 	}
 	return matches, nil
+}
+
+// findBySessionID looks up mappings by full agent session ID.
+func (mm *mappingManager) findBySessionID(agentType, sessionID string) ([]Mapping, error) {
+	store, err := mm.load()
+	if err != nil {
+		return nil, err
+	}
+	var matches []Mapping
+	for _, m := range store.Mappings {
+		if m.AgentType == agentType && m.AgentSessionID == sessionID {
+			matches = append(matches, m)
+		}
+	}
+	return matches, nil
+}
+
+// findByTmuxNameAndAgent looks up a mapping by tmux session name and agent type.
+func (mm *mappingManager) findByTmuxNameAndAgent(tmuxName, agentType string) (*Mapping, error) {
+	store, err := mm.load()
+	if err != nil {
+		return nil, err
+	}
+	for i := range store.Mappings {
+		if store.Mappings[i].TmuxName == tmuxName && store.Mappings[i].AgentType == agentType {
+			return &store.Mappings[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // findByWorkDir returns all mappings for a given working directory.
@@ -214,15 +263,18 @@ func LoadMappings() ([]Mapping, error) {
 	return store.Mappings, nil
 }
 
-// SyncMappings refreshes all tmux↔Claude session mappings by re-capturing
-// the current Claude session ID prefix from each live tmux session.
+// SyncMappings refreshes all tmux↔agent session mappings by re-capturing
+// the current session ID from each live tmux session.
 //
-// This handles the case where /clear or /resume (or a Claude restart)
-// changes the Claude session ID while the tmux session remains the same.
-// The old mapping is updated to point to the new Claude session prefix,
-// and stale mappings (whose tmux sessions no longer exist) are removed.
+// For Claude sessions: uses tmux capture-pane to re-read the statusline prefix
+// (handles /clear, /resume, and Claude restarts which change the session ID).
 //
-// Returns the number of mappings whose prefix was updated.
+// For Hermes sessions: skips live re-capture (Hermes session IDs don't change
+// mid-session like Claude's do).
+//
+// Stale mappings (whose tmux sessions no longer exist) are removed.
+//
+// Returns the number of mappings whose prefix/sessionID was updated.
 func SyncMappings() (int, error) {
 	mm, err := newMappingManager()
 	if err != nil {
@@ -241,22 +293,27 @@ func SyncMappings() (int, error) {
 			continue // will be cleaned up by cleanStale below
 		}
 
-		// Capture current prefix from the live tmux session.
-		// Use a short timeout — if Claude is not running or the
-		// statusline isn't visible within 3s, skip this session.
-		currentPrefix, _ := captureClaudePrefix(m.TmuxName, 3*time.Second)
-		if currentPrefix == "" {
-			// Claude might not be running, or statusline not visible
-			continue
+		// For legacy mappings or Claude mappings: use capture-pane to
+		// re-read the current prefix from the statusline.
+		if m.AgentType == "" || m.AgentType == "claude" {
+			currentPrefix, _ := captureClaudePrefix(m.TmuxName, 3*time.Second)
+			if currentPrefix == "" {
+				continue
+			}
+			if currentPrefix != m.ClaudePrefix {
+				plogger.Infof("sync: tmux=%s agent=claude prefix changed: %s → %s",
+					m.TmuxName, m.ClaudePrefix, currentPrefix)
+				m.ClaudePrefix = currentPrefix
+				if m.AgentSessionID != "" {
+					// Update agent session ID if we have the full one
+					m.AgentSessionID = "" // can't reconstruct full ID from prefix alone
+				}
+				m.AgentType = "claude"
+				m.CreatedAt = time.Now()
+				updated++
+			}
 		}
-
-		if currentPrefix != m.ClaudePrefix {
-			plogger.Infof("sync: tmux=%s prefix changed: %s → %s",
-				m.TmuxName, m.ClaudePrefix, currentPrefix)
-			m.ClaudePrefix = currentPrefix
-			m.CreatedAt = time.Now()
-			updated++
-		}
+		// Hermes mappings: no live re-capture needed; session IDs are stable.
 	}
 
 	if updated > 0 {

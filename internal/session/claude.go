@@ -236,124 +236,50 @@ func captureClaudePrefix(tmuxName string, maxWait time.Duration) (string, error)
 //   - workDir: working directory for the session
 //   - forceStatusline: overwrite existing Claude statusline if needed
 //
-// Returns the created Session and the captured 8-char Claude prefix (may be
-// empty if statusline isn't configured yet).
+// Returns the created Session and an empty prefix string (prefix capture is
+// asynchronous — the mapping is saved in the background when capture succeeds).
 func (m *Manager) StartClaudeSession(name, workDir string, forceStatusline bool) (*Session, string, error) {
-	// Only tmux is required for the core flow. ttyd and jq are optional
-	// (needed for web terminal and statusline respectively, but not for
-	// creating a tmux+Claude session).
-	if _, err := exec.LookPath("tmux"); err != nil {
-		return nil, "", fmt.Errorf("tmux is not installed (%w); please install it first", err)
-	}
-
-	// Resolve workDir
 	absDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return nil, "", fmt.Errorf("cannot resolve path %q: %w", workDir, err)
 	}
-	if info, err := os.Stat(absDir); err != nil || !info.IsDir() {
-		return nil, "", fmt.Errorf("directory %q does not exist or is not a directory", absDir)
-	}
 
-	// Sanitize name
-	if name == "" {
-		name = sanitizeName(filepath.Base(absDir))
-	} else {
-		name = sanitizeName(name)
-	}
-
-	// Ensure uniqueness
-	m.mu.Lock()
-	name = m.uniqueName(name)
-	m.mu.Unlock()
-
-	// If tmux session already exists, check if it's orphaned (no clients attached)
-	// or actively in use by another terminal.
-	if tmuxSessionExists(name) {
-		if tmuxHasClients(name) {
-			// Session is actively used by another terminal — don't silently
-			// hijack it. Suggest using -name to create a different session.
-			return nil, "", fmt.Errorf(
-				"tmux session %q is already in use by another terminal; use -name to create a separate session, or attach manually: tmux attach -t %s",
-				name, name,
-			)
-		}
-		// Orphaned session: leftover from a crash or disconnect.
-		// Reconnect to it without restarting Claude.
-		return &Session{
-			Name:    name,
-			WorkDir: absDir,
-		}, "", nil
-	}
-
-	// 1. Configure statusline BEFORE starting Claude.
-	//    Claude reads ~/.claude/settings.json at startup — if we write it
-	//    after Claude starts, the statusline won't appear until Claude restarts.
+	// Track whether statusline was successfully configured — the preLaunch
+	// hook runs inside launch() but we need this info for the capture callback.
 	statuslineReady := false
-	status, err := checkStatusline()
-	if err != nil {
-		plogger.Warnf("StartClaudeSession: cannot check statusline: %v", err)
-	} else {
-		plogger.Debugf("StartClaudeSession: statusline status=%d (0=OK, 1=NotSet, 2=Different)", status)
-		if err := setupStatusline(forceStatusline); err != nil {
-			plogger.Warnf("StartClaudeSession: statusline setup skipped: %v", err)
-		} else {
+
+	sess, err := m.launch(launchConfig{
+		name:      name,
+		workDir:   workDir,
+		agentType: "claude",
+		command:   fmt.Sprintf("cd %s && claude --permission-mode acceptEdits", absDir),
+		preLaunch: func() error {
+			status, err := checkStatusline()
+			if err != nil {
+				plogger.Warnf("StartClaudeSession: cannot check statusline: %v", err)
+				return nil // non-fatal
+			}
+			plogger.Debugf("StartClaudeSession: statusline status=%d (0=OK, 1=NotSet, 2=Different)", status)
+			if err := setupStatusline(forceStatusline); err != nil {
+				plogger.Warnf("StartClaudeSession: statusline setup skipped: %v", err)
+				return nil // non-fatal
+			}
 			statuslineReady = true
 			plogger.Debugf("StartClaudeSession: statusline is ready")
-		}
-	}
-
-	// 2. Create tmux session (matches mytmux pattern)
-	plogger.Debugf("StartClaudeSession: creating tmux session name=%s workDir=%s", name, absDir)
-	create := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", absDir)
-	if out, err := create.CombinedOutput(); err != nil {
-		return nil, "", fmt.Errorf("tmux new-session failed: %w (output: %s)", err, string(out))
-	}
-
-	// 3. Start Claude inside tmux (matches mytmux: send-keys with claude command)
-	//    Claude picks up the statusline from settings.json at startup.
-	claudeCmd := fmt.Sprintf("cd %s && claude --permission-mode acceptEdits", absDir)
-	plogger.Debugf("StartClaudeSession: starting claude command in tmux %s", name)
-	send := exec.Command("tmux", "send-keys", "-t", name, claudeCmd, "C-m")
-	if out, err := send.CombinedOutput(); err != nil {
-		exec.Command("tmux", "kill-session", "-t", name).Run()
-		return nil, "", fmt.Errorf("failed to start claude in tmux %s: %w (output: %s)", name, err, string(out))
-	}
-
-	// 4. Launch async prefix capture in background.
-	//    Claude's statusline takes a few seconds to render — we return
-	//    immediately so the user can attach to tmux without waiting.
-	//    The mapping is saved asynchronously when the capture succeeds.
-	if statuslineReady {
-		tmuxName := name
-		absWorkDir := absDir
-		go func() {
-			plogger.Debugf("StartClaudeSession: async capture started for tmux %s (max 10s)", tmuxName)
-			start := time.Now()
-			prefix, _ := captureClaudePrefix(tmuxName, 10*time.Second)
-			elapsed := time.Since(start)
-			if prefix != "" {
-				plogger.Infof("StartClaudeSession: async captured prefix=%s for tmux=%s (took %.1fs)", prefix, tmuxName, elapsed.Seconds())
-				if mm, err := newMappingManager(); err == nil {
-					mm.addMapping(Mapping{
-						TmuxName:     tmuxName,
-						WorkDir:      absWorkDir,
-						ClaudePrefix: prefix,
-						CreatedAt:    time.Now(),
-					})
-				}
-			} else {
-				plogger.Warnf("StartClaudeSession: async capture timeout for tmux=%s after %.1fs", tmuxName, elapsed.Seconds())
+			return nil
+		},
+		captureSessionID: func(tmuxName string, maxWait time.Duration) (string, error) {
+			if !statuslineReady {
+				plogger.Warn("StartClaudeSession: statusline not ready, skipping prefix capture")
+				return "", nil
 			}
-		}()
-	} else {
-		plogger.Warn("StartClaudeSession: statusline not ready, skipping prefix capture")
+			return captureClaudePrefix(tmuxName, maxWait)
+		},
+	})
+	if err != nil {
+		return nil, "", err
 	}
-
-	return &Session{
-		Name:    name,
-		WorkDir: absDir,
-	}, "", nil
+	return sess, "", nil
 }
 
 // ── Tmux ↔ Claude lookup ──────────────────────────────────────────
@@ -438,5 +364,100 @@ func (m *Manager) LookupByClaudeSessionID(claudeSessionID string) (*LookupResult
 
 	plogger.Infof("lookup: all %d mapping(s) for prefix=%s have dead tmux sessions", len(matches), prefix)
 	return &LookupResult{}, nil // all sessions dead
+}
+
+// LookupBySessionID finds a pflow-managed tmux session associated with the
+// given agent session. It supports both Claude and Hermes session IDs.
+//
+// For Claude sessions, live verification via capture-pane is attempted.
+// For Hermes sessions, the saved mapping is used directly (no live verification).
+func (m *Manager) LookupBySessionID(agentType, sessionID string) (*LookupResult, error) {
+	mm, err := newMappingManager()
+	if err != nil {
+		return nil, err
+	}
+
+	plogger.Debugf("lookup: searching for agent=%s sessionID=%s", agentType, sessionID)
+
+	// Try full session ID match first (for Hermes and new Claude mappings)
+	matches, err := mm.findBySessionID(agentType, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fall back to prefix-based search (for legacy Claude mappings)
+	if len(matches) == 0 && agentType == "claude" && len(sessionID) >= 8 {
+		prefix := sessionID[:8]
+		matches, err = mm.findByClaudePrefix(prefix)
+		if err != nil {
+			return nil, err
+		}
+		plogger.Debugf("lookup: prefix=%s found %d saved mapping(s) via legacy search", prefix, len(matches))
+	} else {
+		plogger.Debugf("lookup: found %d saved mapping(s) by session ID", len(matches))
+	}
+
+	if len(matches) == 0 {
+		plogger.Infof("lookup: no mapping for agent=%s sessionID=%s", agentType, truncate8(sessionID))
+		return &LookupResult{}, nil
+	}
+
+	// Walk matches and find the first with a living tmux session.
+	for _, match := range matches {
+		if !tmuxSessionExists(match.TmuxName) {
+			plogger.Infof("lookup: skipping dead tmux session %s", match.TmuxName)
+			continue
+		}
+
+		var sess *Session
+		m.mu.Lock()
+		existing, ok := m.sessions[match.TmuxName]
+		m.mu.Unlock()
+		if ok && m.isAlive(existing) {
+			sess = existing
+		} else {
+			sess = &Session{
+				Name:    match.TmuxName,
+				WorkDir: match.WorkDir,
+			}
+		}
+
+		// For Claude sessions: try live verification
+		if agentType == "claude" {
+			prefix := sessionID[:8]
+			currentPrefix, _ := captureClaudePrefix(match.TmuxName, 2*time.Second)
+			if currentPrefix == prefix {
+				plogger.Infof("lookup: VERIFIED tmux=%s prefix=%s (live capture matches)", match.TmuxName, currentPrefix)
+				return &LookupResult{Session: sess, Verified: true}, nil
+			}
+			plogger.Infof("lookup: UNVERIFIED tmux=%s saved_prefix=%s current_prefix=%q",
+				match.TmuxName, prefix, currentPrefix)
+			return &LookupResult{
+				Session:  sess,
+				Verified: false,
+				Warning:  "Unable to live-verify the Claude session prefix (Claude may be in auth mode). The terminal session is based on saved data and may not match the current Claude session.",
+			}, nil
+		}
+
+		// For Hermes sessions: use saved mapping directly (no live verification)
+		plogger.Infof("lookup: FOUND tmux=%s for agent=%s sessionID=%s (saved mapping)",
+			match.TmuxName, agentType, truncate8(sessionID))
+		return &LookupResult{
+			Session:  sess,
+			Verified: false, // Hermes has no live verification mechanism
+		}, nil
+	}
+
+	plogger.Infof("lookup: all %d mapping(s) for agent=%s sessionID=%s have dead tmux sessions",
+		len(matches), agentType, truncate8(sessionID))
+	return &LookupResult{}, nil
+}
+
+// truncate8 returns the first 8 chars of s, or s itself if shorter.
+func truncate8(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
 }
 
