@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,10 +24,14 @@ import (
 type Mapping struct {
 	TmuxName       string    `json:"tmux_name"`
 	WorkDir        string    `json:"work_dir"`
-	AgentType      string    `json:"agent_type,omitempty"`      // "claude" or "hermes"
+	AgentType      string    `json:"agent_type,omitempty"`       // "claude" or "hermes"
+	AgentName      string    `json:"agent_name,omitempty"`       // stable name (Claude -n name, or Hermes session name)
 	AgentSessionID string    `json:"agent_session_id,omitempty"` // full session ID
-	ClaudePrefix   string    `json:"claude_prefix"`             // legacy: first 8 chars of Claude session ID
+	PID            int       `json:"pid,omitempty"`              // agent process PID inside tmux
+	ClaudePrefix   string    `json:"claude_prefix"`              // legacy: first 8 chars of Claude session ID (statusline-based)
+	Status         string    `json:"status,omitempty"`           // "active", "dead"
 	CreatedAt      time.Time `json:"created_at"`
+	LastUpdated    time.Time `json:"last_updated"`
 }
 
 // SessionIDPrefix returns the best available short prefix for matching.
@@ -105,6 +111,66 @@ func (mm *mappingManager) save(store *mappingStore) error {
 	}
 	plogger.Debugf("mapping: saved %d entries to %s", len(store.Mappings), mm.path)
 	return nil
+}
+
+// CleanOrphanSessions scans all pflow-* tmux sessions and destroys those
+// that have no corresponding entry in mappings.json. This is called on
+// startup to clean up leftover tmux sessions from previous runs.
+//
+// Returns the count of destroyed orphan sessions.
+func CleanOrphanSessions() (int, error) {
+	// List all tmux sessions
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	if err != nil {
+		// No tmux sessions at all — not an error
+		return 0, nil
+	}
+
+	pflowPrefix := "pflow-"
+	var orphanNames []string
+
+	mm, err := newMappingManager()
+	if err != nil {
+		return 0, err
+	}
+	store, err := mm.load()
+	if err != nil {
+		return 0, err
+	}
+
+	// Build a set of known tmux names from mappings
+	known := make(map[string]bool, len(store.Mappings))
+	for _, m := range store.Mappings {
+		known[m.TmuxName] = true
+	}
+
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if !strings.HasPrefix(name, pflowPrefix) {
+			continue
+		}
+		if known[name] {
+			continue
+		}
+		orphanNames = append(orphanNames, name)
+	}
+
+	if len(orphanNames) == 0 {
+		return 0, nil
+	}
+
+	plogger.Infof("orphan: found %d orphan pflow-* tmux session(s): %v", len(orphanNames), orphanNames)
+
+	destroyed := 0
+	for _, name := range orphanNames {
+		if err := exec.Command("tmux", "kill-session", "-t", name).Run(); err != nil {
+			plogger.Warnf("orphan: failed to kill session %s: %v", name, err)
+		} else {
+			destroyed++
+			plogger.Infof("orphan: destroyed %s", name)
+		}
+	}
+
+	return destroyed, nil
 }
 
 // addMapping appends a new mapping and persists (upsert by tmux name).
@@ -249,6 +315,34 @@ func (mm *mappingManager) cleanStale() (int, error) {
 	return len(staleNames), mm.save(store)
 }
 
+// CleanStaleMappings removes all mapping entries whose tmux session no longer
+// exists. Returns the number of removed entries.
+func CleanStaleMappings() (int, error) {
+	mm, err := newMappingManager()
+	if err != nil {
+		return 0, err
+	}
+	return mm.cleanStale()
+}
+
+// RemoveMapping removes a mapping by tmux session name. Returns true if
+// a mapping was found and removed, false if no mapping existed.
+func RemoveMapping(tmuxName string) (bool, error) {
+	mm, err := newMappingManager()
+	if err != nil {
+		return false, err
+	}
+	err = mm.removeByTmuxName(tmuxName)
+	if err != nil {
+		// "not found" is not an error for the caller
+		if strings.Contains(err.Error(), "not found") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // LoadMappings returns all saved tmux↔Claude mappings. It is used by
 // the dashboard API to annotate sessions with terminal availability.
 func LoadMappings() ([]Mapping, error) {
@@ -309,7 +403,7 @@ func SyncMappings() (int, error) {
 					m.AgentSessionID = "" // can't reconstruct full ID from prefix alone
 				}
 				m.AgentType = "claude"
-				m.CreatedAt = time.Now()
+				m.LastUpdated = time.Now()
 				updated++
 			}
 		}

@@ -223,34 +223,86 @@ func captureClaudePrefix(tmuxName string, maxWait time.Duration) (string, error)
 // ── Full Claude session startup ────────────────────────────────────
 
 // StartClaudeSession creates a tmux session and starts Claude Code inside it.
-// It mirrors the simplicity of a hand-written tmux script:
 //
-//	tmux new-session -d -s <name> -c <workDir>
-//	tmux send-keys -t <name> "cd <workDir> && claude --permission-mode acceptEdits" C-m
+// Two capture strategies are supported, controlled by SetClaudeCaptureMode():
 //
-// Statusline setup and session-prefix capture are best-effort post-creation
-// steps — they don't block the tmux+Claude startup.
+//	DirScan (default):    claude -n <name> --permission-mode acceptEdits
+//	                      Scans ~/.claude/sessions/ for JSON files with
+//	                      matching "name" field to extract sessionId + PID.
+//	Statusline (legacy):  claude --permission-mode acceptEdits
+//	                      Configures statusline to show 8-char prefix,
+//	                      extracts via capture-pane.
 //
 // Parameters:
-//   - name: desired tmux session name (will be sanitized)
+//   - name: desired tmux session name (will be sanitized). Also used as
+//     Claude's -n name for stable identity across /clear and /resume.
 //   - workDir: working directory for the session
 //   - forceStatusline: overwrite existing Claude statusline if needed
+//     (only relevant in Statusline capture mode)
 //
-// Returns the created Session and an empty prefix string (prefix capture is
-// asynchronous — the mapping is saved in the background when capture succeeds).
+// Returns the created Session. Session ID capture is asynchronous — the
+// mapping is saved in the background when capture succeeds.
 func (m *Manager) StartClaudeSession(name, workDir string, forceStatusline bool) (*Session, string, error) {
 	absDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return nil, "", fmt.Errorf("cannot resolve path %q: %w", workDir, err)
 	}
 
-	// Track whether statusline was successfully configured — the preLaunch
-	// hook runs inside launch() but we need this info for the capture callback.
+	switch claudeCaptureMode {
+	case ClaudeCaptureDirScan:
+		return m.startClaudeSessionDirScan(name, absDir)
+	default:
+		return m.startClaudeSessionStatusline(name, absDir, forceStatusline)
+	}
+}
+
+// startClaudeSessionDirScan starts Claude using the directory scanning approach.
+// Uses claude -n <name> for stable identity across /clear and /resume.
+func (m *Manager) startClaudeSessionDirScan(name, absDir string) (*Session, string, error) {
+	// The claudeName is the stable identifier — used both for -n and for
+	// scanning ~/.claude/sessions/. We use the raw name (before sanitization
+	// for tmux) as the Claude -n value.
+	claudeName := name
+	if claudeName == "" {
+		claudeName = filepath.Base(absDir)
+	}
+
+	sess, err := m.launch(launchConfig{
+		name:      name,
+		agentName: claudeName,
+		workDir:   absDir,
+		agentType: "claude",
+		command:   fmt.Sprintf("cd %s && claude -n %s --permission-mode acceptEdits", absDir, claudeName),
+		preLaunch: nil, // no statusline needed
+		captureSessionID: func(tmuxName string, maxWait time.Duration) (string, error) {
+			sessionID, pid, err := captureClaudeSessionIDByName(claudeName, maxWait)
+			if err != nil {
+				return "", err
+			}
+			// PID is recorded in the mapping by the launch() async goroutine.
+			// We embed it into the returned sessionID string for now — a
+			// cleaner approach would return a struct but that requires wider
+			// refactor. Instead we log it here and rely on the background
+			// sync to update PID in the mapping.
+			_ = pid
+			return sessionID, nil
+		},
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return sess, "", nil
+}
+
+// startClaudeSessionStatusline starts Claude using the legacy statusline
+// capture-pane approach. Preserved via code toggle.
+func (m *Manager) startClaudeSessionStatusline(name, absDir string, forceStatusline bool) (*Session, string, error) {
 	statuslineReady := false
 
 	sess, err := m.launch(launchConfig{
 		name:      name,
-		workDir:   workDir,
+		agentName: name, // statusline mode: use provided name as agentName ("" will fallback to dir basename)
+		workDir:   absDir,
 		agentType: "claude",
 		command:   fmt.Sprintf("cd %s && claude --permission-mode acceptEdits", absDir),
 		preLaunch: func() error {

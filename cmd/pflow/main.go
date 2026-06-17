@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -47,6 +48,8 @@ func main() {
 		runClaudeCmd(os.Args[2:])
 	case "hermes":
 		runHermesCmd(os.Args[2:])
+	case "session":
+		runSessionCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -85,8 +88,9 @@ Commands:
   status   Show agent activity dashboard (default if no command given)
   probe    Probe a single session's detailed state
   serve    Start HTTP Dashboard API server
-  claude   Start a managed Claude Code session in tmux (with statusline integration)
+  claude   Start a managed Claude Code session in tmux
   hermes   Start a managed Hermes Agent session in tmux
+  session  Manage tmux session mappings (list, destroy)
   help     Show this help
 
 Run 'pflow <command> -h' for detailed flags.`)
@@ -338,6 +342,13 @@ func runServeCmd(args []string) {
 	ttydBasePort := flagSet.Int("ttyd-base-port", 10000, "Base port for ttyd terminal processes")
 	flagSet.Parse(args)
 
+	// Clean up orphan tmux sessions (pflow-* without mappings)
+	if cleaned, err := session.CleanOrphanSessions(); err != nil {
+		plogger.Warnf("orphan cleanup error: %v", err)
+	} else if cleaned > 0 {
+		plogger.Infof("orphan cleanup: removed %d orphan session(s)", cleaned)
+	}
+
 	// Session manager for tmux + ttyd terminal management
 	sessionMgr := session.NewManager(*ttydBasePort, "127.0.0.1")
 
@@ -362,19 +373,32 @@ func runServeCmd(args []string) {
 		os.Exit(0)
 	}()
 
-	// Background mapping sync: periodically re-capture Claude session ID
-	// prefixes from live tmux sessions and update the tmux↔Claude mapping.
-	// This handles /clear, /resume, and Claude restarts which change the
-	// session ID within the same tmux session.
+	// Background mapping sync: periodically refresh tmux↔agent session
+	// mappings to detect session ID changes (Claude's /clear, /resume, etc.).
+	//
+	// Strategy depends on the configured Claude capture mode:
+	//   - DirScan: scans ~/.claude/sessions/ for sessionId/pid changes (every 5s)
+	//   - Statusline: tmux capture-pane re-reads statusline prefix (every 15s)
 	go func() {
 		// Wait for initial startup before first sync
 		time.Sleep(5 * time.Second)
 
-		ticker := time.NewTicker(15 * time.Second)
+		// Claude directory scan is faster and cheaper — run every 5s.
+		// Statusline capture-pane involves subprocess calls — run every 15s.
+		var ticker *time.Ticker
+		var syncFn func() (int, error)
+
+		if session.GetClaudeCaptureMode() == session.ClaudeCaptureDirScan {
+			ticker = time.NewTicker(5 * time.Second)
+			syncFn = session.SyncClaudeMappingsDirScan
+		} else {
+			ticker = time.NewTicker(15 * time.Second)
+			syncFn = session.SyncMappings
+		}
 		defer ticker.Stop()
 
 		for range ticker.C {
-			updated, err := session.SyncMappings()
+			updated, err := syncFn()
 			if err != nil {
 				plogger.Debugf("bg sync error: %v", err)
 			} else if updated > 0 {
@@ -392,7 +416,7 @@ func runServeCmd(args []string) {
 
 func runClaudeCmd(args []string) {
 	flagSet := flag.NewFlagSet("claude", flag.ExitOnError)
-	name := flagSet.String("name", "", "Name suffix for the tmux session (sanitized)")
+	name := flagSet.String("name", "", "Session name (default: claude-<dirbasename>)")
 	dir := flagSet.String("dir", "", "Working directory (default: current directory)")
 	force := flagSet.Bool("force", false, "Force-overwrite existing Claude statusline configuration")
 	noAttach := flagSet.Bool("no-attach", false, "Don't attach to the tmux session after creation")
@@ -409,9 +433,15 @@ func runClaudeCmd(args []string) {
 		}
 	}
 
+	// Auto-generate default name if not provided: claude-<dirbasename>
+	claudeName := *name
+	if claudeName == "" {
+		claudeName = filepath.Base(workDir) + "-claude"
+	}
+
 	// Create session manager and start Claude session
 	mgr := session.NewManager(0, "127.0.0.1")
-	sess, prefix, err := mgr.StartClaudeSession(*name, workDir, *force)
+	sess, prefix, err := mgr.StartClaudeSession(claudeName, workDir, *force)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pflow claude: %v\n", err)
 		os.Exit(1)
@@ -445,7 +475,7 @@ func runClaudeCmd(args []string) {
 
 func runHermesCmd(args []string) {
 	flagSet := flag.NewFlagSet("hermes", flag.ExitOnError)
-	name := flagSet.String("name", "", "Name suffix for the tmux session (sanitized)")
+	name := flagSet.String("name", "", "Session name (default: hermes-<dirbasename>)")
 	dir := flagSet.String("dir", "", "Working directory (default: current directory)")
 	model := flagSet.String("model", "", "Model to use (e.g., deepseek-v4-flash)")
 	resume := flagSet.String("resume", "", "Resume an existing Hermes session by ID")
@@ -463,13 +493,19 @@ func runHermesCmd(args []string) {
 		}
 	}
 
+	// Auto-generate default name if not provided: hermes-<dirbasename>
+	hermesName := *name
+	if hermesName == "" {
+		hermesName = filepath.Base(workDir) + "-hermes"
+	}
+
 	// Create session manager and start Hermes session
 	mgr := session.NewManager(0, "127.0.0.1")
 	opts := session.HermesOptions{
 		Model:  *model,
 		Resume: *resume,
 	}
-	sess, err := mgr.StartHermesSession(*name, workDir, opts)
+	sess, err := mgr.StartHermesSession(hermesName, workDir, opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pflow hermes: %v\n", err)
 		os.Exit(1)
@@ -560,4 +596,125 @@ func formatTime(t time.Time) string {
 		return "n/a"
 	}
 	return t.Format(time.DateTime)
+}
+
+// ── session ────────────────────────────────────────────────────────────
+
+func runSessionCmd(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "pflow session: missing subcommand (list or destroy)")
+		fmt.Fprintln(os.Stderr, "Usage: pflow session <list|destroy> [flags]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "list":
+		runSessionList(args[1:])
+	case "destroy":
+		runSessionDestroy(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "pflow session: unknown subcommand %q\n", args[0])
+		fmt.Fprintln(os.Stderr, "Usage: pflow session <list|destroy>")
+		os.Exit(1)
+	}
+}
+
+// runSessionList displays all tmux↔agent session mappings as a CLI table.
+func runSessionList(args []string) {
+	flagSet := flag.NewFlagSet("session list", flag.ExitOnError)
+	flagSet.Parse(args)
+
+	// Clean stale mappings (tmux sessions that have already exited)
+	if cleaned, err := session.CleanStaleMappings(); err != nil {
+		plogger.Debugf("session list: cleanStale warning: %v", err)
+	} else if cleaned > 0 {
+		plogger.Infof("session list: cleaned %d stale mapping(s)", cleaned)
+	}
+
+	mappings, err := session.LoadMappings()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pflow session list: cannot load mappings: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(mappings) == 0 {
+		fmt.Println("No pflow-managed sessions found.")
+		return
+	}
+
+	fmt.Printf("pflow — Session Mappings (%d total)\n", len(mappings))
+	fmt.Println()
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "CONTAINER\tAGENT\tNAME\tSESSION ID\tSTATUS\tWORK DIR\tLAST UPDATED")
+
+	for _, m := range mappings {
+		agentType := m.AgentType
+		if agentType == "" {
+			agentType = "claude" // legacy
+		}
+		agentName := m.AgentName
+		if agentName == "" {
+			agentName = "—"
+		}
+		status := m.Status
+		if status == "" {
+			status = "—"
+		}
+		sessionID := shortID(m.AgentSessionID, 8)
+		if sessionID == "" {
+			sessionID = shortID(m.ClaudePrefix, 8)
+		}
+		lastUpdated := "—"
+		if !m.LastUpdated.IsZero() {
+			lastUpdated = formatSince(m.LastUpdated)
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.TmuxName,
+			agentType,
+			agentName,
+			sessionID,
+			status,
+			shortPath(m.WorkDir),
+			lastUpdated,
+		)
+	}
+	w.Flush()
+}
+
+// runSessionDestroy destroys a tmux session and removes its mapping.
+func runSessionDestroy(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "pflow session destroy: missing container name")
+		fmt.Fprintln(os.Stderr, "Usage: pflow session destroy <container-name>")
+		os.Exit(1)
+	}
+	tmuxName := args[0]
+
+	// Kill tmux session
+	if err := exec.Command("tmux", "kill-session", "-t", tmuxName).Run(); err != nil {
+		fmt.Printf("Warning: tmux session %q may not exist (or already destroyed): %v\n", tmuxName, err)
+	} else {
+		fmt.Printf("Destroyed tmux session: %s\n", tmuxName)
+	}
+
+	// Remove mapping
+	mm, err := session.RemoveMapping(tmuxName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cannot remove mapping: %v\n", err)
+	} else if mm {
+		fmt.Printf("Removed mapping for: %s\n", tmuxName)
+	}
+}
+
+// shortPath truncates a path for display, showing the last two components.
+func shortPath(path string) string {
+	if path == "" {
+		return "—"
+	}
+	parts := strings.Split(path, string(filepath.Separator))
+	if len(parts) <= 2 {
+		return path
+	}
+	return filepath.Join(parts[len(parts)-2], parts[len(parts)-1])
 }

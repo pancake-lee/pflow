@@ -15,10 +15,11 @@ import (
 // Agent-specific behavior is injected via the PreLaunch and CaptureSessionID
 // callbacks, keeping the core tmux lifecycle logic shared across agent types.
 type launchConfig struct {
-	name             string
+	name             string // tmux session name (will be sanitized; may be empty for auto-derivation)
+	agentName        string // stable agent display name (Claude -n name, Hermes session name)
 	workDir          string
 	agentType        string // "claude" or "hermes"
-	command          string // full command to send to tmux (e.g., "claude --permission-mode acceptEdits")
+	command          string // full command to send to tmux (e.g., "claude -n foo --permission-mode acceptEdits")
 	preLaunch        func() error
 	captureSessionID func(tmuxName string, maxWait time.Duration) (string, error)
 }
@@ -50,12 +51,24 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 		return nil, fmt.Errorf("directory %q does not exist or is not a directory", absDir)
 	}
 
-	// Sanitize name
+	// Sanitize tmux session name
 	name := cfg.name
 	if name == "" {
 		name = sanitizeName(filepath.Base(absDir))
 	} else {
 		name = sanitizeName(name)
+	}
+
+	// Compute agent display name for the mapping:
+	//   1. cfg.agentName if explicitly set (e.g., Claude -n name)
+	//   2. cfg.name if the user provided -name
+	//   3. fallback: raw base name of the working directory
+	displayName := cfg.agentName
+	if displayName == "" {
+		displayName = cfg.name
+	}
+	if displayName == "" {
+		displayName = filepath.Base(absDir)
 	}
 
 	// Ensure uniqueness
@@ -87,19 +100,20 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 		}
 	}
 
-	// 2. Create tmux session.
+	// 2. Create tmux session with auto-destroy and Ctrl+Z protection.
+	//
+	// The shell command:
+	//   trap '' TSTP        — block Ctrl+Z (prevents suspending the agent)
+	//   <agent_command>     — start the agent
+	//   tmux kill-session   — auto-destroy the container when agent exits
+	//
+	// No separate send-keys step needed — the command runs as the
+	// tmux session's initial shell, not sent via send-keys.
+	shellCmd := fmt.Sprintf("trap '' TSTP; %s; tmux kill-session -t %s", cfg.command, name)
 	plogger.Debugf("launch: creating tmux session name=%s workDir=%s agent=%s", name, absDir, cfg.agentType)
-	create := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", absDir)
+	create := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", absDir, shellCmd)
 	if out, err := create.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("tmux new-session failed: %w (output: %s)", err, string(out))
-	}
-
-	// 3. Start the agent inside tmux.
-	plogger.Debugf("launch: starting %s in tmux %s: %s", cfg.agentType, name, cfg.command)
-	send := exec.Command("tmux", "send-keys", "-t", name, cfg.command, "C-m")
-	if out, err := send.CombinedOutput(); err != nil {
-		exec.Command("tmux", "kill-session", "-t", name).Run()
-		return nil, fmt.Errorf("failed to start %s in tmux %s: %w (output: %s)", cfg.agentType, name, err, string(out))
 	}
 
 	// 4. Launch async session ID capture in background.
@@ -124,16 +138,19 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 				plogger.Infof("launch: async captured sessionID=%s for tmux=%s agent=%s (took %.1fs)",
 					sessionID, tmuxName, agentType, elapsed.Seconds())
 				if mm, err := newMappingManager(); err == nil {
-					mm.addMapping(Mapping{
-						TmuxName:       tmuxName,
-						WorkDir:        absWorkDir,
-						AgentType:      agentType,
-						AgentSessionID: sessionID,
-						ClaudePrefix:   claudePrefixFromSessionID(sessionID, agentType),
-						CreatedAt:      time.Now(),
-					})
-				}
-			} else {
+						mm.addMapping(Mapping{
+							TmuxName:       tmuxName,
+							WorkDir:        absWorkDir,
+							AgentType:      agentType,
+							AgentName:      displayName,
+							AgentSessionID: sessionID,
+							ClaudePrefix:   claudePrefixFromSessionID(sessionID, agentType),
+							Status:         "active",
+							CreatedAt:      time.Now(),
+							LastUpdated:    time.Now(),
+						})
+					}
+				} else {
 				plogger.Warnf("launch: async capture returned empty for tmux=%s agent=%s after %.1fs",
 					tmuxName, agentType, elapsed.Seconds())
 			}

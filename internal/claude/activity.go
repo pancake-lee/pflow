@@ -24,6 +24,7 @@ type SessionMeta struct {
 	Status     string `json:"status"`
 	Kind       string `json:"kind"`
 	Entrypoint string `json:"entrypoint"`
+	Name       string `json:"name,omitempty"` // set via claude -n <name>
 }
 
 // HistoryEntry is one line from ~/.claude/history.jsonl.
@@ -273,6 +274,9 @@ func aggregate(metas map[string]*SessionMeta, history []HistoryEntry) []SessionS
 			if m.CWD != "" {
 				ss.Project = m.CWD
 			}
+				if m.Name != "" {
+					ss.Name = m.Name
+				}
 		}
 
 		// Merge history stats
@@ -283,7 +287,7 @@ func aggregate(metas map[string]*SessionMeta, history []HistoryEntry) []SessionS
 			if hs.project != "" {
 				ss.Project = hs.project
 			}
-			if hs.firstMsg != "" {
+			if ss.Name == "" && hs.firstMsg != "" {
 				ss.Name = truncateText(hs.firstMsg, 15)
 			}
 		}

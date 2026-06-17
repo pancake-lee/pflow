@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,8 +28,10 @@ type HermesOptions struct {
 //	tmux new-session -d -s <name> -c <workDir>
 //	tmux send-keys -t <name> "cd <workDir> && hermes chat [options]" C-m
 //
-// Session ID capture uses `hermes sessions export` to find the newly created
-// session after startup, rather than parsing terminal output.
+// Session ID capture uses tmux send-keys "/status" + capture-pane to parse
+// the Session ID from Hermes' interactive /status command output.
+// This is more reliable than hermes sessions export because it works even
+// before the user sends their first message.
 //
 // Parameters:
 //   - name: desired tmux session name (will be sanitized)
@@ -48,12 +51,13 @@ func (m *Manager) StartHermesSession(name, workDir string, opts HermesOptions) (
 
 	return m.launch(launchConfig{
 		name:      name,
+		agentName: name, // user's -name value ("" = fallback to dir basename)
 		workDir:   workDir,
 		agentType: "hermes",
 		command:   hermesCmd,
 		preLaunch: nil, // Hermes needs no pre-launch configuration
 		captureSessionID: func(tmuxName string, maxWait time.Duration) (string, error) {
-			return captureHermesSessionID(maxWait)
+			return captureHermesSessionIDViaStatus(tmuxName, name, maxWait)
 		},
 	})
 }
@@ -176,4 +180,113 @@ func fetchRecentCLISessions() ([]exportEntry, error) {
 	}
 
 	return sessions, nil
+}
+
+// ── Hermes session ID capture via /status (new approach) ─────────────
+
+// hermesStatusSessionIDRegex matches the "Session ID:" line from Hermes'
+// /status command output.
+//
+// Example output:
+//
+//	Session ID: 20260617_112541_649f4d
+//
+// Hermes session IDs are in format: YYYYMMDD_HHMMSS_<random>
+var hermesStatusSessionIDRegex = regexp.MustCompile(`Session ID:\s+([a-fA-F0-9_]+)`)
+
+// hermesWelcomeRegex matches the welcome banner that Hermes prints when
+// initialization is complete and the agent is ready to accept commands.
+var hermesWelcomeRegex = regexp.MustCompile(`Welcome to Hermes Agent!`)
+
+// captureHermesSessionIDViaStatus uses tmux send-keys to issue the /title
+// and /status commands inside a running Hermes session, then capture-pane
+// to parse the Session ID from the output.
+//
+// Flow:
+//  1. Poll capture-pane until "Welcome to Hermes Agent!" appears (init complete)
+//  2. Send "/title <agentName>" + Enter (sets title in hermes sessions list)
+//  3. Wait 500ms for Hermes to process the /title command
+//  4. Loop: send "/status" + Enter, capture pane, parse "Session ID: <id>"
+//     Retry every 2s until found or overall maxWait exceeded.
+func captureHermesSessionIDViaStatus(tmuxName, agentName string, maxWait time.Duration) (string, error) {
+	deadline := time.Now().Add(maxWait)
+	pane := tmuxName + ":0.0"
+
+	// ── Phase 1: wait for Hermes to finish initializing ──────────────
+	// Poll capture-pane until the welcome banner appears.
+	plogger.Debugf("captureHermesViaStatus: waiting for hermes init in tmux=%s", tmuxName)
+	initDone := false
+	for time.Now().Before(deadline) {
+		time.Sleep(1 * time.Second)
+
+		out, err := exec.Command("tmux", "capture-pane", "-t", pane, "-p").Output()
+		if err != nil {
+			plogger.Debugf("captureHermesViaStatus: capture-pane (init) error: %v", err)
+			continue
+		}
+		if hermesWelcomeRegex.Match(out) {
+			plogger.Debugf("captureHermesViaStatus: hermes init complete in tmux=%s", tmuxName)
+			initDone = true
+			break
+		}
+	}
+	if !initDone {
+		return "", fmt.Errorf("timeout waiting for Hermes to initialize after %.0fs", maxWait.Seconds())
+	}
+
+	// ── Phase 2: set the session title via /title ───────────────────
+	if agentName != "" {
+		titleCmd := fmt.Sprintf("/title %s", agentName)
+		titleSend := exec.Command("tmux", "send-keys", "-t", tmuxName, titleCmd, "Enter")
+		if err := titleSend.Run(); err != nil {
+			plogger.Debugf("captureHermesViaStatus: send-keys /title error: %v", err)
+		} else {
+			plogger.Debugf("captureHermesViaStatus: sent /title %s", agentName)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// ── Phase 3: loop /status until Session ID appears ──────────────
+	attempt := 0
+	for time.Now().Before(deadline) {
+		attempt++
+
+		// Send /status command into the tmux session
+		send := exec.Command("tmux", "send-keys", "-t", tmuxName, "/status", "Enter")
+		if err := send.Run(); err != nil {
+			plogger.Debugf("captureHermesViaStatus: send-keys /status error: %v", err)
+		} else {
+			// Wait for Hermes to render the /status output
+			time.Sleep(1 * time.Second)
+
+			// Capture the last 30 lines of the pane
+			out, err := exec.Command("tmux", "capture-pane", "-t", pane, "-p", "-S", "-30").Output()
+			if err != nil {
+				plogger.Debugf("captureHermesViaStatus: capture-pane error: %v", err)
+			} else {
+				text := string(out)
+				m := hermesStatusSessionIDRegex.FindStringSubmatch(text)
+				if m != nil {
+					sessionID := m[1]
+					plogger.Infof("captureHermesViaStatus: found sessionID=%s in tmux=%s (attempt %d)",
+						sessionID, tmuxName, attempt)
+					return sessionID, nil
+				}
+				plogger.Debugf("captureHermesViaStatus: attempt %d: no Session ID in pane output (first 100 chars: %q)",
+					attempt, trimTo(text, 100))
+			}
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return "", fmt.Errorf("timeout capturing hermes session ID via /status after %.0fs (%d attempts)",
+		maxWait.Seconds(), attempt)
+}
+
+func trimTo(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

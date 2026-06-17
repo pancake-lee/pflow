@@ -31,11 +31,30 @@
 | Pending  | 23   | 扩展能力   | 双层换肤系统                          | 内容层 + 遮罩层独立换肤，支持社区皮肤。设计文档已完成（[`99-dual_layer_skinning_system.md`](./design/99-dual_layer_skinning_system.md)）                  |
 | Pending  | 24   | 扩展能力   | Web AI 平台状态监控                   | 浏览器扩展监控 DeepSeek/Kimi/ChatGPT 等平台的 AI 对话状态。设计文档已完成（[`99-ai-chat-web-attach.md`](./design/99-ai-chat-web-attach.md)）              |
 | Pending  | 25   | 扩展能力   | 跨设备同步                            | 手机/平板看状态、点批准                                                                                                                                  |
-| Pending  | 26   | Agent 管理 | 多 Agent 类型支持                     | 支持 Cline、Codex CLI 等其他 Agent 类型（远期预留）                                                                                                      |
+| Pending  | 26   | Agent 管理 | 多 Agent 类型支持                     | 支持 Cline、Codex CLI 等其他 Agent 类型（远期预留）                                                                                      |
+| Done     | 27   | 会话管理 | 映射数据结构升级                       | 参考 §4.3，Mapping 增加 agentName / status / lastUpdated / pid 字段                                                                       |
+| Done     | 28   | 会话管理 | Claude JSON 目录扫描替代截屏           | 参考 §4.1，通过 `claude -n <name>` + 扫描 `~/.claude/sessions/` 建立映射，保留旧方案为代码开关                                              |
+| Done     | 29   | 会话管理 | Claude 后台轮询监控                    | 参考 §4.1，每 5s 扫描 `~/.claude/sessions/` 检测 sessionId 变化并自动更新映射                                                             |
+| Done     | 30   | 会话管理 | Hermes `/status` 截屏解析             | 参考 §4.2，通过 `tmux send-keys /status` + `capture-pane` 解析 Session ID，替代 `hermes sessions export`                                |
+| Done     | 31   | 会话管理 | Tmux 自动销毁优化                      | 参考 §6.1，`trap '' TSTP` 阻止 Ctrl+Z，Agent 退出后自动 `tmux kill-session`                                                             |
+| Done     | 32   | 会话管理 | 孤儿会话清理                           | 参考 §6.3，启动时扫描 `pflow-*` tmux 会话并清理无映射记录的残留                                                                         |
+| Done     | 33   | CLI 工具 | `pflow session list`                  | 参考 §7.2，CLI 表格展示所有会话映射                                                                                                      |
+| Done     | 34   | CLI 工具 | `pflow session destroy`               | 参考 §7.4，销毁指定 tmux 会话 + 清理映射记录                                                                                             |
+| Done     | 35   | Web 前端 | Dashboard 终端映射优化                 | 参考 §7.3，使用新的 name 字段优化展示，确保 Claude name 传递路径正确                                                                     |
 
 ---
 
 ## 详细说明
+
+### 27-35. 终端会话映射方案（tmux）
+
+详见 [`docs/cycles/07-terminal-session-mapping.md`](./cycles/07-terminal-session-mapping.md)。核心改动：
+
+- **Claude**：从 statusline 截屏方案 → `claude -n <name>` + 扫描 `~/.claude/sessions/` 目录 JSON 文件，通过 `name` 字段匹配（保留旧方案为代码开关）
+- **Hermes**：从 `hermes sessions export` → `tmux send-keys /status` + `capture-pane` 截屏解析 Session ID
+- **Mapping**：增加 agentName、status、lastUpdated、pid 字段
+- **Tmux**：添加 `trap '' TSTP` 自动销毁、孤儿会话清理
+- **CLI**：新增 `pflow session list` / `pflow session destroy` 命令
 
 ### 13. 提醒分数算法
 
