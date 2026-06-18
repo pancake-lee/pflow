@@ -43,6 +43,7 @@ import { formatSince, truncate, escapeNewlines } from '../composables/format'
 import GroupCard from '../components/GroupCard.vue'
 import PrimaryCard from '../components/PrimaryCard.vue'
 import SecondaryCard from '../components/SecondaryCard.vue'
+import SuggestCard from '../components/SuggestCard.vue'
 import type { SessionGroup } from '../components/GroupCard.vue'
 import type { ReminderScoreInfo } from '../types/dashboard'
 import { FOCUS_CONFIG } from '../composables/useReminderScores'
@@ -304,6 +305,9 @@ const groupedSessions = computed<SessionGroup[]>(() => {
 
   return result
 })
+
+// Suggestions from API
+const suggestions = computed(() => data.value?.suggestions ?? [])
 
 // Zone splits
 const primaryGroup = computed(() =>
@@ -845,6 +849,11 @@ function rowProps(row: DashboardEntry) {
                 @focus-extend="(key: string) => focusExtend(key)"
                 @focus-stop="focusStop"
               />
+            </div>
+
+            <!-- 🔔 军情哨 — suggest analysis, full width between primary and secondary -->
+            <div class="zone-section">
+              <SuggestCard :suggestions="suggestions" />
             </div>
 
             <!-- 🚩 支线项目 — 2 cards side by side, each with own title -->

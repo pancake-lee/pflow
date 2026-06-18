@@ -37,12 +37,19 @@ export interface ProjectRoot {
   priority: 'primary' | 'secondary' | 'normal'
 }
 
+export interface Suggestion {
+  icon: string
+  text: string
+  priority: number
+}
+
 export interface DashboardResponse {
   now: string // ISO 8601
   window: string
   project_roots: ProjectRoot[]
   sessions: DashboardEntry[]
   reminder_scores: Record<string, ReminderScoreInfo>
+  suggestions: Suggestion[]
   focus?: FocusState
   errors?: string[]
 }

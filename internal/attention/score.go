@@ -298,8 +298,14 @@ func computeFogScore(
 		return FogProtectMax*remain + FogProtectMin*(1-remain)
 	}
 
-	// Rule 6: non-protection period — fog inversely proportional to reminder score
+	// Rule 6: non-protection period — fog inversely proportional to reminder score.
+	// When no project has a positive reminder score (maxReminder == 0), there is
+	// no attention competition. Keep the primary project clear as the default
+	// focus target; other projects get base fog.
 	if maxReminder == 0 {
+		if isPrimary {
+			return 0
+		}
 		return FogBaseNonProtect
 	}
 	ratio := reminderScore / maxReminder

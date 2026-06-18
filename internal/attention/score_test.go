@@ -286,10 +286,10 @@ func TestTC09_MinFactorFallback(t *testing.T) {
 	checkHL(t, s1.Highlight, 0, "S1")
 	checkFog(t, s1.FogPct, 0, "S1")
 
-	// P: all zeros → hl=0, fog=FogBaseNonProtect=0.3 → 30
+	// P: all zeros, primary, maxReminder=0 → fog=0 (primary is clear when no competition)
 	p := result["P"]
 	checkHL(t, p.Highlight, 0, "P")
-	checkFog(t, p.FogPct, 30, "P")
+	checkFog(t, p.FogPct, 0, "P")
 }
 
 // =============================================================================

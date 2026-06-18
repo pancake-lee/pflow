@@ -10,12 +10,17 @@ import (
 	"strconv"
 	"time"
 
+	"os"
+	"os/exec"
+	"strings"
+
 	"github.com/pancake-lee/pflow/internal/attention"
 	"github.com/pancake-lee/pflow/internal/claude"
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
 	"github.com/pancake-lee/pflow/internal/project"
 	"github.com/pancake-lee/pflow/internal/session"
+	"github.com/pancake-lee/pflow/internal/suggest"
 	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 )
 
@@ -46,6 +51,13 @@ type ProjectRootJSON struct {
 	Priority string `json:"priority"`
 }
 
+// SuggestionJSON is the JSON representation of a suggest.Suggestion.
+type SuggestionJSON struct {
+	Icon     string `json:"icon"`
+	Text     string `json:"text"`
+	Priority int    `json:"priority"`
+}
+
 // DashboardResponse is the JSON response for GET /api/v1/dashboard.
 type DashboardResponse struct {
 	Now            time.Time                          `json:"now"`
@@ -53,6 +65,7 @@ type DashboardResponse struct {
 	ProjectRoots   []ProjectRootJSON                  `json:"project_roots"`
 	Sessions       []DashboardEntry                   `json:"sessions"`
 	ReminderScores map[string]attention.ReminderOutput `json:"reminder_scores"`
+	Suggestions    []SuggestionJSON                   `json:"suggestions"`
 	Focus          *attention.FocusSnapshot           `json:"focus,omitempty"`
 	Errors         []string                           `json:"errors,omitempty"`
 }
@@ -227,9 +240,12 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Load tmux mappings (used for terminal annotation and suggest).
+	mappings, mappingsErr := session.LoadMappings()
+
 	// Annotate sessions with terminal mapping info.
 	// Build a lookup map from (agentType, sessionID prefix/suffix) → tmuxName.
-	if mappings, err := session.LoadMappings(); err == nil && len(mappings) > 0 {
+	if mappingsErr == nil && len(mappings) > 0 {
 		// Build multi-key lookup: for each mapping, add entries for:
 		//   - agentType + full session ID (exact match)
 		//   - "claude" + SessionIDPrefix (8-char prefix, for dashboard SessionID)
@@ -264,6 +280,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Compute reminder scores per project.
 	resp.ReminderScores = computeReminderScores(resp.Sessions, rootsFile, resp.Now)
+
+	// Generate suggest analysis (军情哨)
+	resp.Suggestions = generateSuggestions(claudeResult, hermesResult, mappings, rootsFile, resp.Now)
 
 	// Include focus state
 	if focusActive, focusedProject, focusMinutes, focusSince := attention.GetFocus().Snapshot(); focusActive {
@@ -744,6 +763,160 @@ func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFi
 
 	focusActive, focusedProject, focusMinutes, _ := attention.GetFocus().Snapshot()
 	return attention.CalculateScores(inputs, now, focusActive, focusedProject, focusMinutes)
+}
+
+// generateSuggestions builds suggest.SessionInfo from raw scan results,
+// computes project summaries, and calls suggest.Generate. Returns JSON-ready
+// suggestions or an empty slice.
+func generateSuggestions(
+	claudeResult *claude.ScanResult,
+	hermesResult *hermes.ScanResult,
+	mappings []session.Mapping,
+	rootsFile *project.RootsFile,
+	now time.Time,
+) []SuggestionJSON {
+	// Build suggest.SessionInfo from raw scan results
+	var sessions []suggest.SessionInfo
+
+	if claudeResult != nil {
+		for _, s := range claudeResult.Sessions {
+			si := suggest.SessionInfo{
+				AgentType:   "claude",
+				AgentName:   s.Name,
+				ProjectPath: s.Project,
+				Status:      s.Status,
+				LastActive:  s.LastActive,
+				FirstActive: s.FirstActive,
+				PID:         s.PID,
+				IsRunning:   s.IsRunning,
+				LastReq:     s.LastReq,
+			}
+			if rootsFile != nil {
+				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
+					si.MatchedRoot = matched.Path
+					si.RootPriority = string(matched.Priority)
+				}
+			}
+			sessions = append(sessions, si)
+		}
+	}
+
+	if hermesResult != nil {
+		for _, s := range hermesResult.Sessions {
+			// Skip weixin sessions: weixin only has two states
+			// (connected→busy, disconnected→idle) and no reliable
+			// way to distinguish "agent processing" from "waiting
+			// for user input". Suggest analysis is meaningless for
+			// weixin—it's a chatbot, not a task agent.
+			if s.Platform == "weixin" {
+				continue
+			}
+			si := suggest.SessionInfo{
+				AgentType:   "hermes",
+				AgentName:   s.Name,
+				ProjectPath: s.Project,
+				Status:      hermesStatusToSuggest(s),
+				LastActive:  s.LastActive,
+				FirstActive: s.FirstActive,
+				PID:         0,
+				IsRunning:   s.IsGatewayTracked && !s.IsSuspended,
+				LastReq:     s.LastReq,
+			}
+			if rootsFile != nil {
+				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
+					si.MatchedRoot = matched.Path
+					si.RootPriority = string(matched.Priority)
+				}
+			}
+			sessions = append(sessions, si)
+		}
+	}
+
+	// Augment sessions with mapping PID info for dead-process detection
+	for _, m := range mappings {
+		if m.PID > 0 && !processAlive(m.PID) {
+			for i := range sessions {
+				if sessions[i].ProjectPath == m.WorkDir && sessions[i].PID == 0 {
+					sessions[i].PID = m.PID
+					sessions[i].IsRunning = false
+				}
+			}
+		}
+	}
+
+	// Detect current project from tmux client
+	currentProject := detectCurrentProjectFromAPI(mappings, rootsFile)
+
+	// Compute per-project summaries
+	projects := suggest.ComputeProjectSummaries(sessions, now)
+
+	// Generate suggestions
+	input := suggest.Input{
+		Sessions:       sessions,
+		Projects:       projects,
+		CurrentProject: currentProject,
+		Now:            now,
+	}
+	results := suggest.Generate(input)
+
+	// Convert to JSON-friendly format
+	out := make([]SuggestionJSON, 0, len(results))
+	for _, r := range results {
+		out = append(out, SuggestionJSON{
+			Icon:     r.Icon,
+			Text:     r.Text,
+			Priority: r.Priority,
+		})
+	}
+	return out
+}
+
+// detectCurrentProjectFromAPI finds which project root the user is currently
+// viewing in tmux. Returns "" if no active tmux client is attached.
+func detectCurrentProjectFromAPI(mappings []session.Mapping, rootsFile *project.RootsFile) string {
+	if rootsFile == nil || len(mappings) == 0 {
+		return ""
+	}
+
+	out, err := exec.Command("tmux", "list-clients", "-F", "#{client_session}").Output()
+	if err != nil {
+		return ""
+	}
+
+	tmuxNames := strings.Split(strings.TrimSpace(string(out)), "\n")
+	tmuxToWorkDir := make(map[string]string, len(mappings))
+	for _, m := range mappings {
+		tmuxToWorkDir[m.TmuxName] = m.WorkDir
+	}
+
+	for _, name := range tmuxNames {
+		if workDir, ok := tmuxToWorkDir[name]; ok {
+			if matched := project.MatchRootFromList(rootsFile.Roots, workDir); matched != nil {
+				return matched.Path
+			}
+		}
+	}
+	return ""
+}
+
+// hermesStatusToSuggest maps Hermes session state to suggest status.
+func hermesStatusToSuggest(s hermes.SessionSummary) string {
+	if !s.IsGatewayTracked || s.IsSuspended {
+		return "inactive"
+	}
+	if s.IsActive() {
+		return "busy"
+	}
+	return "idle"
+}
+
+// processAlive checks if a PID corresponds to a running process.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
+	return err == nil
 }
 
 // ── Focus mode handlers ──────────────────────────────────────────

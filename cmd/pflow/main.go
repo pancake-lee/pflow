@@ -20,7 +20,9 @@ import (
 	"github.com/pancake-lee/pflow/internal/claude"
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
+	"github.com/pancake-lee/pflow/internal/project"
 	"github.com/pancake-lee/pflow/internal/session"
+	"github.com/pancake-lee/pflow/internal/suggest"
 	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 	"go.uber.org/zap/zapcore"
 )
@@ -50,6 +52,8 @@ func main() {
 		runHermesCmd(os.Args[2:])
 	case "session":
 		runSessionCmd(os.Args[2:])
+	case "suggest":
+		runSuggestCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -91,6 +95,7 @@ Commands:
   claude   Start a managed Claude Code session in tmux
   hermes   Start a managed Hermes Agent session in tmux
   session  Manage tmux session mappings (list, destroy)
+  suggest  Show analysis suggestions based on session state
   help     Show this help
 
 Run 'pflow <command> -h' for detailed flags.`)
@@ -705,6 +710,232 @@ func runSessionDestroy(args []string) {
 	} else if mm {
 		fmt.Printf("Removed mapping for: %s\n", tmuxName)
 	}
+}
+
+// ── suggest ────────────────────────────────────────────────────────────
+
+func runSuggestCmd(args []string) {
+	fs := flag.NewFlagSet("suggest", flag.ExitOnError)
+	windowStr := fs.String("window", "1d", "Time window for session scanning")
+	fs.Parse(args)
+
+	window, err := config.ParseWindow(*windowStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pflow suggest: invalid window: %v\n", err)
+		os.Exit(1)
+	}
+
+	now := time.Now()
+	opts := config.ScanOptions{Window: window, MaxInactive: 0, SourceFilter: config.DefaultHermesSourceFilter}
+
+	// Scan both agent types
+	claudeResult, _ := claude.Scan(opts)
+	hermesResult, _ := hermes.Scan(opts)
+
+	// Load project roots for priority matching
+	projMgr := project.NewManager()
+	rootsFile, _ := projMgr.Load()
+
+	// Load tmux mappings for current-session detection and PID checks
+	mappings, _ := session.LoadMappings()
+
+	// Detect current tmux session the user is viewing
+	currentProject := detectCurrentProject(mappings, rootsFile)
+
+	// Convert sessions to unified suggest.SessionInfo
+	var sessions []suggest.SessionInfo
+	if claudeResult != nil {
+		for _, s := range claudeResult.Sessions {
+			matched := project.MatchRootFromList(rootsFile.Roots, s.Project)
+			si := suggest.SessionInfo{
+				AgentType:   "claude",
+				AgentName:   s.Name,
+				ProjectPath: s.Project,
+				Status:      s.Status,
+				LastActive:  s.LastActive,
+				FirstActive: s.FirstActive,
+				PID:         s.PID,
+				IsRunning:   s.IsRunning,
+				LastReq:     s.LastReq,
+			}
+			if matched != nil {
+				si.MatchedRoot = matched.Path
+				si.RootPriority = string(matched.Priority)
+			}
+			sessions = append(sessions, si)
+		}
+	}
+	if hermesResult != nil {
+		for _, s := range hermesResult.Sessions {
+			matched := project.MatchRootFromList(rootsFile.Roots, s.Project)
+			si := suggest.SessionInfo{
+				AgentType:   "hermes",
+				AgentName:   s.Name,
+				ProjectPath: s.Project,
+				Status:      hermesStatusToSuggest(s),
+				LastActive:  s.LastActive,
+				FirstActive: s.FirstActive,
+				PID:         0, // Hermes sessions don't expose PID in the same way
+				IsRunning:   s.IsGatewayTracked && !s.IsSuspended,
+				LastReq:     s.LastReq,
+			}
+			if matched != nil {
+				si.MatchedRoot = matched.Path
+				si.RootPriority = string(matched.Priority)
+			}
+			sessions = append(sessions, si)
+		}
+	}
+
+	// Augment sessions with mapping PID info for dead-process detection
+	for _, m := range mappings {
+		if m.PID > 0 && !processAlive(m.PID) {
+			// Check if this mapping's work dir matches any session
+			for i := range sessions {
+				if sessions[i].ProjectPath == m.WorkDir && sessions[i].PID == 0 {
+					sessions[i].PID = m.PID
+					sessions[i].IsRunning = false
+				}
+			}
+		}
+	}
+
+	// Compute per-project summaries
+	projects := suggest.ComputeProjectSummaries(sessions, now)
+
+	// Generate suggestions
+	input := suggest.Input{
+		Sessions:       sessions,
+		Projects:       projects,
+		CurrentProject: currentProject,
+		Now:            now,
+	}
+	suggestions := suggest.Generate(input)
+
+	// Output
+	if len(suggestions) == 0 {
+		fmt.Println("⚪ 暂无更多建议")
+		fmt.Println()
+	} else {
+		for _, s := range suggestions {
+			fmt.Println(s.Text)
+			fmt.Println()
+		}
+	}
+
+	// Print daily summary
+	printDailySummary(projects)
+}
+
+// detectCurrentProject finds which project root the user is currently
+// viewing in tmux. Returns "" if no active tmux client is attached to
+// a pflow-managed session.
+func detectCurrentProject(mappings []session.Mapping, rootsFile *project.RootsFile) string {
+	if rootsFile == nil {
+		return ""
+	}
+
+	// Get currently attached tmux sessions
+	out, err := exec.Command("tmux", "list-clients", "-F", "#{client_session}").Output()
+	if err != nil {
+		return "" // tmux not running or no clients
+	}
+
+	tmuxNames := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+	// Build a map of tmux name → work dir from mappings
+	tmuxToWorkDir := make(map[string]string, len(mappings))
+	for _, m := range mappings {
+		tmuxToWorkDir[m.TmuxName] = m.WorkDir
+	}
+
+	for _, name := range tmuxNames {
+		if workDir, ok := tmuxToWorkDir[name]; ok {
+			matched := project.MatchRootFromList(rootsFile.Roots, workDir)
+			if matched != nil {
+				return matched.Path
+			}
+		}
+	}
+	return ""
+}
+
+// hermesStatusToSuggest maps Hermes session state to suggest status.
+func hermesStatusToSuggest(s hermes.SessionSummary) string {
+	if !s.IsGatewayTracked || s.IsSuspended {
+		return "inactive"
+	}
+	// Hermes doesn't expose busy/waiting granularity consistently;
+	// we use "running" as the active status.
+	if s.IsActive() {
+		return "busy"
+	}
+	return "idle"
+}
+
+// processAlive checks if a PID corresponds to a running process.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
+	return err == nil
+}
+
+// printDailySummary outputs the "今日概况" summary line.
+func printDailySummary(projects []suggest.ProjectSummary) {
+	// Collect primary, secondary, and "other" totals
+	var primary, secondary, other float64
+	var primaryName, secondaryName string
+	var otherProjects []string
+
+	for _, p := range projects {
+		switch p.Priority {
+		case "primary":
+			primary += p.TodayMinutes
+			primaryName = p.Name
+		case "secondary":
+			secondary += p.TodayMinutes
+			secondaryName = p.Name
+		default:
+			if p.TodayMinutes > 0 {
+				other += p.TodayMinutes
+				otherProjects = append(otherProjects, p.Name)
+			}
+		}
+	}
+
+	fmt.Println("📊 今日概况：")
+	parts := make([]string, 0, 3)
+	if primaryName != "" {
+		parts = append(parts, fmt.Sprintf("主线：%s（%s）", primaryName, formatMinutesBrief(int(primary))))
+	}
+	if secondaryName != "" {
+		parts = append(parts, fmt.Sprintf("支线：%s（%s）", secondaryName, formatMinutesBrief(int(secondary))))
+	}
+	if other > 0 {
+		otherStr := strings.Join(otherProjects, "、")
+		parts = append(parts, fmt.Sprintf("其他：%s（%s）", otherStr, formatMinutesBrief(int(other))))
+	}
+
+	if len(parts) == 0 {
+		fmt.Println("   暂无数据")
+	} else {
+		fmt.Println("   " + strings.Join(parts, " | "))
+	}
+}
+
+// formatMinutesBrief formats a minute count into a compact string.
+func formatMinutesBrief(minutes int) string {
+	if minutes < 60 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	h := minutes / 60
+	m := minutes % 60
+	if m == 0 {
+		return fmt.Sprintf("%.1fh", float64(h))
+	}
+	return fmt.Sprintf("%.1fh", float64(h)+float64(m)/60)
 }
 
 // shortPath truncates a path for display, showing the last two components.
