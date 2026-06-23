@@ -23,6 +23,7 @@ import (
 	"github.com/pancake-lee/pflow/internal/project"
 	"github.com/pancake-lee/pflow/internal/session"
 	"github.com/pancake-lee/pflow/internal/suggest"
+	"github.com/pancake-lee/pflow/internal/timetrack"
 	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 	"go.uber.org/zap/zapcore"
 )
@@ -142,12 +143,14 @@ func runStatus(window time.Duration, maxInactive int, source string) {
 	fmt.Printf("Now: %s\n\n", time.Now().Format(time.DateTime))
 
 	totalSessions := 0
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
 	// ── Claude Code ──────────────────────────────────────────────
 	if claudeErr == nil && len(claudeResult.Sessions) > 0 {
 		fmt.Println("── Claude Code ──────────────────────────────────────────────────────")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "SESSION ID\tPROJECT\tSTATUS\tNAME\tLAST ACTIVE\tLAST REQ\tLAST RESP")
+		fmt.Fprintln(w, "SESSION ID\tPROJECT\tSTATUS\tNAME\tLAST ACTIVE\tSUM ACTIVE\tLAST REQ\tLAST RESP")
 
 		for _, s := range claudeResult.Sessions {
 			status := s.StatusLabel()
@@ -178,13 +181,16 @@ func runStatus(window time.Duration, maxInactive int, source string) {
 					lastResp = "—"
 				}
 			}
+			sumActive := timetrack.SessionTodayMinutes(
+				s.MessageCount, s.FirstActive, s.LastActive, todayStart, now)
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				shortID(s.SessionID, 8),
 				project,
 				status,
 				name,
 				formatSince(s.LastActive),
+				formatMinutes(sumActive),
 				lastReq,
 				lastResp,
 			)
@@ -206,7 +212,7 @@ func runStatus(window time.Duration, maxInactive int, source string) {
 		}
 		fmt.Println()
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "SESSION ID\tPROJECT\tSTATUS\tNAME\tLAST ACTIVE\tLAST REQ\tLAST RESP")
+		fmt.Fprintln(w, "SESSION ID\tPROJECT\tSTATUS\tNAME\tLAST ACTIVE\tSUM ACTIVE\tLAST REQ\tLAST RESP")
 
 		for _, s := range hermesResult.Sessions {
 			project := s.Project
@@ -230,14 +236,17 @@ func runStatus(window time.Duration, maxInactive int, source string) {
 			if lastResp == "" {
 				lastResp = "—"
 			}
+			sumActive := timetrack.SessionTodayMinutes(
+				s.MessageCount, s.FirstActive, s.LastActive, todayStart, now)
 
-			fmt.Fprintf(w, "%s\t%s %s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				s.ShortID(),
 				s.PlatformIcon(),
 				project,
 				s.StatusLabel(),
 				name,
 				formatSince(s.LastActive),
+				formatMinutes(sumActive),
 				lastReq,
 				lastResp,
 			)
@@ -354,6 +363,12 @@ func runServeCmd(args []string) {
 		plogger.Infof("orphan cleanup: removed %d orphan session(s)", cleaned)
 	}
 
+	// Set up tmux focus hooks for active-time tracking (P1 enhancement).
+	// Hooks fire on session switch/attach/detach to log focus events.
+	if err := session.SetupFocusHooks(); err != nil {
+		plogger.Warnf("focus hooks setup failed: %v (focus tracking disabled)", err)
+	}
+
 	// Session manager for tmux + ttyd terminal management
 	sessionMgr := session.NewManager(*ttydBasePort, "127.0.0.1")
 
@@ -375,6 +390,7 @@ func runServeCmd(args []string) {
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		fmt.Println("\nShutting down...")
+		session.TeardownFocusHooks()
 		os.Exit(0)
 	}()
 
@@ -570,6 +586,25 @@ func escapeNewlines(s string) string {
 	return s
 }
 
+// formatMinutes formats cumulative active minutes for CLI table display.
+func formatMinutes(mins float64) string {
+	if mins <= 0 {
+		return "0m"
+	}
+	if mins < 1 {
+		return "<1m"
+	}
+	h := int(mins) / 60
+	m := int(mins) % 60
+	if h == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	if m == 0 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dh %dm", h, m)
+}
+
 func formatSince(t time.Time) string {
 	if t.IsZero() {
 		return "n/a"
@@ -748,15 +783,16 @@ func runSuggestCmd(args []string) {
 		for _, s := range claudeResult.Sessions {
 			matched := project.MatchRootFromList(rootsFile.Roots, s.Project)
 			si := suggest.SessionInfo{
-				AgentType:   "claude",
-				AgentName:   s.Name,
-				ProjectPath: s.Project,
-				Status:      s.Status,
-				LastActive:  s.LastActive,
-				FirstActive: s.FirstActive,
-				PID:         s.PID,
-				IsRunning:   s.IsRunning,
-				LastReq:     s.LastReq,
+				AgentType:    "claude",
+				AgentName:    s.Name,
+				ProjectPath:  s.Project,
+				Status:       s.Status,
+				LastActive:   s.LastActive,
+				FirstActive:  s.FirstActive,
+				PID:          s.PID,
+				IsRunning:    s.IsRunning,
+				LastReq:      s.LastReq,
+				MessageCount: s.MessageCount,
 			}
 			if matched != nil {
 				si.MatchedRoot = matched.Path
@@ -769,15 +805,16 @@ func runSuggestCmd(args []string) {
 		for _, s := range hermesResult.Sessions {
 			matched := project.MatchRootFromList(rootsFile.Roots, s.Project)
 			si := suggest.SessionInfo{
-				AgentType:   "hermes",
-				AgentName:   s.Name,
-				ProjectPath: s.Project,
-				Status:      hermesStatusToSuggest(s),
-				LastActive:  s.LastActive,
-				FirstActive: s.FirstActive,
-				PID:         0, // Hermes sessions don't expose PID in the same way
-				IsRunning:   s.IsGatewayTracked && !s.IsSuspended,
-				LastReq:     s.LastReq,
+				AgentType:    "hermes",
+				AgentName:    s.Name,
+				ProjectPath:  s.Project,
+				Status:       hermesStatusToSuggest(s),
+				LastActive:   s.LastActive,
+				FirstActive:  s.FirstActive,
+				PID:          0, // Hermes sessions don't expose PID in the same way
+				IsRunning:    s.IsGatewayTracked && !s.IsSuspended,
+				LastReq:      s.LastReq,
+				MessageCount: s.MessageCount,
 			}
 			if matched != nil {
 				si.MatchedRoot = matched.Path
@@ -800,8 +837,11 @@ func runSuggestCmd(args []string) {
 		}
 	}
 
+	// Load and resolve focus log for active-time estimation (tmux focus events).
+	focusLog := loadFocusLog(mappings, rootsFile)
+
 	// Compute per-project summaries
-	projects := suggest.ComputeProjectSummaries(sessions, now)
+	projects := suggest.ComputeProjectSummaries(sessions, now, focusLog)
 
 	// Generate suggestions
 	input := suggest.Input{
@@ -948,4 +988,34 @@ func shortPath(path string) string {
 		return path
 	}
 	return filepath.Join(parts[len(parts)-2], parts[len(parts)-1])
+}
+
+// loadFocusLog reads the focus history log and resolves tmux session names
+// to project root paths using mappings + roots. Returns nil if unavailable.
+func loadFocusLog(mappings []session.Mapping, rootsFile *project.RootsFile) *timetrack.FocusLog {
+	if len(mappings) == 0 || rootsFile == nil {
+		return nil
+	}
+	path, err := timetrack.DefaultFocusLogPath()
+	if err != nil {
+		return nil
+	}
+	fl, err := timetrack.ReadFocusLog(path)
+	if err != nil || fl == nil {
+		return nil
+	}
+	// Build session_name → project_root_path map
+	sessionToProject := make(map[string]string, len(mappings))
+	for _, m := range mappings {
+		if m.TmuxName == "" || m.WorkDir == "" {
+			continue
+		}
+		if matched := project.MatchRootFromList(rootsFile.Roots, m.WorkDir); matched != nil {
+			sessionToProject[m.TmuxName] = matched.Path
+		} else {
+			sessionToProject[m.TmuxName] = m.WorkDir
+		}
+	}
+	fl.ResolveProjects(sessionToProject)
+	return fl
 }

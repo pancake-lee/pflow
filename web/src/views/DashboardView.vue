@@ -39,7 +39,7 @@ import type {
 } from '../types/dashboard'
 import { useDashboard } from '../composables/useDashboard'
 import { usePolling } from '../composables/usePolling'
-import { formatSince, truncate, escapeNewlines } from '../composables/format'
+import { formatSince, formatMinutes, truncate, escapeNewlines } from '../composables/format'
 import GroupCard from '../components/GroupCard.vue'
 import PrimaryCard from '../components/PrimaryCard.vue'
 import SecondaryCard from '../components/SecondaryCard.vue'
@@ -682,6 +682,17 @@ const groupColumns: DataTableColumns<DashboardEntry> = [
     defaultSortOrder: 'descend',
   },
   {
+    title: 'Sum Active',
+    key: 'today_minutes',
+    width: 90,
+    render(row) {
+      const mins = formatMinutes(row.today_minutes)
+      const tooltip = `${row.today_minutes?.toFixed(1) ?? '0'} min estimated active today`
+      return h(NTooltip, {}, { trigger: () => h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, mins), default: () => tooltip })
+    },
+    sorter: (a, b) => (a.today_minutes ?? 0) - (b.today_minutes ?? 0),
+  },
+  {
     title: 'Last Req',
     key: 'last_req',
     width: 250,
@@ -991,6 +1002,10 @@ function rowProps(row: DashboardEntry) {
           <NDescriptionsItem label="Last Active">
             {{ new Date(selectedSession.last_active).toLocaleString() }}
             &nbsp;({{ formatSince(selectedSession.last_active) }})
+          </NDescriptionsItem>
+          <NDescriptionsItem label="Sum Active">
+            {{ formatMinutes(selectedSession.today_minutes) }}
+            &nbsp;(est. active today)
           </NDescriptionsItem>
           <NDescriptionsItem label="Last Req">
             <div class="detail-text">{{ selectedSession.last_req_full || selectedSession.last_req || '—' }}</div>

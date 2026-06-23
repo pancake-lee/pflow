@@ -11,6 +11,25 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/pancake-lee/pflow/internal/timetrack"
+)
+
+// Thresholds for time-based scenarios, tuned for message-count-based
+// TodayMinutes (1 message ≈ 3 active minutes). See design doc §8:
+// docs/design/09-active-time-calculation.md
+const (
+	// S15: primary ≥ 20 messages (≈60 min today) → positive feedback
+	thresholdEfficientMinutes = 60
+
+	// S20: primary ≥ 30 messages (≈90 min today) → suggest switching
+	thresholdOver4hMinutes = 90
+
+	// S10: secondary > primary + 2 messages (≈6 min) → attention imbalance
+	thresholdImbalanceDelta = 6.0
+
+	// S11: normal project > primary AND ≥ 15 min today → meaningful check
+	thresholdNormalMinMeaningful = 15
 )
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -30,6 +49,7 @@ type SessionInfo struct {
 	LastReq      string // latest user request (for waiting hint)
 	MatchedRoot  string // matched project root path
 	RootPriority string // "primary", "secondary", "normal", ""
+	MessageCount int    // number of messages today, used for time estimation
 }
 
 // ProjectSummary holds per-project (matched root) aggregated metrics.
@@ -109,8 +129,8 @@ func Generate(input Input) []Suggestion {
 	// S14: ⚠️ agent stuck (busy > 10 min)
 	out = appendIf(out, checkAgentStuck(busySessions, input.Now, 10*time.Minute))
 
-	// S10: 🔵 attention imbalance (secondary today > primary + 30 min)
-	out = appendIf(out, checkAttentionImbalance(primary, secondary, projMap, 30))
+	// S10: 🔵 attention imbalance (secondary today > primary + threshold)
+	out = appendIf(out, checkAttentionImbalance(primary, secondary, projMap, thresholdImbalanceDelta))
 
 	// S11: ⚪ normal project > primary today
 	out = appendIf(out, checkNormalExceedsPrimary(primary, input.Projects, projMap))
@@ -124,11 +144,11 @@ func Generate(input Input) []Suggestion {
 	// S9: ✅ multiple busy (positive)
 	out = appendIf(out, checkMultipleBusy(busySessions, primary, secondary))
 
-	// S15: 🎉 primary today > 2h + all good
-	out = appendIf(out, checkTodayEfficient(primary, projMap, waitingSessions, 2*60))
+	// S15: 🎉 primary today ≥ 20 msgs (~60 min) + all good
+	out = appendIf(out, checkTodayEfficient(primary, projMap, waitingSessions, thresholdEfficientMinutes))
 
-	// S20: 🏆 primary today > 4h
-	out = appendIf(out, checkPrimaryOver4h(primary, projMap, 4*60))
+	// S20: 🏆 primary today ≥ 30 msgs (~90 min)
+	out = appendIf(out, checkPrimaryOver4h(primary, projMap, thresholdOver4hMinutes))
 
 	// S6: ⚪ no active sessions
 	out = appendIf(out, checkNoActiveSessions(input.Sessions, primary))
@@ -341,7 +361,7 @@ func checkNormalExceedsPrimary(primary *ProjectSummary, projects []ProjectSummar
 		if proj.Priority != "normal" || proj.Path == primary.Path {
 			continue
 		}
-		if proj.TodayMinutes > primaryMin && proj.TodayMinutes > 15 { // at least 15 min to be meaningful
+		if proj.TodayMinutes > primaryMin && proj.TodayMinutes > thresholdNormalMinMeaningful {
 			return &Suggestion{
 				Priority: 15,
 				Icon:     "⚪",
@@ -659,8 +679,11 @@ func formatMinutes(minutes int) string {
 }
 
 // ComputeProjectSummaries builds ProjectSummary from sessions and project roots.
-// This is the primary data transformation function used by the CLI layer.
-func ComputeProjectSummaries(sessions []SessionInfo, now time.Time) []ProjectSummary {
+// If focusLog is non-nil and has data for a project, its TodayMinutes override
+// the per-session estimates (tmux focus events take highest priority in the
+// degradation chain). This is the primary data transformation function used by
+// the CLI layer.
+func ComputeProjectSummaries(sessions []SessionInfo, now time.Time, focusLog *timetrack.FocusLog) []ProjectSummary {
 	type agg struct {
 		path         string
 		priority     string
@@ -717,20 +740,10 @@ func ComputeProjectSummaries(sessions []SessionInfo, now time.Time) []ProjectSum
 			g.lastActive = s.LastActive
 		}
 
-		// Compute today's usage contribution
-		if s.FirstActive.After(todayStart) || s.LastActive.After(todayStart) {
-			start := s.FirstActive
-			if start.Before(todayStart) {
-				start = todayStart
-			}
-			end := s.LastActive
-			if end.After(now) {
-				end = now
-			}
-			if end.After(start) {
-				g.todayMinutes += end.Sub(start).Minutes()
-			}
-		}
+		// Compute today's usage contribution using time estimation
+		// (msg count × 3 min, or wall-clock × 0.3 fallback)
+		g.todayMinutes += timetrack.SessionTodayMinutes(
+			s.MessageCount, s.FirstActive, s.LastActive, todayStart, now)
 	}
 
 	result := make([]ProjectSummary, 0, len(order))
@@ -754,5 +767,15 @@ func ComputeProjectSummaries(sessions []SessionInfo, now time.Time) []ProjectSum
 		})
 	}
 
+
+	// Tier 1: override with tmux focus events if available.
+	// Focus log has higher precision than per-session message estimates.
+	if focusLog != nil {
+		for i := range result {
+			if fm := focusLog.ProjectMinutes(result[i].Path, todayStart, now); fm > 0 {
+				result[i].TodayMinutes = fm
+			}
+		}
+	}
 	return result
 }

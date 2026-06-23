@@ -21,6 +21,7 @@ import (
 	"github.com/pancake-lee/pflow/internal/project"
 	"github.com/pancake-lee/pflow/internal/session"
 	"github.com/pancake-lee/pflow/internal/suggest"
+	"github.com/pancake-lee/pflow/internal/timetrack"
 	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 )
 
@@ -43,6 +44,8 @@ type DashboardEntry struct {
 	HasTerminal      bool      `json:"has_terminal"`         // true if a tmux mapping exists
 	TerminalTmuxName string    `json:"terminal_tmux_name,omitempty"` // matched tmux session name
 	MatchedRoot      string    `json:"matched_root,omitempty"`       // matched project root path (empty = unmatched)
+	MessageCount     int       `json:"message_count"`                // number of messages today, used for time estimation
+	TodayMinutes     float64   `json:"today_minutes"`                // estimated active minutes today (timetrack degradation chain)
 }
 
 // ProjectRootJSON is the JSON representation of a project root for API responses.
@@ -216,6 +219,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				LastResp:     s.LastResp,
 				LastReqFull:  s.LastReqFull,
 				LastRespFull: s.LastRespFull,
+				MessageCount: s.MessageCount,
 			}
 			// Match to project root
 			if rootsFile != nil {
@@ -247,6 +251,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				LastResp:     s.LastResp,
 				LastReqFull:  s.LastReqFull,
 				LastRespFull: s.LastRespFull,
+				MessageCount: s.MessageCount,
 				Platform:     s.Platform,
 			}
 			// Match to project root
@@ -297,11 +302,69 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Load and resolve focus log for active-time estimation (tmux focus events).
+	focusLog := loadAndResolveFocusLog(mappings, rootsFile)
+
+	// Compute today_minutes for each entry using the degradation chain.
+	now := resp.Now
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	for i := range resp.Sessions {
+		e := &resp.Sessions[i]
+		e.TodayMinutes = timetrack.SessionTodayMinutes(
+			e.MessageCount, e.FirstActive, e.LastActive, todayStart, now)
+	}
+	// Apply project-level focus log override (Tier 1: tmux focus events).
+	if focusLog != nil {
+		// Group entries by project to sum focus minutes
+		type projGroup struct {
+			entries   []*DashboardEntry
+			sessions  []timetrack.SessionData
+		}
+		groups := make(map[string]*projGroup)
+		for i := range resp.Sessions {
+			e := &resp.Sessions[i]
+			key := e.MatchedRoot
+			if key == "" {
+				key = e.Project
+			}
+			if groups[key] == nil {
+				groups[key] = &projGroup{}
+			}
+			groups[key].entries = append(groups[key].entries, e)
+			groups[key].sessions = append(groups[key].sessions, timetrack.SessionData{
+				MessageCount: e.MessageCount,
+				FirstActive:  e.FirstActive,
+				LastActive:   e.LastActive,
+			})
+		}
+		for projPath, g := range groups {
+			projMins := timetrack.ProjectTodayMinutes(projPath, g.sessions, focusLog, todayStart, now)
+			if projMins > 0 {
+				// Distribute proportionally to each entry based on session contribution
+				var totalSessionMins float64
+				for _, e := range g.entries {
+					totalSessionMins += e.TodayMinutes
+				}
+				if totalSessionMins > 0 {
+					for _, e := range g.entries {
+						e.TodayMinutes = projMins * (e.TodayMinutes / totalSessionMins)
+					}
+				} else {
+					// All entries have zero — distribute evenly
+					n := float64(len(g.entries))
+					for _, e := range g.entries {
+						e.TodayMinutes = projMins / n
+					}
+				}
+			}
+		}
+	}
+
 	// Compute reminder scores per project.
-	resp.ReminderScores = computeReminderScores(resp.Sessions, rootsFile, resp.Now)
+	resp.ReminderScores = computeReminderScores(resp.Sessions, rootsFile, resp.Now, focusLog)
 
 	// Generate suggest analysis (军情哨)
-	resp.Suggestions = generateSuggestions(claudeResult, hermesResult, mappings, rootsFile, resp.Now)
+	resp.Suggestions = generateSuggestions(claudeResult, hermesResult, mappings, rootsFile, resp.Now, focusLog)
 
 	// Include focus state
 	if focusActive, focusedProject, focusMinutes, focusSince := attention.GetFocus().Snapshot(); focusActive {
@@ -719,7 +782,7 @@ func truncate8(s string) string {
 // computeReminderScores groups sessions by matched_root (or project dir),
 // extracts per-project metrics (waiting, streak, total), and calls the
 // attention score algorithm. Returns a map of project key → ReminderOutput.
-func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFile, now time.Time) map[string]attention.ReminderOutput {
+func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFile, now time.Time, focusLog *timetrack.FocusLog) map[string]attention.ReminderOutput {
 	if len(sessions) == 0 {
 		return nil
 	}
@@ -786,21 +849,10 @@ func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFi
 			}
 
 			// Estimate individual session contribution to today's total
-			var sessionContribution float64
-			if s.FirstActive.After(todayStart) || s.LastActive.After(todayStart) {
-				start := s.FirstActive
-				if start.Before(todayStart) {
-					start = todayStart
-				}
-				end := s.LastActive
-				if end.After(now) {
-					end = now
-				}
-				if end.After(start) {
-					sessionContribution = end.Sub(start).Minutes()
-					totalToday += sessionContribution
-				}
-			}
+			// (msg count × 3 min, or wall-clock × 0.3 fallback)
+			sessionContribution := timetrack.SessionTodayMinutes(
+				s.MessageCount, s.FirstActive, s.LastActive, todayStart, now)
+			totalToday += sessionContribution
 			plogger.Infof("[api]   session %s: status=%s waiting=%.0fm contrib=%.0fm",
 				truncate8(s.SessionID), s.Status, waitingMin, sessionContribution)
 		}
@@ -863,6 +915,12 @@ func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFi
 			LastActive: lastActiveTime,
 			IsPrimary:  gm.isPrimary,
 		}
+		// Tier 1: override with tmux focus events if available.
+		if focusLog != nil {
+			if fm := focusLog.ProjectMinutes(key, todayStart, now); fm > 0 {
+				totalToday = fm
+			}
+		}
 		plogger.Infof("[api]   => input: waiting=%.0fm(capped from %.0fm) streak=%.0fm total=%.0fm last=%s",
 			waitingMax, uncappedWaiting, streakEstimate, totalToday,
 			lastActiveTime.Format("15:04:05"))
@@ -881,6 +939,7 @@ func generateSuggestions(
 	mappings []session.Mapping,
 	rootsFile *project.RootsFile,
 	now time.Time,
+	focusLog *timetrack.FocusLog,
 ) []SuggestionJSON {
 	// Build suggest.SessionInfo from raw scan results
 	var sessions []suggest.SessionInfo
@@ -888,15 +947,16 @@ func generateSuggestions(
 	if claudeResult != nil {
 		for _, s := range claudeResult.Sessions {
 			si := suggest.SessionInfo{
-				AgentType:   "claude",
-				AgentName:   s.Name,
-				ProjectPath: s.Project,
-				Status:      s.Status,
-				LastActive:  s.LastActive,
-				FirstActive: s.FirstActive,
-				PID:         s.PID,
-				IsRunning:   s.IsRunning,
-				LastReq:     s.LastReq,
+				AgentType:    "claude",
+				AgentName:    s.Name,
+				ProjectPath:  s.Project,
+				Status:       s.Status,
+				LastActive:   s.LastActive,
+				FirstActive:  s.FirstActive,
+				PID:          s.PID,
+				IsRunning:    s.IsRunning,
+				LastReq:      s.LastReq,
+				MessageCount: s.MessageCount,
 			}
 			if rootsFile != nil {
 				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
@@ -919,15 +979,16 @@ func generateSuggestions(
 				continue
 			}
 			si := suggest.SessionInfo{
-				AgentType:   "hermes",
-				AgentName:   s.Name,
-				ProjectPath: s.Project,
-				Status:      hermesStatusToSuggest(s),
-				LastActive:  s.LastActive,
-				FirstActive: s.FirstActive,
-				PID:         0,
-				IsRunning:   s.IsGatewayTracked && !s.IsSuspended,
-				LastReq:     s.LastReq,
+				AgentType:    "hermes",
+				AgentName:    s.Name,
+				ProjectPath:  s.Project,
+				Status:       hermesStatusToSuggest(s),
+				LastActive:   s.LastActive,
+				FirstActive:  s.FirstActive,
+				PID:          0,
+				IsRunning:    s.IsGatewayTracked && !s.IsSuspended,
+				LastReq:      s.LastReq,
+				MessageCount: s.MessageCount,
 			}
 			if rootsFile != nil {
 				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
@@ -955,7 +1016,7 @@ func generateSuggestions(
 	currentProject := detectCurrentProjectFromAPI(mappings, rootsFile)
 
 	// Compute per-project summaries
-	projects := suggest.ComputeProjectSummaries(sessions, now)
+	projects := suggest.ComputeProjectSummaries(sessions, now, focusLog)
 
 	// Generate suggestions
 	input := suggest.Input{
@@ -1067,4 +1128,53 @@ func writeTerminalError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(terminalResponse{Error: msg})
+}
+
+// loadAndResolveFocusLog reads the focus history log and resolves tmux
+// session names to project root paths using the mappings and roots file.
+// Returns nil if focus events are not available (not an error).
+func loadAndResolveFocusLog(mappings []session.Mapping, rootsFile *project.RootsFile) *timetrack.FocusLog {
+	if len(mappings) == 0 || rootsFile == nil {
+		return nil
+	}
+
+	fl, err := readResolvedFocusLog(mappings, rootsFile)
+	if err != nil {
+		plogger.Debugf("api: focus log skipped: %v", err)
+	}
+	return fl
+}
+
+// readResolvedFocusLog reads the focus log, builds a session→project map
+// from mappings + roots, and resolves project keys.
+func readResolvedFocusLog(mappings []session.Mapping, rootsFile *project.RootsFile) (*timetrack.FocusLog, error) {
+	path, err := timetrack.DefaultFocusLogPath()
+	if err != nil {
+		return nil, err
+	}
+
+	fl, err := timetrack.ReadFocusLog(path)
+	if err != nil {
+		return nil, err
+	}
+	if fl == nil {
+		return nil, nil
+	}
+
+	// Build session_name → project_root_path map
+	sessionToProject := make(map[string]string, len(mappings))
+	for _, m := range mappings {
+		if m.TmuxName == "" || m.WorkDir == "" {
+			continue
+		}
+		if matched := project.MatchRootFromList(rootsFile.Roots, m.WorkDir); matched != nil {
+			sessionToProject[m.TmuxName] = matched.Path
+		} else {
+			// No matching root — use the workDir directly as fallback
+			sessionToProject[m.TmuxName] = m.WorkDir
+		}
+	}
+
+	fl.ResolveProjects(sessionToProject)
+	return fl, nil
 }

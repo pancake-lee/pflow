@@ -16,6 +16,7 @@ export interface DashboardEntry {
   last_req_full?: string  // full text for detail view
   last_resp_full?: string // full text for detail view
   platform?: string // Hermes only
+  today_minutes: number   // estimated active minutes today
   has_terminal: boolean
   terminal_tmux_name?: string
   matched_root?: string // project root path if matched, empty = unmatched

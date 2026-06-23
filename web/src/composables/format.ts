@@ -48,6 +48,22 @@ export function escapeNewlines(s: string): string {
 }
 
 /**
+ * Format cumulative active minutes for display.
+ * - < 1 min → "<1m"
+ * - < 60 min → "Xm" (e.g., "15m")
+ * - 60+ min → "Xh Ym" (e.g., "2h 15m")
+ */
+export function formatMinutes(mins: number): string {
+  if (!mins || mins <= 0) return '0m'
+  if (mins < 1) return '<1m'
+  const h = Math.floor(mins / 60)
+  const m = Math.round(mins % 60)
+  if (h === 0) return `${m}m`
+  if (m === 0) return `${h}h`
+  return `${h}h ${m}m`
+}
+
+/**
  * Shorten a session ID for display.
  */
 export function shortID(id: string, n = 16): string {

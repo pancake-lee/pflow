@@ -53,6 +53,7 @@ const PLACEHOLDER_ROW: DashboardEntry = {
   last_active: new Date().toISOString(),
   last_req: '-',
   last_resp: '-',
+  today_minutes: 0,
   has_terminal: false,
 }
 

@@ -12,7 +12,7 @@ import { DesktopOutline, HardwareChipOutline } from '@vicons/ionicons5'
 import type { DataTableColumns } from 'naive-ui'
 import type { DashboardEntry } from '../types/dashboard'
 import type { SessionGroup } from './GroupCard.vue'
-import { formatSince, truncate, escapeNewlines } from '../composables/format'
+import { formatSince, formatMinutes, truncate, escapeNewlines } from '../composables/format'
 import { highlightToMarquee, fogPctToOpacity, FOG_CONFIG, FOCUS_CONFIG } from '../composables/useReminderScores'
 import { STAR_BONUS_MINUTES } from '../config/attention'
 
@@ -80,6 +80,7 @@ const PLACEHOLDER_ROW: DashboardEntry = {
   last_active: new Date().toISOString(),
   last_req: '-',
   last_resp: '-',
+  today_minutes: 0,
   has_terminal: false,
 }
 
@@ -182,6 +183,17 @@ const tableColumns: DataTableColumns<DashboardEntry> = [
     },
   },
   {
+    title: 'Sum',
+    key: 'today_minutes',
+    width: 70,
+    render(row) {
+      if (row.session_id === '-') return h('span', '—')
+      const mins = formatMinutes(row.today_minutes)
+      const tooltip = `${row.today_minutes?.toFixed(1) ?? '0'} min estimated active today`
+      return h(NTooltip, {}, { trigger: () => h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, mins), default: () => tooltip })
+    },
+  },
+  {
     title: 'Last Req',
     key: 'last_req',
     width: 250,
@@ -265,7 +277,7 @@ function rowProps(row: DashboardEntry) {
           <NTag :type="trafficColor(mainSession.traffic_light)" size="small" :bordered="false">
             {{ mainSession.traffic_light }} {{ mainSession.status }}
           </NTag>
-          <span class="h-time">{{ formatSince(mainSession.last_active) }}</span>
+          <span class="h-time">last {{ formatSince(mainSession.last_active) }} | sum {{ formatMinutes(mainSession.today_minutes) }}</span>
         </template>
         <!-- Focus controls -->
         <span class="h-sep">|</span>
