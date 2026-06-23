@@ -343,7 +343,7 @@ func printHermesProbe(s hermes.SessionSummary, gatewayAlive bool) {
 
 func runServeCmd(args []string) {
 	flagSet := flag.NewFlagSet("serve", flag.ExitOnError)
-	port := flagSet.Int("port", 8080, "HTTP server port")
+	port := flagSet.Int("port", 10002, "HTTP server port")
 	ttydBasePort := flagSet.Int("ttyd-base-port", 10000, "Base port for ttyd terminal processes")
 	flagSet.Parse(args)
 

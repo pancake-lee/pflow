@@ -57,7 +57,7 @@ type Suggestion struct {
 type Input struct {
 	Sessions       []SessionInfo
 	Projects       []ProjectSummary
-	CurrentProject string   // project root path the user is currently viewing
+	CurrentProject string // project root path the user is currently viewing
 	Now            time.Time
 }
 
@@ -178,7 +178,7 @@ func checkUrgentWaiting(waiting []SessionInfo, now time.Time, threshold time.Dur
 			return &Suggestion{
 				Priority: 1,
 				Icon:     icon,
-				Text:     fmt.Sprintf("%s %s %s会话已等待 %.0f 分钟，%s。\n   → 按 Enter 打开终端处理", icon, projLabel, name, waitMin, hint),
+				Text:     fmt.Sprintf("%s %s %s会话已等待 %.0f 分钟，%s。\n", icon, projLabel, name, waitMin, hint),
 			}
 		}
 	}

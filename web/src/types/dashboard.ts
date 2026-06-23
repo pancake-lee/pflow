@@ -35,6 +35,7 @@ export interface ReminderScoreInfo {
 export interface ProjectRoot {
   path: string
   priority: 'primary' | 'secondary' | 'normal'
+  slot?: 'primary' | 'secondary_1' | 'secondary_2'
 }
 
 export interface Suggestion {
@@ -46,6 +47,7 @@ export interface Suggestion {
 export interface DashboardResponse {
   now: string // ISO 8601
   window: string
+  slots?: Record<string, string>  // slot_id -> path, e.g. {"primary": "/a", "secondary_1": "/b", "secondary_2": "/c"}
   project_roots: ProjectRoot[]
   sessions: DashboardEntry[]
   reminder_scores: Record<string, ReminderScoreInfo>

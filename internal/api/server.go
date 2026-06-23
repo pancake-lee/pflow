@@ -49,6 +49,7 @@ type DashboardEntry struct {
 type ProjectRootJSON struct {
 	Path     string `json:"path"`
 	Priority string `json:"priority"`
+	Slot     string `json:"slot,omitempty"` // "primary", "secondary_1", "secondary_2", or ""
 }
 
 // SuggestionJSON is the JSON representation of a suggest.Suggestion.
@@ -62,6 +63,7 @@ type SuggestionJSON struct {
 type DashboardResponse struct {
 	Now            time.Time                          `json:"now"`
 	Window         string                             `json:"window"`
+	Slots          map[string]string                  `json:"slots,omitempty"` // slot → path mapping
 	ProjectRoots   []ProjectRootJSON                  `json:"project_roots"`
 	Sessions       []DashboardEntry                   `json:"sessions"`
 	ReminderScores map[string]attention.ReminderOutput `json:"reminder_scores"`
@@ -98,6 +100,10 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	s.HandleFunc("GET /api/v1/project-roots", s.handleGetProjectRoots)
 	s.HandleFunc("PUT /api/v1/project-roots", s.handlePutProjectRoot)
 	s.HandleFunc("DELETE /api/v1/project-roots", s.handleDeleteProjectRoot)
+
+	// Project slot management endpoints
+	s.HandleFunc("PUT /api/v1/project-roots/slot", s.handlePutProjectSlot)
+	s.HandleFunc("DELETE /api/v1/project-roots/slot", s.handleDeleteProjectSlot)
 
 	// Focus mode endpoints
 	s.HandleFunc("POST /api/v1/focus/extend", s.handleFocusExtend)
@@ -156,19 +162,32 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Load project roots
 	rootsFile, rootsErr := s.projectMgr.Load()
 	var projectRoots []ProjectRootJSON
+	var slotsMap map[string]string
 	if rootsErr == nil {
 		projectRoots = make([]ProjectRootJSON, 0, len(rootsFile.Roots))
 		for _, r := range rootsFile.Roots {
-			projectRoots = append(projectRoots, ProjectRootJSON{
+			prj := ProjectRootJSON{
 				Path:     r.Path,
 				Priority: string(r.Priority),
-			})
+			}
+			if r.Slot != "" {
+				prj.Slot = string(r.Slot)
+			}
+			projectRoots = append(projectRoots, prj)
+		}
+		// Build slots map for frontend
+		if len(rootsFile.Slots) > 0 {
+			slotsMap = make(map[string]string, len(rootsFile.Slots))
+			for slotID, path := range rootsFile.Slots {
+				slotsMap[string(slotID)] = path
+			}
 		}
 	}
 
 	resp := DashboardResponse{
 		Now:          time.Now(),
 		Window:       opts.Window.String(),
+		Slots:        slotsMap,
 		ProjectRoots: projectRoots,
 	}
 
@@ -343,7 +362,11 @@ func (s *Server) handleGetProjectRoots(w http.ResponseWriter, r *http.Request) {
 
 	roots := make([]ProjectRootJSON, 0, len(rf.Roots))
 	for _, r := range rf.Roots {
-		roots = append(roots, ProjectRootJSON{Path: r.Path, Priority: string(r.Priority)})
+		prj := ProjectRootJSON{Path: r.Path, Priority: string(r.Priority)}
+		if r.Slot != "" {
+			prj.Slot = string(r.Slot)
+		}
+		roots = append(roots, prj)
 	}
 	if roots == nil {
 		roots = []ProjectRootJSON{} // always return array, not null
@@ -354,6 +377,8 @@ func (s *Server) handleGetProjectRoots(w http.ResponseWriter, r *http.Request) {
 
 // handlePutProjectRoot handles PUT /api/v1/project-roots.
 // Body: {"path": "/home/user/code/pflow", "priority": "primary"}
+// For "primary" and "secondary" priorities, routes through SetSlot for
+// backward compatibility. New clients should use PUT /api/v1/project-roots/slot.
 func (s *Server) handlePutProjectRoot(w http.ResponseWriter, r *http.Request) {
 	var req putProjectRootReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -379,9 +404,34 @@ func (s *Server) handlePutProjectRoot(w http.ResponseWriter, r *http.Request) {
 		priority = project.PriorityNormal
 	}
 
-	if err := s.projectMgr.SetPriority(req.Path, priority); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
+	// Route slot-based priorities through SetSlot
+	switch priority {
+	case project.PriorityPrimary:
+		if err := s.projectMgr.SetSlot(req.Path, project.SlotPrimary); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	case project.PrioritySecondary:
+		// Legacy: "secondary" with no slot specified.
+		// Use first empty secondary slot, or secondary_2 (replacing it) as fallback.
+		rf, loadErr := s.projectMgr.Load()
+		if loadErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": loadErr.Error()})
+			return
+		}
+		slot := project.SlotSecondary1
+		if _, occupied := rf.Slots[project.SlotSecondary1]; occupied {
+			slot = project.SlotSecondary2
+		}
+		if err := s.projectMgr.SetSlot(req.Path, slot); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	default:
+		if err := s.projectMgr.SetPriority(req.Path, priority); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -405,6 +455,63 @@ func (s *Server) handleDeleteProjectRoot(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": path})
+}
+
+// ── Project slot management handlers ──────────────────────────────
+
+type putProjectSlotReq struct {
+	Path string `json:"path"`
+	Slot string `json:"slot"` // "primary", "secondary_1", "secondary_2"
+}
+
+// handlePutProjectSlot handles PUT /api/v1/project-roots/slot.
+// Body: {"path": "/home/user/code/pflow", "slot": "secondary_1"}
+// Replaces whatever project was in that slot, demoting the old one to normal.
+func (s *Server) handlePutProjectSlot(w http.ResponseWriter, r *http.Request) {
+	var req putProjectSlotReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body: " + err.Error()})
+		return
+	}
+	if req.Path == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is required"})
+		return
+	}
+
+	req.Path = filepath.Clean(req.Path)
+	if req.Path == "/" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot mark root directory '/' as a project root"})
+		return
+	}
+
+	slot := project.SlotID(req.Slot)
+	if err := s.projectMgr.SetSlot(req.Path, slot); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":   true,
+		"path": req.Path,
+		"slot": req.Slot,
+	})
+}
+
+// handleDeleteProjectSlot handles DELETE /api/v1/project-roots/slot?slot=secondary_1.
+// Clears the slot, demoting its project to normal.
+func (s *Server) handleDeleteProjectSlot(w http.ResponseWriter, r *http.Request) {
+	slot := r.URL.Query().Get("slot")
+	if slot == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slot query parameter is required"})
+		return
+	}
+
+	if err := s.projectMgr.ClearSlot(project.SlotID(slot)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "slot": slot})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

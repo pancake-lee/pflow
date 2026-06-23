@@ -256,15 +256,8 @@ function projectBasename(path: string): string {
   return idx >= 0 ? cleaned.slice(idx + 1) : cleaned
 }
 
-// Build a lookup map of path → priority from project roots
-const rootPriorityMap = computed(() => {
-  const map = new Map<string, Priority>()
-  const roots = data.value?.project_roots ?? []
-  for (const r of roots) {
-    map.set(r.path, r.priority)
-  }
-  return map
-})
+// Build a lookup map from the slots response (slot_id → path)
+const slotsMap = computed(() => data.value?.slots ?? {} as Record<string, string>)
 
 type Priority = 'primary' | 'secondary' | 'normal'
 
@@ -272,6 +265,10 @@ const groupedSessions = computed<SessionGroup[]>(() => {
   const sessions = filteredSessions.value
   const roots = data.value?.project_roots ?? []
   const rootSet = new Set(roots.map(r => r.path))
+  const rootPriorityMap = new Map<string, Priority>()
+  for (const r of roots) {
+    rootPriorityMap.set(r.path, r.priority)
+  }
   const groups = new Map<string, DashboardEntry[]>()
 
   for (const s of sessions) {
@@ -289,7 +286,7 @@ const groupedSessions = computed<SessionGroup[]>(() => {
     hasWaiting: sess.some(s => s.status === 'waiting'),
     lastActive: Math.max(...sess.map(s => new Date(s.last_active).getTime())),
     isRoot: rootSet.has(key),
-    priority: rootPriorityMap.value.get(key) ?? null,
+    priority: rootPriorityMap.get(key) ?? null,
   }))
 
   // Sort: primary first, then secondary, then normal, then unmatched
@@ -309,15 +306,18 @@ const groupedSessions = computed<SessionGroup[]>(() => {
 // Suggestions from API
 const suggestions = computed(() => data.value?.suggestions ?? [])
 
-// Zone splits
-const primaryGroup = computed(() =>
-  groupedSessions.value.find(g => g.priority === 'primary') ?? null,
-)
+// Zone splits — use slots map directly for stable slot positioning
+const primaryGroup = computed(() => {
+  const path = slotsMap.value['primary'] ?? null
+  if (!path) return null
+  return groupedSessions.value.find(g => g.fullPath === path) ?? null
+})
 const secondaryGroups = computed(() => {
-  const list = groupedSessions.value.filter(g => g.priority === 'secondary')
-  // Pad to exactly 2 slots (null = empty placeholder)
-  while (list.length < 2) list.push(null as unknown as SessionGroup)
-  return list.slice(0, 2)
+  const slot1Path = slotsMap.value['secondary_1'] ?? null
+  const slot2Path = slotsMap.value['secondary_2'] ?? null
+  const findGroup = (p: string | null): SessionGroup | null =>
+    p ? groupedSessions.value.find(g => g.fullPath === p) ?? null : null
+  return [findGroup(slot1Path), findGroup(slot2Path)]
 })
 const normalGroups = computed(() =>
   groupedSessions.value.filter(g => g.priority === 'normal'),
@@ -369,20 +369,20 @@ const projectSelectOptions = computed(() =>
 
 const projectRootLoading = ref(false)
 
-async function assignSlot(path: string, priority: Priority) {
+async function assignSlot(path: string, slot: string) {
   projectRootLoading.value = true
   try {
-    const resp = await fetch('/api/v1/project-roots', {
+    const resp = await fetch('/api/v1/project-roots/slot', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, priority }),
+      body: JSON.stringify({ path, slot }),
     })
     const result = await resp.json()
     if (!resp.ok) {
-      message.error(result.error || `Failed to assign project`)
+      message.error(result.error || `Failed to assign to slot ${slot}`)
       return
     }
-    message.success(`Project set as ${priority}`)
+    message.success(`Project assigned to ${slot}`)
     refresh()
   } catch (e) {
     message.error(e instanceof Error ? e.message : 'Failed to assign project')
@@ -391,14 +391,11 @@ async function assignSlot(path: string, priority: Priority) {
   }
 }
 
-async function clearSlot(path: string) {
-  // Demote to normal instead of deleting — keeps it as a project root
+async function clearSlot(slotName: string) {
   projectRootLoading.value = true
   try {
-    const resp = await fetch('/api/v1/project-roots', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, priority: 'normal' }),
+    const resp = await fetch(`/api/v1/project-roots/slot?slot=${encodeURIComponent(slotName)}`, {
+      method: 'DELETE',
     })
     const result = await resp.json()
     if (!resp.ok) {
@@ -416,20 +413,20 @@ async function clearSlot(path: string) {
 
 function handleSelectPrimary(path: string | null) {
   if (!path) {
-    // Clear: demote current primary
-    if (primaryGroup.value) clearSlot(primaryGroup.value.fullPath)
+    if (slotsMap.value['primary']) {
+      clearSlot('primary')
+    }
     return
   }
   assignSlot(path, 'primary')
 }
 
-function handleSelectSecondary(path: string | null) {
+function handleSelectSecondary(path: string | null, slotName: string) {
   if (!path) {
-    // Clear is more complex for secondary; find which one was selected and demote it
-    // For simplicity, look for the currently assigned secondary
+    clearSlot(slotName)
     return
   }
-  assignSlot(path, 'secondary')
+  assignSlot(path, slotName)
 }
 
 // ── Checkbox (normal/unmatched groups) ─────────────────────────
@@ -875,7 +872,7 @@ function rowProps(row: DashboardEntry) {
                   :focus-minutes="focusMinutes"
                   :focus-loading="focusLoading"
                   :focus-countdown="focusCountdown"
-                  @select-project="handleSelectSecondary"
+                  @select-project="(path: string) => handleSelectSecondary(path, idx === 0 ? 'secondary_1' : 'secondary_2')"
                   @star-session="(sid: string) => group && handleStarSession(group.key, sid)"
                   @row-click="openDetail"
                   @open-terminal="handleOpenTerminalFromCard"
