@@ -20,7 +20,7 @@
 | Done     | 12   | Web 前端   | Dashboard 项目分组视图                | 前端从扁平表格改为按 root 分组的视图，按优先级分区展示（主线/支线/普通/未归类）                                                                          |
 | Done     | 13   | 注意力     | 提醒分数算法                          | 综合等待时长、专注持续、今日累计、项目优先级计算每个项目的提醒分数。设计文档：[`02-reminder_score_algorithm.md`](./design/02-reminder_score_algorithm.md) |
 | Done     | 14   | 注意力     | 注意力遮罩层                          | 双维度设计：雾化遮罩（Fog）+ 高亮跑马灯（Marquee）。专注模式统一遮罩覆盖非关注区域。设计文档：[`03-attention_mask.md`](./design/03-attention_mask.md)     |
-| Approved | 15   | 交互体验   | 项目折叠/展开                         | 记忆用户对普通项目和归档项目的折叠状态                                                                                                                   |
+| Done     | 15   | 交互体验   | 项目折叠/展开                         | 记忆用户对普通项目和归档项目的折叠状态                                                                                                                   |
 | Approved | 16   | 会话管理   | tmux 会话绑定同步                     | tmux 定期截图刷新 sessionId，`/clear` 和 `/resume` 或重启导致 session 绑定更换，同步到页面做重新绑定                                                 |
 | Approved | 17   | 智能分析   | 军情哨分析建议（`pflow suggest`）   | 基于会话状态和历史数据，主动给出分析建议                                                                                                                 |
 | Done     | 18   | Agent 管理 | 多 Agent 类型启动（`pflow hermes`） | 支持启动不同类型的 AI Agent（Claude Code 以外的其他 Agent）                                                                                              |

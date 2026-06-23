@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, h, type Component } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, h, type Component } from 'vue'
 import {
   NLayout,
   NLayoutHeader,
@@ -53,6 +53,44 @@ import { STAR_BONUS_MINUTES } from '../config/attention'
 
 const { data, loading, error, fetchDashboard } = useDashboard()
 const message = useMessage()
+
+// ── Collapse state persistence ────────────────────────────────────
+// Persists which project zones (normal / unmatched / archived) are
+// expanded/collapsed so the user's preference survives page refreshes.
+
+const COLLAPSE_KEY = 'pflow:dashboard:collapse'
+
+interface CollapseStore {
+  normal: string[]
+  unmatched: string[]
+}
+
+function loadCollapsed(): CollapseStore {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      return {
+        normal: Array.isArray(parsed.normal) ? parsed.normal : ['normal'],
+        unmatched: Array.isArray(parsed.unmatched) ? parsed.unmatched : [],
+      }
+    }
+  } catch { /* ignore corrupt data */ }
+  return { normal: ['normal'], unmatched: [] }
+}
+
+function persistCollapsed(normal: string[], unmatched: string[]) {
+  try {
+    localStorage.setItem(COLLAPSE_KEY, JSON.stringify({ normal, unmatched }))
+  } catch { /* ignore quota errors */ }
+}
+
+const init = loadCollapsed()
+const normalExpanded = ref<string[]>(init.normal)
+const unmatchedExpanded = ref<string[]>(init.unmatched)
+
+watch(normalExpanded, (val) => persistCollapsed(val, unmatchedExpanded.value), { deep: true })
+watch(unmatchedExpanded, (val) => persistCollapsed(normalExpanded.value, val), { deep: true })
 
 // Reminder scores from API response
 const reminderScores = computed(() => data.value?.reminder_scores ?? {})
@@ -896,7 +934,7 @@ function rowProps(row: DashboardEntry) {
             <!-- 📁 普通项目 — collapsible, current GroupCard style -->
             <div v-if="normalGroups.length > 0" class="zone-collapse-wrap">
               <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
-            <NCollapse class="zone-collapse" :default-expanded-names="['normal']">
+            <NCollapse class="zone-collapse" v-model:expanded-names="normalExpanded">
               <NCollapseItem name="normal">
                 <template #header>
                   <span class="zone-title">📁 普通项目</span>
@@ -920,7 +958,7 @@ function rowProps(row: DashboardEntry) {
             <!-- 📂 未归类 — collapsible, collapsed by default -->
             <div v-if="unmatchedGroups.length > 0" class="zone-collapse-wrap">
               <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
-            <NCollapse class="zone-collapse">
+            <NCollapse class="zone-collapse" v-model:expanded-names="unmatchedExpanded">
               <NCollapseItem name="unmatched">
                 <template #header>
                   <span class="zone-title">📂 未归类</span>
