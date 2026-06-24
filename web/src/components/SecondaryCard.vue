@@ -62,6 +62,12 @@ const isMainStarred = computed(() =>
   !!props.mainSession && props.mainSession.session_id === props.starredSessionId,
 )
 
+/** Cumulative focus minutes across all sessions in this project group. */
+const projectTotalMinutes = computed(() => {
+  if (!props.group) return 0
+  return props.group.sessions.reduce((sum, s) => sum + (s.today_minutes ?? 0), 0)
+})
+
 const otherSessions = computed(() => {
   if (!props.group) return []
   const main = props.mainSession
@@ -244,6 +250,14 @@ function rowProps(row: DashboardEntry) {
           style="width: 200px"
           @update:value="onProjectSelect"
         />
+
+        <span class="h-sep">|</span>
+        <NTooltip>
+          <template #trigger>
+            <span class="h-project-total">⏱ {{ formatMinutes(projectTotalMinutes) }}</span>
+          </template>
+          {{ projectTotalMinutes.toFixed(1) }} min today
+        </NTooltip>
 
         <!-- Main session metadata (if available) -->
         <template v-if="mainSession">
@@ -439,6 +453,15 @@ function rowProps(row: DashboardEntry) {
   font-size: 9px;
   font-family: monospace;
   color: var(--n-text-color-2);
+}
+
+.h-project-total {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f0a020;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
 }
 
 .h-time {
