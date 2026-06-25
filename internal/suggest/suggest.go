@@ -68,9 +68,10 @@ type ProjectSummary struct {
 
 // Suggestion is one analysis recommendation with a priority for ordering.
 type Suggestion struct {
-	Icon     string // emoji indicator
-	Text     string // formatted text (may contain newlines)
-	Priority int    // lower = more urgent, used for stable sort
+	ScenarioID string // scenario identifier, e.g. "scenario_001"
+	Icon       string // emoji indicator
+	Text       string // formatted text (may contain newlines)
+	Priority   int    // lower = more urgent, used for stable sort
 }
 
 // Input is the complete dataset needed for suggestion analysis.
@@ -79,6 +80,168 @@ type Input struct {
 	Projects       []ProjectSummary
 	CurrentProject string // project root path the user is currently viewing
 	Now            time.Time
+}
+
+// KnowledgeTip is a cognitive-science knowledge card associated with one or
+// more suggest scenarios. It explains the "why" behind a suggestion.
+type KnowledgeTip struct {
+	ID               string   // unique identifier, e.g. "kt_attention_residue"
+	Title            string   // theory name in Chinese
+	Theory           string   // 1-2 sentence theoretical basis
+	Design           string   // 1 sentence design mapping
+	RelatedScenarios []string // scenario IDs this tip explains
+}
+
+// KnowledgeTipJSON is the API-serializable subset of KnowledgeTip.
+type KnowledgeTipJSON struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Theory string `json:"theory"`
+	Design string `json:"design"`
+}
+
+// ToJSON converts a KnowledgeTip to its JSON-safe form.
+func (k *KnowledgeTip) ToJSON() *KnowledgeTipJSON {
+	if k == nil {
+		return nil
+	}
+	return &KnowledgeTipJSON{
+		ID:     k.ID,
+		Title:  k.Title,
+		Theory: k.Theory,
+		Design: k.Design,
+	}
+}
+
+// allKnowledgeTips holds the complete set of 12 knowledge tips.
+// See docs/design/10-tips.md §4 for the full content reference.
+var allKnowledgeTips = []KnowledgeTip{
+	{
+		ID:    "kt_attention_residue",
+		Title: "注意力残留与认知惰性",
+		Theory: "从任务 A 切换到 B 时，注意力不会完全转移——仍有部分「残留」在 A 上。重启中断的任务，需额外消耗 30%-40% 的脑能量。",
+		Design: "主线保护期 15 分钟不推送干扰，正是为了尊重这一能耗规律。",
+		RelatedScenarios: []string{
+			"scenario_001", "scenario_002", "scenario_003", "scenario_004", "scenario_012",
+		},
+	},
+	{
+		ID:    "kt_cognitive_offloading",
+		Title: "认知卸载的双面性",
+		Theory: "「替代性卸载」（AI 替你做判断）会导致能力退化；「互补性卸载」（AI 替你记忆，你做判断）才带来认知扩增。",
+		Design: "pflow 只展示状态，永远不替你做「切不切」的决策——把判断留给你，把监控交给系统。",
+		RelatedScenarios: []string{
+			"scenario_008", "scenario_009", "scenario_015", "scenario_018",
+		},
+	},
+	{
+		ID:    "kt_metacognitive_bottleneck",
+		Title: "元认知监控的代价",
+		Theory: "大脑无法同时运行「当前任务」和「监控当前任务」——后者会占用近 50% 的执行控制资源。",
+		Design: "遮罩层和红绿灯把监控「外包」给视觉皮层——扫一眼就知道全局，不用费脑去记。",
+		RelatedScenarios: []string{
+			"scenario_010", "scenario_011", "scenario_006",
+		},
+	},
+	{
+		ID:    "kt_embodied_cognition",
+		Title: "物理环境即思维外挂",
+		Theory: "物理环境（屏幕布局、光标位置）是思维最强大的外挂支架——视觉皮层能以无意识速度处理环境线索。",
+		Design: "pflow 不内嵌终端，就是让你用「物理性切换窗口」的动作重置大脑上下文。",
+		RelatedScenarios: []string{
+			"scenario_006", "scenario_007", "scenario_019",
+		},
+	},
+	{
+		ID:    "kt_interruption_recovery",
+		Title: "中断恢复的代价",
+		Theory: "被中断后，平均需要 23 分钟才能回到原有的深度工作状态。中断越频繁，有效深度工作时间越短。",
+		Design: "提醒分数用「幂函数放大」机制，避免多项目同时高亮——只有远超阈值的才推送通知。",
+		RelatedScenarios: []string{
+			"scenario_001", "scenario_002", "scenario_003", "scenario_004",
+		},
+	},
+	{
+		ID:    "kt_prediction_error",
+		Title: "预测误差与判断信心",
+		Theory: "自己思考得出答案时，大脑会产生奖励信号；AI 直接给出答案时，信号消失，长期会削弱判断信心。",
+		Design: "Agent 持续运行超 10 分钟时提醒「可能卡住，建议检查」——让你重新介入判断，保持异常监测敏感度。",
+		RelatedScenarios: []string{
+			"scenario_014",
+		},
+	},
+	{
+		ID:    "kt_primary_secondary_strategy",
+		Title: "为何强制设定 1 个主线",
+		Theory: "工作记忆容量有限（约 4 个组块），超出容量的多线程管理本身就是认知负担。",
+		Design: "强制设定 1 主线 + 最多 2 支线，把「排序」决策前置化，避免工作过程中反复纠结优先级。",
+		RelatedScenarios: []string{
+			"scenario_010", "scenario_011", "scenario_018",
+		},
+	},
+	{
+		ID:    "kt_multitasking_illusion",
+		Title: "多任务只是快速切换的幻觉",
+		Theory: "大脑本质上是串行处理器——所谓的「并行」只是极速切换的幻觉。每次切换都有能耗。",
+		Design: "红绿灯状态撕掉「并行」伪装：此刻只有一个 🟡 的会话在占用你的思考排队名额。",
+		RelatedScenarios: []string{
+			"scenario_009", "scenario_012", "scenario_018",
+		},
+	},
+	{
+		ID:    "kt_chunking",
+		Title: "组块化认知与零归类设计",
+		Theory: "长时记忆依靠「组块」压缩信息——把零散信息打包成有意义的单元，是大脑处理复杂信息的核心机制。",
+		Design: "「路径即项目」——用目录路径作为天然分组依据，避免手动维护分组的心力消耗。",
+		RelatedScenarios: []string{},
+	},
+	{
+		ID:    "kt_positive_feedback",
+		Title: "正向反馈驱动持续专注",
+		Theory: "多巴胺系统在获得正向反馈时被激活，能增强持续专注的动机。小胜利的记录比大目标更能维持日常动力。",
+		Design: "一切正常或高效完成时给出 ✅ / 🎉 级正向反馈——不是空话，是对大脑奖励机制的调用。",
+		RelatedScenarios: []string{
+			"scenario_008", "scenario_015",
+		},
+	},
+	{
+		ID:    "kt_decision_fatigue",
+		Title: "决策疲劳与调度前置",
+		Theory: "每做一个决策都消耗认知资源。决策次数累积后，后续决策质量会下降——这就是决策疲劳。",
+		Design: "把「切不切」的判断前置到策略设定阶段，执行阶段只需看状态、按计划行动，大幅减少执行中的决策次数。",
+		RelatedScenarios: []string{
+			"scenario_006",
+		},
+	},
+	{
+		ID:    "kt_offloading_boundary",
+		Title: "卸载的边界：保留不可让渡的阵地",
+		Theory: "价值观判断、审美选择、生死攸关的直觉——这些领域的卸载会导致不可逆的能力丧失。",
+		Design: "pflow 帮你「记住状态」，但永远不替你「做出选择」。你是统帅，兵权不可让渡。",
+		RelatedScenarios: []string{},
+	},
+}
+
+// scenarioTipIndex is a map from scenario ID to the first matching KnowledgeTip.
+// Built once at init time from allKnowledgeTips.
+var scenarioTipIndex map[string]*KnowledgeTip
+
+func init() {
+	scenarioTipIndex = make(map[string]*KnowledgeTip, len(allKnowledgeTips)*3)
+	for i := range allKnowledgeTips {
+		tip := &allKnowledgeTips[i]
+		for _, sid := range tip.RelatedScenarios {
+			if _, exists := scenarioTipIndex[sid]; !exists {
+				scenarioTipIndex[sid] = tip
+			}
+		}
+	}
+}
+
+// LookupTip returns the KnowledgeTip associated with a scenario ID, or nil
+// if no tip is mapped to that scenario.
+func LookupTip(scenarioID string) *KnowledgeTip {
+	return scenarioTipIndex[scenarioID]
 }
 
 // ── Public API ────────────────────────────────────────────────────────
@@ -118,10 +281,10 @@ func Generate(input Input) []Suggestion {
 	out = appendIf(out, checkMultipleWaiting(waitingSessions, primary, secondary, input.Now))
 
 	// S3: 🟡 primary idle > 30 min (no waiting)
-	out = appendIf(out, checkPrimaryIdle(primary, projMap, input.Now, 30*time.Minute, waitingSessions, "🟡"))
+	out = appendIf(out, checkPrimaryIdle(primary, projMap, input.Now, 30*time.Minute, waitingSessions, "🟡", "scenario_003"))
 
 	// S4: 🔶 primary idle > 60 min
-	out = appendIf(out, checkPrimaryIdle(primary, projMap, input.Now, 60*time.Minute, waitingSessions, "🔶"))
+	out = appendIf(out, checkPrimaryIdle(primary, projMap, input.Now, 60*time.Minute, waitingSessions, "🔶", "scenario_004"))
 
 	// S5: 🔵 secondary waiting but primary active
 	out = appendIf(out, checkSecondaryWaitingPrimaryActive(waitingSessions, secondary, primary, currentProject, input.Now))
@@ -196,9 +359,10 @@ func checkUrgentWaiting(waiting []SessionInfo, now time.Time, threshold time.Dur
 				icon = "🔴"
 			}
 			return &Suggestion{
-				Priority: 1,
-				Icon:     icon,
-				Text:     fmt.Sprintf("%s %s %s会话已等待 %.0f 分钟，%s。\n", icon, projLabel, name, waitMin, hint),
+				ScenarioID: "scenario_001",
+				Priority:   1,
+				Icon:       icon,
+				Text:       fmt.Sprintf("%s %s %s会话已等待 %.0f 分钟，%s。\n", icon, projLabel, name, waitMin, hint),
 			}
 		}
 	}
@@ -215,9 +379,10 @@ func checkPrimaryWaiting(waiting []SessionInfo, primary *ProjectSummary, now tim
 			waitMin := now.Sub(s.LastActive).Minutes()
 			if waitMin >= threshold.Minutes() {
 				return &Suggestion{
-					Priority: 3,
-					Icon:     "🟡",
-					Text:     fmt.Sprintf("🟡 主线任务【%s】的 %s 会话已等待 %.0f 分钟，建议尽快处理。", primary.Name, agentDisplay(s), waitMin),
+					ScenarioID: "scenario_002",
+					Priority:   3,
+					Icon:       "🟡",
+					Text:       fmt.Sprintf("🟡 主线任务【%s】的 %s 会话已等待 %.0f 分钟，建议尽快处理。", primary.Name, agentDisplay(s), waitMin),
 				}
 			}
 		}
@@ -244,8 +409,9 @@ func checkMultipleWaiting(waiting []SessionInfo, _ *ProjectSummary, _ *ProjectSu
 	secLabel := projectLabel(s2.RootPriority)
 
 	return &Suggestion{
-		Priority: 2,
-		Icon:     "🔴",
+		ScenarioID: "scenario_012",
+		Priority:   2,
+		Icon:       "🔴",
 		Text: fmt.Sprintf("🔴 多个会话需要授权：%s【%s】等待 %.0fm，%s【%s】等待 %.0fm。建议先处理主线。",
 			mainLabel, agentDisplay(s1), wait1,
 			secLabel, agentDisplay(s2), wait2),
@@ -253,7 +419,7 @@ func checkMultipleWaiting(waiting []SessionInfo, _ *ProjectSummary, _ *ProjectSu
 }
 
 // S3/S4: Primary idle > threshold (no waiting sessions on primary).
-func checkPrimaryIdle(primary *ProjectSummary, projMap map[string]ProjectSummary, _ time.Time, threshold time.Duration, waiting []SessionInfo, icon string) *Suggestion {
+func checkPrimaryIdle(primary *ProjectSummary, projMap map[string]ProjectSummary, _ time.Time, threshold time.Duration, waiting []SessionInfo, icon string, scenarioID string) *Suggestion {
 	if primary == nil {
 		return nil
 	}
@@ -268,15 +434,17 @@ func checkPrimaryIdle(primary *ProjectSummary, projMap map[string]ProjectSummary
 	idleMin := p.IdleMinutes
 	if idleMin >= 60 {
 		return &Suggestion{
-			Priority: 4,
-			Icon:     icon,
-			Text:     fmt.Sprintf("%s 主线任务【%s】已空闲超过 1 小时，是否应该切换回来？", icon, primary.Name),
+			ScenarioID: scenarioID,
+			Priority:   4,
+			Icon:       icon,
+			Text:       fmt.Sprintf("%s 主线任务【%s】已空闲超过 1 小时，是否应该切换回来？", icon, primary.Name),
 		}
 	}
 	return &Suggestion{
-		Priority: 5,
-		Icon:     icon,
-		Text:     fmt.Sprintf("%s 主线任务【%s】已空闲 %.0f 分钟，建议回到主线继续工作。", icon, primary.Name, idleMin),
+		ScenarioID: scenarioID,
+		Priority:   5,
+		Icon:       icon,
+		Text:       fmt.Sprintf("%s 主线任务【%s】已空闲 %.0f 分钟，建议回到主线继续工作。", icon, primary.Name, idleMin),
 	}
 }
 
@@ -294,8 +462,9 @@ func checkSecondaryWaitingPrimaryActive(waiting []SessionInfo, _ *ProjectSummary
 			projLabel := projectLabel(s.RootPriority)
 			projName := projectNameFromPath(s.MatchedRoot)
 			return &Suggestion{
-				Priority: 10,
-				Icon:     "🔵",
+				ScenarioID: "scenario_005",
+				Priority:   10,
+				Icon:       "🔵",
 				Text: fmt.Sprintf("🔵 %s任务【%s】需要授权，但主线【%s】正在活跃中。是否稍后处理？",
 					projLabel, projName, primary.Name),
 			}
@@ -310,9 +479,10 @@ func checkAgentStuck(busy []SessionInfo, now time.Time, threshold time.Duration)
 		dur := now.Sub(s.LastActive).Minutes()
 		if dur >= threshold.Minutes() {
 			return &Suggestion{
-				Priority: 8,
-				Icon:     "⚠️",
-				Text:     fmt.Sprintf("⚠️ %s 会话已持续运行 %.0f 分钟，可能卡住，建议检查。", agentDisplay(s), dur),
+				ScenarioID: "scenario_014",
+				Priority:   8,
+				Icon:       "⚠️",
+				Text:       fmt.Sprintf("⚠️ %s 会话已持续运行 %.0f 分钟，可能卡住，建议检查。", agentDisplay(s), dur),
 			}
 		}
 	}
@@ -336,8 +506,9 @@ func checkAttentionImbalance(primary *ProjectSummary, _ *ProjectSummary, projMap
 		}
 		if proj.TodayMinutes > primaryMin+deltaMinutes {
 			return &Suggestion{
-				Priority: 12,
-				Icon:     "🔵",
+				ScenarioID: "scenario_010",
+				Priority:   12,
+				Icon:       "🔵",
 				Text: fmt.Sprintf("🔵 支线【%s】今日已占用 %s，超过主线【%s】的 %s。建议调整注意力分配。",
 					proj.Name, formatMinutes(int(proj.TodayMinutes)),
 					primary.Name, formatMinutes(int(primaryMin))),
@@ -363,8 +534,9 @@ func checkNormalExceedsPrimary(primary *ProjectSummary, projects []ProjectSummar
 		}
 		if proj.TodayMinutes > primaryMin && proj.TodayMinutes > thresholdNormalMinMeaningful {
 			return &Suggestion{
-				Priority: 15,
-				Icon:     "⚪",
+				ScenarioID: "scenario_011",
+				Priority:   15,
+				Icon:       "⚪",
 				Text: fmt.Sprintf("⚪ 普通项目【%s】今日用时 %s 已超过主线【%s】的 %s，建议检查优先级是否合理。",
 					proj.Name, formatMinutes(int(proj.TodayMinutes)),
 					primary.Name, formatMinutes(int(primaryMin))),
@@ -380,9 +552,10 @@ func checkAbnormalExit(sessions []SessionInfo) *Suggestion {
 		if s.PID > 0 && !s.IsRunning {
 			name := agentDisplay(s)
 			return &Suggestion{
-				Priority: 7,
-				Icon:     "⚠️",
-				Text:     fmt.Sprintf("⚠️ 会话【%s】已异常退出。是否重新启动？ → 运行 pflow %s 重新启动", name, s.AgentType),
+				ScenarioID: "scenario_013",
+				Priority:   7,
+				Icon:       "⚠️",
+				Text:       fmt.Sprintf("⚠️ 会话【%s】已异常退出。是否重新启动？ → 运行 pflow %s 重新启动", name, s.AgentType),
 			}
 		}
 	}
@@ -399,9 +572,10 @@ func checkAllNormal(primary *ProjectSummary, _ []ProjectSummary, waiting []Sessi
 	}
 	if currentProject == primary.Path && len(waiting) == 0 {
 		return &Suggestion{
-			Priority: 20,
-			Icon:     "✅",
-			Text:     fmt.Sprintf("✅ 所有会话运行正常。主线【%s】正在处理中，继续保持！", primary.Name),
+			ScenarioID: "scenario_008",
+			Priority:   20,
+			Icon:       "✅",
+			Text:       fmt.Sprintf("✅ 所有会话运行正常。主线【%s】正在处理中，继续保持！", primary.Name),
 		}
 	}
 	return nil
@@ -431,9 +605,10 @@ func checkMultipleBusy(busy []SessionInfo, primary *ProjectSummary, secondary *P
 		return nil
 	}
 	return &Suggestion{
-		Priority: 22,
-		Icon:     "✅",
-		Text:     fmt.Sprintf("✅ 主线【%s】和支线【%s】都在推进中，工作状态良好。", primary.Name, secName),
+		ScenarioID: "scenario_009",
+		Priority:   22,
+		Icon:       "✅",
+		Text:       fmt.Sprintf("✅ 主线【%s】和支线【%s】都在推进中，工作状态良好。", primary.Name, secName),
 	}
 }
 
@@ -448,9 +623,10 @@ func checkTodayEfficient(primary *ProjectSummary, projMap map[string]ProjectSumm
 	}
 	hours := p.TodayMinutes / 60
 	return &Suggestion{
-		Priority: 25,
-		Icon:     "🎉",
-		Text:     fmt.Sprintf("🎉 主线【%s】今日已专注 %.1fh，所有会话状态良好。可以考虑休息或处理轻松任务。", primary.Name, hours),
+		ScenarioID: "scenario_015",
+		Priority:   25,
+		Icon:       "🎉",
+		Text:       fmt.Sprintf("🎉 主线【%s】今日已专注 %.1fh，所有会话状态良好。可以考虑休息或处理轻松任务。", primary.Name, hours),
 	}
 }
 
@@ -465,9 +641,10 @@ func checkPrimaryOver4h(primary *ProjectSummary, projMap map[string]ProjectSumma
 	}
 	hours := p.TodayMinutes / 60
 	return &Suggestion{
-		Priority: 30,
-		Icon:     "🏆",
-		Text:     fmt.Sprintf("🏆 主线【%s】今日已专注 %.1f 小时，可考虑切换到支线任务。", primary.Name, hours),
+		ScenarioID: "scenario_020",
+		Priority:   30,
+		Icon:       "🏆",
+		Text:       fmt.Sprintf("🏆 主线【%s】今日已专注 %.1f 小时，可考虑切换到支线任务。", primary.Name, hours),
 	}
 }
 
@@ -489,15 +666,17 @@ func checkNoActiveSessions(sessions []SessionInfo, primary *ProjectSummary) *Sug
 
 	if primary != nil {
 		return &Suggestion{
-			Priority: 35,
-			Icon:     "⚪",
-			Text:     fmt.Sprintf("⚪ 当前没有活跃的 Agent 会话。是否启动一个新任务？ → 建议启动主线【%s】", primary.Name),
+			ScenarioID: "scenario_006",
+			Priority:   35,
+			Icon:       "⚪",
+			Text:       fmt.Sprintf("⚪ 当前没有活跃的 Agent 会话。是否启动一个新任务？ → 建议启动主线【%s】", primary.Name),
 		}
 	}
 	return &Suggestion{
-		Priority: 35,
-		Icon:     "⚪",
-		Text:     "⚪ 当前没有活跃的 Agent 会话。是否启动一个新任务？",
+		ScenarioID: "scenario_006",
+		Priority:   35,
+		Icon:       "⚪",
+		Text:       "⚪ 当前没有活跃的 Agent 会话。是否启动一个新任务？",
 	}
 }
 
@@ -515,9 +694,10 @@ func checkAllIdle(sessions []SessionInfo, now time.Time, threshold time.Duration
 		}
 	}
 	return &Suggestion{
-		Priority: 36,
-		Icon:     "⚪",
-		Text:     "⚪ 所有会话已空闲超过 10 分钟。建议启动一个任务开始工作。",
+		ScenarioID: "scenario_007",
+		Priority:   36,
+		Icon:       "⚪",
+		Text:       "⚪ 所有会话已空闲超过 10 分钟。建议启动一个任务开始工作。",
 	}
 }
 
@@ -531,9 +711,10 @@ func checkMultiProject(activeProjects []ProjectSummary, primary *ProjectSummary)
 		primaryName = primary.Name
 	}
 	return &Suggestion{
-		Priority: 40,
-		Icon:     "📊",
-		Text:     fmt.Sprintf("📊 %d 个项目同时推进中，注意主线【%s】的时间占比。", len(activeProjects), primaryName),
+		ScenarioID: "scenario_018",
+		Priority:   40,
+		Icon:       "📊",
+		Text:       fmt.Sprintf("📊 %d 个项目同时推进中，注意主线【%s】的时间占比。", len(activeProjects), primaryName),
 	}
 }
 
@@ -554,9 +735,10 @@ func checkGlobalIdle(projects []ProjectSummary, _ time.Time, threshold time.Dura
 		return nil
 	}
 	return &Suggestion{
-		Priority: 45,
-		Icon:     "⏰",
-		Text:     "⏰ 已空闲较长时间，是否有阻塞问题需要解决？",
+		ScenarioID: "scenario_019",
+		Priority:   45,
+		Icon:       "⏰",
+		Text:       "⏰ 已空闲较长时间，是否有阻塞问题需要解决？",
 	}
 }
 
@@ -565,9 +747,10 @@ func checkEndOfDay(now time.Time) *Suggestion {
 	hour := now.Hour()
 	if hour >= 18 && hour < 22 {
 		return &Suggestion{
-			Priority: 50,
-			Icon:     "🌆",
-			Text:     "🌆 今日工作即将结束，建议总结今日进展。",
+			ScenarioID: "scenario_016",
+			Priority:   50,
+			Icon:       "🌆",
+			Text:       "🌆 今日工作即将结束，建议总结今日进展。",
 		}
 	}
 	return nil
@@ -579,9 +762,10 @@ func checkAfterLunch(now time.Time) *Suggestion {
 	t := hour*60 + min
 	if t >= 13*60 && t < 14*60 {
 		return &Suggestion{
-			Priority: 55,
-			Icon:     "🌤️",
-			Text:     "🌤️ 午休结束，建议检查各会话状态。",
+			ScenarioID: "scenario_017",
+			Priority:   55,
+			Icon:       "🌤️",
+			Text:       "🌤️ 午休结束，建议检查各会话状态。",
 		}
 	}
 	return nil

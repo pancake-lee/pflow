@@ -44,6 +44,7 @@ import GroupCard from '../components/GroupCard.vue'
 import PrimaryCard from '../components/PrimaryCard.vue'
 import SecondaryCard from '../components/SecondaryCard.vue'
 import SuggestCard from '../components/SuggestCard.vue'
+import KnowledgeAnchor from '../components/KnowledgeAnchor.vue'
 import type { SessionGroup } from '../components/GroupCard.vue'
 import type { ReminderScoreInfo } from '../types/dashboard'
 import { FOCUS_CONFIG } from '../composables/useReminderScores'
@@ -1104,6 +1105,10 @@ function rowProps(row: DashboardEntry) {
         <p>Terminal not available. Click "Open Terminal" to start.</p>
       </div>
     </NModal>
+
+    <!-- 🧠 知识锚点 — Knowledge Anchor, fixed bottom-right corner -->
+    <KnowledgeAnchor :suggestions="suggestions" />
+
     </NLayout>
   </div>
 </template>

@@ -39,10 +39,19 @@ export interface ProjectRoot {
   slot?: 'primary' | 'secondary_1' | 'secondary_2'
 }
 
+export interface KnowledgeTip {
+  id: string
+  title: string
+  theory: string
+  design: string
+}
+
 export interface Suggestion {
+  scenario_id: string
   icon: string
   text: string
   priority: number
+  knowledge_tip?: KnowledgeTip
 }
 
 export interface DashboardResponse {

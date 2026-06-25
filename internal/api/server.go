@@ -57,9 +57,11 @@ type ProjectRootJSON struct {
 
 // SuggestionJSON is the JSON representation of a suggest.Suggestion.
 type SuggestionJSON struct {
-	Icon     string `json:"icon"`
-	Text     string `json:"text"`
-	Priority int    `json:"priority"`
+	ScenarioID   string                   `json:"scenario_id"`
+	Icon         string                   `json:"icon"`
+	Text         string                   `json:"text"`
+	Priority     int                      `json:"priority"`
+	KnowledgeTip *suggest.KnowledgeTipJSON `json:"knowledge_tip,omitempty"`
 }
 
 // DashboardResponse is the JSON response for GET /api/v1/dashboard.
@@ -1027,13 +1029,19 @@ func generateSuggestions(
 	}
 	results := suggest.Generate(input)
 
-	// Convert to JSON-friendly format
+	// Convert to JSON-friendly format, injecting knowledge tips
 	out := make([]SuggestionJSON, 0, len(results))
 	for _, r := range results {
+		var tip *suggest.KnowledgeTipJSON
+		if t := suggest.LookupTip(r.ScenarioID); t != nil {
+			tip = t.ToJSON()
+		}
 		out = append(out, SuggestionJSON{
-			Icon:     r.Icon,
-			Text:     r.Text,
-			Priority: r.Priority,
+			ScenarioID:   r.ScenarioID,
+			Icon:         r.Icon,
+			Text:         r.Text,
+			Priority:     r.Priority,
+			KnowledgeTip: tip,
 		})
 	}
 	return out
