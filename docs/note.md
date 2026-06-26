@@ -50,15 +50,16 @@ Claude 在启动时读取 `~/.claude/settings.json`，因此 statusline 配置**
 
 | 路径 | 内容 | 管理包 |
 |------|------|--------|
-| `~/.pflow/project_roots.json` | 项目根标记 + 优先级 | `internal/project/` |
-| `~/.pflow/mappings.json` | tmux ↔ Claude session 映射 | `internal/session/` |
-| `~/.pflow/config.json` | 用户自定义配置（提醒参数等） | `internal/attention/config.go`（规划中） |
+| `~/.pflow/project_roots.json` | 项目根标记 + Slot 映射（v2 格式） | `internal/project/` |
+| `~/.pflow/mappings.json` | tmux ↔ Agent session 映射（含 agentName/status/PID） | `internal/session/` |
+| `~/.pflow/config.json` | 用户自定义配置（提醒参数等，规划中） | `internal/attention/config.go` |
+| `~/.pflow/focus.log` | tmux focus 事件日志（用于活跃时间估算 Tier 1） | `internal/timetrack/focus.go` |
 | `~/.claude/settings.json` | Claude statusline 配置 | `internal/session/claude.go` |
+| `~/.claude/sessions/<pid>.json` | Claude session 元数据（DirScan 模式读取） | `internal/session/claude_scan.go` |
 | `~/.claude/projects/<project>/<session>.jsonl` | Claude transcript | `internal/claude/activity.go` |
-| `~/.hermes/sessions/sessions.json` | Hermes gateway 管理的活跃 session（富化用） | `internal/hermes/activity.go` |
+| `~/.hermes/sessions/sessions.json` | Hermes gateway 管理的活跃 session（状态富化用） | `internal/hermes/activity.go` |
 | `~/.hermes/sessions/request_dump_*.json` | Hermes API 请求快照（含 cwd，fallback 数据源） | `internal/hermes/activity.go` |
-| `~/.hermes/gateway_state.json` | Hermes gateway 平台连接状态 | `internal/hermes/activity.go` |
-| `hermes sessions export` 输出 | Hermes 全量会话（JSONL，含 messages + system_prompt） | `internal/hermes/activity.go` |
+| `~/.hermes/.pflow_cache_export.jsonl` | Hermes sessions export 临时缓存 | `internal/hermes/activity.go` |
 
 ## 已知注意事项
 
@@ -93,6 +94,47 @@ busy 状态时清除 Last Resp（避免展示不匹配的 req/resp 对）。文�
 
 阶段四 MVP 中，用户活跃追踪使用 session 状态作为代理指标（非鼠标/键盘监听）。每次 Dashboard API 请求时无状态计算，无需持久化。遮罩层预留 CSS 变量接口但不实现完整换肤。详见 [`cycles/05-phase4-kickoff.md`](./cycles/05-phase4-kickoff.md)。
 
+## Claude 会话扫描模式
+
+当前支持两种 Claude session 关联模式，通过 `SetClaudeCaptureMode()` 切换：
+
+| 模式 | 数据源 | 更新频率 | 优缺点 |
+|------|--------|----------|--------|
+| `DirScan`（默认） | 扫描 `~/.claude/sessions/<pid>.json` + 匹配 `name` 字段 | 每 5s | 更快更可靠，需要 `claude -n <name>` |
+| `Statusline`（旧方案） | `tmux capture-pane` 解析 statusline 中的 8-char 前缀 | 每 15s | 向后兼容，有 subprocess 开销 |
+
+详见 `internal/session/claude_scan.go` 和 `internal/session/claude.go`。
+
+## Slot 映射优先级系统
+
+从阶段三的 `priority` 字段升级为阶段四的固定 slot 映射：
+
+- **旧方案**：`RootsFile.Roots[].Priority` 直接存 `primary/secondary/normal`
+- **新方案**：`RootsFile.Slots` map 独立存储 slot → path 映射，`Root.Slot` 字段记录所属 slot
+  - `primary`: 主线
+  - `secondary_1`, `secondary_2`: 两个支线 slot
+  - 设置 slot 时自动腾退旧路径为 normal
+- **v1→v2 迁移**：`migrateV1ToV2()` 在 Load 时自动转换
+- **前端**：PrimaryCard 和 SecondaryCard 通过 slot API（`PUT/DELETE /api/v1/project-roots/slot`）操作
+
+## 活跃时间估算降级链
+
+`internal/timetrack/` 实现三级降级链（详见 `docs/design/09-active-time-calculation.md`）：
+
+1. **Tier 1（最高精度）**：tmux focus 事件日志 → `focus.go` 精确到秒的窗口计时
+2. **Tier 2（中精度）**：session 消息数估算 → `SessionTodayMinutes()` 每条消息 ≈ 3 分钟
+3. **Tier 3（最低精度）**：wall-clock 回退 → 活跃窗口 × 0.3 系数
+
+前端展示时优先使用 Tier 1 数据（通过 `/api/v1/dashboard` 的 project-level focus override）。
+
+## 知识锚点与军情哨
+
+- **军情哨**（`internal/suggest/`）：~20 个分析场景，从 S1（紧急等待）到 S20（主线超 4h 提醒）
+- **知识锚点**（Knowledge Anchor）：12 条认知科学理论卡片，提供军情建议背后的理论依据
+  - 前端组件：`web/src/components/KnowledgeAnchor.vue`
+  - 数据：`internal/suggest/suggest.go` 中的 `allKnowledgeTips`
+  - 设计文档：`docs/design/10-tips.md`
+
 ## 周期归档索引
 
 | 文件 | 周期 | 内容 |
@@ -102,3 +144,6 @@ busy 状态时清除 Last Resp（避免展示不匹配的 req/resp 对）。文�
 | [`cycles/03-tmux-ttyd.md`](./cycles/03-tmux-ttyd.md) | 2026-06-12 | tmux + ttyd Web 终端集成 |
 | [`cycles/04-phase3-design-and-ui.md`](./cycles/04-phase3-design-and-ui.md) | 2026-06-13~14 | 阶段三设计决策 + Dashboard UI 重构 |
 | [`cycles/05-phase4-kickoff.md`](./cycles/05-phase4-kickoff.md) | 2026-06-15 | 阶段四启动：提醒分数 + 遮罩层 MVP 规划 |
+| [`cycles/06-phase4-reminder-attention-mask.md`](./cycles/06-phase4-reminder-attention-mask.md) | 2026-06-16 | 阶段四实现：提醒分数引擎 + 注意力遮罩层 |
+| [`cycles/07-terminal-session-mapping.md`](./cycles/07-terminal-session-mapping.md) | 2026-06-17 | 终端会话映射方案重构 |
+| [`cycles/08-knowledge-anchor.md`](./cycles/08-knowledge-anchor.md) | 2026-06-25 | 知识锚点 + 军情哨提示系统 |

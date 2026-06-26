@@ -32,31 +32,43 @@ pflow/
 │       └── main.go                 # CLI 入口
 ├── internal/
 │   ├── claude/                     # Claude Code CLI 进程监控
-│   │   ├── activity.go             # Session 活动扫描（从 transcript 文件读取）
+│   │   ├── activity.go             # Session 活动扫描（从 transcript/history 文件读取）
 │   │   ├── stream.go               # stream-json 类型定义与解析
 │   │   ├── subprocess.go           # CLI 子进程管理
 │   │   └── snapshot.go             # SessionSnapshot 状态快照
 │   ├── hermes/                     # Hermes Agent 会话监控
-│   │   └── activity.go             # Session 活动扫描（从 sessions.json + request_dump 读取）
+│   │   └── activity.go             # Session 活动扫描（从 sessions export + gateway 读取）
 │   ├── project/                    # 项目管理（阶段三新增）
 │   │   ├── store.go                # ~/.pflow/project_roots.json 读写
-│   │   └── strategy.go             # 主线/支线策略校验与切换
+│   │   └── strategy.go             # Slot 映射与优先级切换
 │   ├── attention/                  # 注意力管理（阶段四新增）
 │   │   ├── activity.go             # 用户活跃追踪（streak / total / lastActiveTime）
 │   │   ├── score.go                # 提醒分数计算引擎
-│   │   └── config.go               # 可配置常量（PROTECT_MIN, W_WAIT, ...）
+│   │   ├── config.go               # 可配置常量（PROTECT_MIN, W_WAIT, ...）
+│   │   ├── types.go                # 共享类型定义（ReminderInput/Output 等）
+│   │   └── focus.go                # 专注模式（Focus Mode）状态管理
+│   ├── timetrack/                  # 活跃时间估算（阶段四新增）
+│   │   ├── timetrack.go            # 三级降级链：tmux focus → 消息数 → wall-clock
+│   │   └── focus.go                # tmux 焦点事件日志读写
+│   ├── suggest/                    # 军情哨分析引擎（阶段四新增）
+│   │   └── suggest.go              # ~20 个分析场景 + 知识锚点数据
 │   ├── session/                    # Tmux + ttyd 会话管理
 │   │   ├── manager.go              # Tmux/ttyd 进程生命周期管理
 │   │   ├── claude.go               # Claude statusline 配置 + 启动 + capture-pane 前缀解析
-│   │   └── mapping.go              # Tmux↔Claude session 映射持久化
+│   │   ├── claude_scan.go          # Claude JSON 目录扫描模式（~/.claude/sessions/）
+│   │   ├── hermes.go               # Hermes Agent 启动 + /status 截屏解析
+│   │   ├── launcher.go             # 通用 Agent 启动工具
+│   │   ├── mapping.go              # Tmux↔Agent session 映射持久化
+│   │   └── focus_hook.go           # Tmux focus 事件钩子（用于活跃时间追踪）
 │   ├── api/                        # HTTP API
-│   │   └── server.go               # Dashboard API + 项目 CRUD + 策略 API
+│   │   └── server.go               # Dashboard API + 项目 CRUD + 策略 API + Focus API
 │   └── config/                     # 配置管理
 │       └── config.go               # ScanOptions + ParseWindow
 ├── web/                            # Web Dashboard 前端
 │   ├── src/
 │   │   ├── components/             # Vue 组件
 │   │   ├── composables/            # 组合式函数
+│   │   ├── config/                 # 前端配置常量
 │   │   ├── types/                  # TypeScript 类型定义
 │   │   └── views/                  # 页面视图
 │   ├── index.html
@@ -79,13 +91,15 @@ pflow/
 ┌──────────────────────────────────────────────────┐
 │  CLI / Web UI（cmd/pflow, web/）                  │  ← 用户界面
 ├──────────────────────────────────────────────────┤
-│  注意力层（internal/attention）                    │  ← 提醒分数计算、活跃追踪
+│  军情哨（internal/suggest）                       │  ← 分析建议生成、知识锚点
 ├──────────────────────────────────────────────────┤
-│  策略层（internal/project）                       │  ← 主线/支线策略、项目优先级管理
+│  注意力层（internal/attention, timetrack）         │  ← 提醒分数计算、活跃追踪、时间估算、专注模式
 ├──────────────────────────────────────────────────┤
-│  会话管理层（internal/session）                    │  ← tmux + ttyd + statusline 关联
+│  策略层（internal/project）                       │  ← Slot 映射、项目优先级管理
 ├──────────────────────────────────────────────────┤
-│  Agent 适配层（internal/claude, internal/hermes）  │  ← Agent 状态监控
+│  会话管理层（internal/session）                    │  ← tmux + ttyd + statusline + Claude/Hermes 启动
+├──────────────────────────────────────────────────┤
+│  Agent 适配层（internal/claude, hermes）           │  ← Agent 状态监控
 ├──────────────────────────────────────────────────┤
 │  公共服务（internal/api, config）                  │  ← 基础设施
 └──────────────────────────────────────────────────┘
@@ -156,7 +170,7 @@ Roots:
 | priority | 含义 | 数量限制 | Dashboard 展示 |
 |----------|------|---------|---------------|
 | `primary` | 今日主线 | 1 | ⭐ 独立区域，始终展开 |
-| `secondary` | 支线 | 最多 3 | 🚩 独立区域，始终展开 |
+| `secondary` | 支线 | 最多 2 | 🚩 独立区域，始终展开 |
 | `normal` | 普通关注 | 不限 | 📁 可折叠区域 |
 
 **优先级切换规则**：

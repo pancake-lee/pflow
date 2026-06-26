@@ -42,6 +42,7 @@
 | Done     | 34   | CLI 工具 | `pflow session destroy`               | 参考 §7.4，销毁指定 tmux 会话 + 清理映射记录                                                                                             |
 | Done     | 35   | Web 前端 | Dashboard 终端映射优化                 | 参考 §7.3，使用新的 name 字段优化展示，确保 Claude name 传递路径正确                                                                     |
 | Done     | 36   | 交互体验 | 知识锚点（Knowledge Anchor）           | Dashboard 右下角知识卡片，展示军情建议的认知科学理论依据与设计逻辑，跟随军情自动切换，支持轮播和悬停翻阅                                 |
+| Pending  | 37   | 交互体验 | 每日引导（Daily Boot）                 | 工作日开始前的认知开机引导程序：认知卸载 → 模式切换 → 目标锚定。设计文档：[`11-daily-boot.md`](./design/11-daily-boot.md)            |
 
 ---
 
