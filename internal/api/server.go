@@ -266,6 +266,69 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Ensure every registered project root has at least one placeholder
+	// session so the frontend can always show project cards. If a root
+	// has no sessions from the scan, create one from the most recent
+	// history entry (ignoring the time window).
+	if rootsFile != nil {
+		rootHasSession := make(map[string]bool)
+		for _, entry := range resp.Sessions {
+			if entry.MatchedRoot != "" {
+				rootHasSession[entry.MatchedRoot] = true
+			}
+		}
+		for _, r := range rootsFile.Roots {
+			if rootHasSession[r.Path] {
+				continue
+			}
+			// Find most recent history entry for this project root
+			lastHist := claude.FindMostRecentHistory(r.Path)
+			// Use the window cutoff as LastActive for projects with no
+			// history — this lets the frontend show "空闲超过XX小时".
+			windowCutoff := resp.Now.Add(-opts.Window)
+			if lastHist == nil {
+				// No history at all — use a minimal placeholder
+				entry := DashboardEntry{
+					SessionID:    "--------",
+					AgentType:    "claude",
+					Project:      r.Path,
+					Status:       "inactive",
+					IsActive:     false,
+					TrafficLight: "⚫",
+					Name:         "没有活动session",
+					FirstActive:  windowCutoff,
+					LastActive:   windowCutoff,
+					MatchedRoot:  r.Path,
+					MessageCount: 0,
+					TodayMinutes: 0,
+				}
+				resp.Sessions = append(resp.Sessions, entry)
+				continue
+			}
+			// Build a placeholder session from the most recent history entry
+			lastTime := lastHist.TimestampTime()
+			name := truncateText(lastHist.Display, 15)
+			entry := DashboardEntry{
+				SessionID:    truncate8(lastHist.SessionID),
+				AgentType:    "claude",
+				Project:      lastHist.Project,
+				Status:       "inactive",
+				IsActive:     false,
+				TrafficLight: "⚫",
+				Name:         name,
+				FirstActive:  lastTime,
+				LastActive:   lastTime,
+				LastReq:      truncateText(lastHist.Display, 15),
+				LastReqFull:  lastHist.Display,
+				MatchedRoot:  r.Path,
+				MessageCount: 1,
+				TodayMinutes: 0,
+			}
+			resp.Sessions = append(resp.Sessions, entry)
+		}
+	}
+
+
 	// Load tmux mappings (used for terminal annotation and suggest).
 	mappings, mappingsErr := session.LoadMappings()
 
@@ -779,6 +842,15 @@ func truncate8(s string) string {
 		return s[:8]
 	}
 	return s
+}
+
+// truncateText truncates text to maxLen runes, appending "..." if truncated.
+func truncateText(text string, maxLen int) string {
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return text
+	}
+	return string(runes[:maxLen]) + "..."
 }
 
 // computeReminderScores groups sessions by matched_root (or project dir),

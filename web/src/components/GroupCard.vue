@@ -127,8 +127,12 @@ const fogStyle = computed(() => {
       </div>
     </div>
 
-    <!-- Group body: session table -->
+    <!-- Group body: session table or empty placeholder -->
+    <div v-if="group.sessions.length === 0" class="card-empty">
+      <span>没有活动session</span>
+    </div>
     <NDataTable
+      v-else
       :columns="columns"
       :data="tableData"
       :row-props="wrappedRowProps"
@@ -268,5 +272,12 @@ const fogStyle = computed(() => {
 .checkbox-label {
   font-size: 12px;
   color: var(--n-text-color-3);
+}
+
+.card-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--n-text-color-4);
+  font-size: 13px;
 }
 </style>

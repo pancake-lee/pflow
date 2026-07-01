@@ -324,10 +324,31 @@ function rowProps(row: DashboardEntry) {
       </div>
     </template>
 
-    <!-- Empty placeholder -->
-    <div v-else class="card-empty">
+    <!-- No project assigned to this slot -->
+    <div v-else-if="!group" class="card-empty">
       <span>Assign a project</span>
     </div>
+
+    <!-- Project assigned but no active sessions -->
+    <template v-else>
+      <div class="ms-name-row">
+        <div class="ms-name ms-name--empty">没有活动session</div>
+      </div>
+      <div class="ms-req-row">
+        <div class="ms-req-label">Last Request</div>
+        <div class="ms-req-text">—</div>
+      </div>
+      <div class="other-sessions">
+        <div class="other-header">Other sessions (0)</div>
+        <NDataTable
+          :columns="tableColumns"
+          :data="[PLACEHOLDER_ROW]"
+          :bordered="false"
+          :single-line="false"
+          size="small"
+        />
+      </div>
+    </template>
   </div>
 </template>
 
@@ -501,6 +522,11 @@ function rowProps(row: DashboardEntry) {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.ms-name--empty {
+  color: var(--n-text-color-4);
+  font-style: italic;
 }
 
 /* ── Last Req ──────────────────────────────── */

@@ -461,3 +461,54 @@ func applyMaxInactive(summaries []SessionSummary, maxInactive int) []SessionSumm
 
 	return result
 }
+
+// FindMostRecentHistory reads the full history file (no time filter) and
+// returns the most recent HistoryEntry whose Project field matches the
+// given projectRoot via longest-prefix matching.
+//
+// Returns nil if no matching entry is found.
+func FindMostRecentHistory(projectRoot string) *HistoryEntry {
+	cd, err := claudeDir()
+	if err != nil {
+		return nil
+	}
+
+	path := filepath.Join(cd, "history.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	cleanRoot := filepath.Clean(projectRoot)
+	var best *HistoryEntry
+	var bestTime time.Time
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var e HistoryEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
+		}
+		if e.Project == "" {
+			continue
+		}
+
+		// Longest-prefix matching: the history entry's project must be
+		// equal to or a subdirectory of the project root.
+		cleanProj := filepath.Clean(e.Project)
+		if cleanProj != cleanRoot && !strings.HasPrefix(cleanProj, cleanRoot+string(filepath.Separator)) {
+			continue
+		}
+
+		t := e.TimestampTime()
+		if best == nil || t.After(bestTime) {
+			best = &e
+			bestTime = t
+		}
+	}
+
+	return best
+}

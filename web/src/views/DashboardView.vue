@@ -27,6 +27,8 @@ import {
   DesktopOutline,
   RefreshOutline,
   HardwareChipOutline,
+  SettingsOutline,
+  TrashOutline,
 } from '@vicons/ionicons5'
 import type { DataTableColumns } from 'naive-ui'
 import type {
@@ -316,6 +318,15 @@ const groupedSessions = computed<SessionGroup[]>(() => {
     groups.get(key)!.push(s)
   }
 
+  // Ensure every marked project root appears as a group, even if it has
+  // no sessions (e.g., after a reboot). This allows slot cards to show
+  // the assigned project with a "暂无活动的Agent" placeholder.
+  for (const r of roots) {
+    if (!groups.has(r.path)) {
+      groups.set(r.path, [])
+    }
+  }
+
   const result: SessionGroup[] = Array.from(groups.entries()).map(([key, sess]) => ({
     key,
     basename: projectBasename(key),
@@ -323,7 +334,7 @@ const groupedSessions = computed<SessionGroup[]>(() => {
     sessions: sess,
     hasActive: sess.some(s => s.is_active),
     hasWaiting: sess.some(s => s.status === 'waiting'),
-    lastActive: Math.max(...sess.map(s => new Date(s.last_active).getTime())),
+    lastActive: sess.length > 0 ? Math.max(...sess.map(s => new Date(s.last_active).getTime())) : 0,
     isRoot: rootSet.has(key),
     priority: rootPriorityMap.get(key) ?? null,
   }))
@@ -631,6 +642,61 @@ async function startTerminal() {
   }
 }
 
+// ── Project management modal ────────────────────────────────────
+
+const showProjectMgmt = ref(false)
+const forgetLoading = ref<Record<string, boolean>>({})
+
+function openProjectMgmt() {
+  showProjectMgmt.value = true
+}
+
+async function forgetProject(path: string) {
+  forgetLoading.value = { ...forgetLoading.value, [path]: true }
+  try {
+    const resp = await fetch(`/api/v1/project-roots?path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+    })
+    const result = await resp.json()
+    if (!resp.ok) {
+      message.error(result.error || `Failed to forget project`)
+      return
+    }
+    message.success('Project forgotten')
+    refresh()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : 'Failed to forget project')
+  } finally {
+    const { [path]: _, ...rest } = forgetLoading.value
+    forgetLoading.value = rest
+  }
+}
+
+/** Look up which slot (if any) a project path occupies. */
+function getSlotForPath(path: string): string | null {
+  const slots = slotsMap.value
+  for (const [slotId, slotPath] of Object.entries(slots)) {
+    if (slotPath === path) return slotId
+  }
+  return null
+}
+
+/** Get last activity time for a project root from sessions. */
+function getLastActiveForRoot(path: string): string {
+  const sessions = data.value?.sessions ?? []
+  let last = 0
+  for (const s of sessions) {
+    if (s.matched_root === path || s.project === path) {
+      const t = new Date(s.last_active).getTime()
+      if (t > last) last = t
+    }
+  }
+  if (last > 0) {
+    return new Date(last).toLocaleString()
+  }
+  return '从未活动'
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────
 
 onMounted(() => { refresh() })
@@ -813,6 +879,16 @@ function rowProps(row: DashboardEntry) {
               <NIcon><RefreshOutline /></NIcon>
             </template>
             Refresh
+          </NButton>
+          <NButton
+            size="small"
+            quaternary
+            @click="openProjectMgmt"
+          >
+            <template #icon>
+              <NIcon><SettingsOutline /></NIcon>
+            </template>
+            项目
           </NButton>
         </div>
       </div>
@@ -1103,6 +1179,54 @@ function rowProps(row: DashboardEntry) {
       </div>
       <div v-else class="terminal-modal-loading">
         <p>Terminal not available. Click "Open Terminal" to start.</p>
+      </div>
+    </NModal>
+
+    <!-- 📋 项目管理 — Project management modal -->
+    <NModal
+      v-model:show="showProjectMgmt"
+      preset="card"
+      :style="{ width: '620px', maxWidth: '90vw' }"
+      title="📋 项目管理"
+      closable
+    >
+      <div class="project-mgmt-list">
+        <div v-if="!data || data.project_roots.length === 0" class="project-mgmt-empty">
+          没有标记的项目。在下方"未归类"区域勾选 ☐ 识别为项目，或通过下拉框将项目分配到主线/支线 slot 即可自动标记。
+        </div>
+        <div
+          v-for="root in data?.project_roots ?? []"
+          :key="root.path"
+          class="project-mgmt-item"
+        >
+          <div class="project-mgmt-info">
+            <div class="project-mgmt-name">{{ projectBasename(root.path) }}</div>
+            <div class="project-mgmt-path">{{ root.path }}</div>
+            <div class="project-mgmt-meta">
+              <NTag :type="root.priority === 'primary' ? 'success' : root.priority === 'secondary' ? 'warning' : 'default'" size="tiny" :bordered="false">
+                {{ root.priority === 'primary' ? '⭐ 主线' : root.priority === 'secondary' ? '🚩 支线' : '📁 普通' }}
+              </NTag>
+              <span v-if="getSlotForPath(root.path)" class="project-mgmt-slot">
+                slot: {{ getSlotForPath(root.path) }}
+              </span>
+              <span class="project-mgmt-last">
+                最后活跃: {{ getLastActiveForRoot(root.path) }}
+              </span>
+            </div>
+          </div>
+          <NButton
+            size="tiny"
+            type="error"
+            quaternary
+            :loading="forgetLoading[root.path]"
+            @click="forgetProject(root.path)"
+          >
+            <template #icon>
+              <NIcon><TrashOutline /></NIcon>
+            </template>
+            忘记
+          </NButton>
+        </div>
       </div>
     </NModal>
 
@@ -1456,5 +1580,77 @@ function rowProps(row: DashboardEntry) {
 .zone-collapse-wrap {
   border-radius: 8px;
   overflow: hidden;
+}
+
+/* ── Project management modal ──────────────────── */
+
+.project-mgmt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.project-mgmt-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--n-text-color-4);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.project-mgmt-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 6px;
+  gap: 12px;
+  transition: background 0.15s;
+}
+
+.project-mgmt-item:hover {
+  background: var(--n-color-embedded);
+}
+
+.project-mgmt-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.project-mgmt-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--n-text-color);
+}
+
+.project-mgmt-path {
+  font-size: 12px;
+  color: var(--n-text-color-4);
+  font-family: monospace;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-mgmt-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.project-mgmt-slot {
+  font-size: 11px;
+  color: var(--n-text-color-3);
+  font-family: monospace;
+}
+
+.project-mgmt-last {
+  font-size: 11px;
+  color: var(--n-text-color-4);
 }
 </style>
