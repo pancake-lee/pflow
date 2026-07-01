@@ -395,31 +395,17 @@ func runServeCmd(args []string) {
 	}()
 
 	// Background mapping sync: periodically refresh tmux↔agent session
-	// mappings to detect session ID changes (Claude's /clear, /resume, etc.).
-	//
-	// Strategy depends on the configured Claude capture mode:
-	//   - DirScan: scans ~/.claude/sessions/ for sessionId/pid changes (every 5s)
-	//   - Statusline: tmux capture-pane re-reads statusline prefix (every 15s)
+	// mappings to detect session ID changes (Claude's /clear, /resume, etc.)
+	// by scanning ~/.claude/sessions/ directory (every 5s).
 	go func() {
 		// Wait for initial startup before first sync
 		time.Sleep(5 * time.Second)
 
-		// Claude directory scan is faster and cheaper — run every 5s.
-		// Statusline capture-pane involves subprocess calls — run every 15s.
-		var ticker *time.Ticker
-		var syncFn func() (int, error)
-
-		if session.GetClaudeCaptureMode() == session.ClaudeCaptureDirScan {
-			ticker = time.NewTicker(5 * time.Second)
-			syncFn = session.SyncClaudeMappingsDirScan
-		} else {
-			ticker = time.NewTicker(15 * time.Second)
-			syncFn = session.SyncMappings
-		}
+		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {
-			updated, err := syncFn()
+			updated, err := session.SyncClaudeMappingsDirScan()
 			if err != nil {
 				plogger.Debugf("bg sync error: %v", err)
 			} else if updated > 0 {
@@ -439,7 +425,7 @@ func runClaudeCmd(args []string) {
 	flagSet := flag.NewFlagSet("claude", flag.ExitOnError)
 	name := flagSet.String("name", "", "Session name (default: claude-<dirbasename>)")
 	dir := flagSet.String("dir", "", "Working directory (default: current directory)")
-	force := flagSet.Bool("force", false, "Force-overwrite existing Claude statusline configuration")
+	forceAttach := flagSet.Bool("f", false, "Force attach: kill existing stale tmux attach processes before reconnecting")
 	noAttach := flagSet.Bool("no-attach", false, "Don't attach to the tmux session after creation")
 	flagSet.Parse(args)
 
@@ -460,9 +446,20 @@ func runClaudeCmd(args []string) {
 		claudeName = filepath.Base(workDir) + "-claude"
 	}
 
+	// If -f is set, detach stale clients before attempting to create/attach.
+	// This handles the case where SSH disconnects leave orphan tmux attach
+	// processes that block new connections.
+	if *forceAttach {
+		sanitized := session.SanitizeName(claudeName)
+		if err := session.ForceDetachClients(sanitized); err != nil {
+			fmt.Fprintf(os.Stderr, "pflow claude: force detach failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	// Create session manager and start Claude session
 	mgr := session.NewManager(0, "127.0.0.1")
-	sess, prefix, err := mgr.StartClaudeSession(claudeName, workDir, *force)
+	sess, _, err := mgr.StartClaudeSession(claudeName, workDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pflow claude: %v\n", err)
 		os.Exit(1)
@@ -472,9 +469,6 @@ func runClaudeCmd(args []string) {
 	fmt.Printf("=== Claude Session Started ===\n")
 	fmt.Printf("  Tmux session:  %s\n", sess.Name)
 	fmt.Printf("  Work dir:      %s\n", sess.WorkDir)
-	if prefix != "" {
-		fmt.Printf("  Claude prefix: %s\n", prefix)
-	}
 	fmt.Println()
 
 	// Attach to tmux session (unless -no-attach)

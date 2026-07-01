@@ -14,37 +14,6 @@ import (
 	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 )
 
-// ── Code toggle: choose Claude session ID capture strategy ──────────
-
-// ClaudeCaptureMode controls which strategy is used to capture Claude's
-// session ID after launching it in a tmux session.
-//
-//   - ClaudeCaptureDirScan (recommended): uses claude -n <name> + scans
-//     ~/.claude/sessions/ for JSON files with a matching "name" field.
-//   - ClaudeCaptureStatusline (legacy): configures Claude's statusline to
-//     display the 8-char session ID prefix and parses it via capture-pane.
-type ClaudeCaptureMode int
-
-const (
-	ClaudeCaptureDirScan    ClaudeCaptureMode = iota // default: directory scanning
-	ClaudeCaptureStatusline                          // legacy: statusline capture-pane
-)
-
-// claudeCaptureMode is the active capture strategy. Default to directory scan.
-var claudeCaptureMode ClaudeCaptureMode = ClaudeCaptureDirScan
-
-// SetClaudeCaptureMode switches the Claude session ID capture strategy at
-// runtime. Call before starting new Claude sessions.
-func SetClaudeCaptureMode(mode ClaudeCaptureMode) {
-	claudeCaptureMode = mode
-	plogger.Infof("claude: capture mode set to %d (0=dirScan, 1=statusline)", mode)
-}
-
-// GetClaudeCaptureMode returns the current capture strategy.
-func GetClaudeCaptureMode() ClaudeCaptureMode {
-	return claudeCaptureMode
-}
-
 // ── ~/.claude/sessions/ JSON file structure ──────────────────────────
 
 // claudeSessionFile mirrors the JSON structure of a file in

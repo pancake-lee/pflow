@@ -18,7 +18,7 @@ import (
 // and an AI agent session (Claude Code, Hermes, etc.).
 //
 // For Claude sessions, the AgentSessionID is the full Claude session ID and
-// ClaudePrefix holds the first 8 chars (used for statusline-based lookup).
+// ClaudePrefix holds the first 8 chars of the Claude session ID.
 // For Hermes sessions, the AgentSessionID is the full Hermes session ID
 // (e.g., "20260617_001042_a5375f") and ClaudePrefix is empty.
 type Mapping struct {
@@ -28,7 +28,7 @@ type Mapping struct {
 	AgentName      string    `json:"agent_name,omitempty"`       // stable name (Claude -n name, or Hermes session name)
 	AgentSessionID string    `json:"agent_session_id,omitempty"` // full session ID
 	PID            int       `json:"pid,omitempty"`              // agent process PID inside tmux
-	ClaudePrefix   string    `json:"claude_prefix"`              // legacy: first 8 chars of Claude session ID (statusline-based)
+	ClaudePrefix   string    `json:"claude_prefix"`              // legacy: first 8 chars of Claude session ID
 	Status         string    `json:"status,omitempty"`           // "active", "dead"
 	CreatedAt      time.Time `json:"created_at"`
 	LastUpdated    time.Time `json:"last_updated"`
@@ -357,70 +357,4 @@ func LoadMappings() ([]Mapping, error) {
 	return store.Mappings, nil
 }
 
-// SyncMappings refreshes all tmux↔agent session mappings by re-capturing
-// the current session ID from each live tmux session.
-//
-// For Claude sessions: uses tmux capture-pane to re-read the statusline prefix
-// (handles /clear, /resume, and Claude restarts which change the session ID).
-//
-// For Hermes sessions: skips live re-capture (Hermes session IDs don't change
-// mid-session like Claude's do).
-//
-// Stale mappings (whose tmux sessions no longer exist) are removed.
-//
-// Returns the number of mappings whose prefix/sessionID was updated.
-func SyncMappings() (int, error) {
-	mm, err := newMappingManager()
-	if err != nil {
-		return 0, err
-	}
 
-	store, err := mm.load()
-	if err != nil {
-		return 0, err
-	}
-
-	updated := 0
-	for i := range store.Mappings {
-		m := &store.Mappings[i]
-		if !tmuxSessionExists(m.TmuxName) {
-			continue // will be cleaned up by cleanStale below
-		}
-
-		// For legacy mappings or Claude mappings: use capture-pane to
-		// re-read the current prefix from the statusline.
-		if m.AgentType == "" || m.AgentType == "claude" {
-			currentPrefix, _ := captureClaudePrefix(m.TmuxName, 3*time.Second)
-			if currentPrefix == "" {
-				continue
-			}
-			if currentPrefix != m.ClaudePrefix {
-				plogger.Infof("sync: tmux=%s agent=claude prefix changed: %s → %s",
-					m.TmuxName, m.ClaudePrefix, currentPrefix)
-				m.ClaudePrefix = currentPrefix
-				if m.AgentSessionID != "" {
-					// Update agent session ID if we have the full one
-					m.AgentSessionID = "" // can't reconstruct full ID from prefix alone
-				}
-				m.AgentType = "claude"
-				m.LastUpdated = time.Now()
-				updated++
-			}
-		}
-		// Hermes mappings: no live re-capture needed; session IDs are stable.
-	}
-
-	if updated > 0 {
-		if err := mm.save(store); err != nil {
-			return updated, fmt.Errorf("sync: save failed after %d updates: %w", updated, err)
-		}
-		plogger.Infof("sync: updated %d mapping(s)", updated)
-	}
-
-	// Also remove mappings for tmux sessions that no longer exist.
-	if cleaned, _ := mm.cleanStale(); cleaned > 0 {
-		plogger.Infof("sync: cleaned %d stale mapping(s)", cleaned)
-	}
-
-	return updated, nil
-}

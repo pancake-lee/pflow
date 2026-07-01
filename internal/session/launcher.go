@@ -25,8 +25,8 @@ type launchConfig struct {
 }
 
 // launch creates a tmux session and starts an AI agent inside it using the
-// shared tmux lifecycle logic. Agent-specific setup (statusline configuration,
-// session ID capture strategy) is injected via the config callbacks.
+// shared tmux lifecycle logic. Agent-specific setup and session ID capture
+// strategy is injected via the config callbacks.
 //
 // The flow mirrors the simplicity of a hand-written tmux script:
 //
@@ -92,7 +92,7 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 		}, nil
 	}
 
-	// 1. Run agent-specific pre-launch hook (e.g., statusline configuration).
+	// 1. Run agent-specific pre-launch hook.
 	if cfg.preLaunch != nil {
 		if err := cfg.preLaunch(); err != nil {
 			plogger.Warnf("launch: preLaunch hook failed for %s: %v", cfg.agentType, err)

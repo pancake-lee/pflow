@@ -271,10 +271,9 @@ func checkDeps() error {
 	return nil
 }
 
-// checkClaudeDeps verifies that tmux, ttyd, and jq are installed
-// (jq is required by the Claude statusline command).
+// checkClaudeDeps verifies that tmux and ttyd are installed.
 func checkClaudeDeps() error {
-	for _, bin := range []string{"tmux", "ttyd", "jq"} {
+	for _, bin := range []string{"tmux", "ttyd"} {
 		if _, err := exec.LookPath(bin); err != nil {
 			return fmt.Errorf("%s is not installed (%w); please install it first", bin, err)
 		}
@@ -339,6 +338,36 @@ func tmuxHasClients(name string) bool {
 		return false
 	}
 	return len(strings.TrimSpace(string(out))) > 0
+}
+
+// ForceDetachClients detaches all clients from a tmux session (useful when
+// SSH disconnects leave orphan attach processes). It first tries the clean
+// detach-client command, then kills any remaining client PIDs as fallback.
+func ForceDetachClients(name string) error {
+	// Try clean detach first
+	if err := exec.Command("tmux", "detach-client", "-s", name).Run(); err != nil {
+		// detach-client may fail if no clients are attached; that's fine.
+		// Fall through to kill any remaining client processes.
+	}
+
+	// Kill any remaining tmux client PIDs attached to this session
+	out, err := exec.Command("tmux", "list-clients", "-t", name, "-F", "#{client_pid}").Output()
+	if err != nil {
+		return nil // session doesn't exist or has no clients
+	}
+	for _, pidStr := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		pidStr = strings.TrimSpace(pidStr)
+		if pidStr == "" {
+			continue
+		}
+		_ = exec.Command("kill", pidStr).Run()
+	}
+	return nil
+}
+
+// SanitizeName converts a path component into a valid tmux session name.
+func SanitizeName(s string) string {
+	return sanitizeName(s)
 }
 
 // sanitizeName converts a path component into a valid tmux session name.

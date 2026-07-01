@@ -2,258 +2,35 @@
 package session
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"time"
 
 	plogger "github.com/pancake-lee/pgo/pkg/plogger"
 )
 
-// ── Statusline configuration ───────────────────────────────────────
-
-// claudeSettingsPath returns the path to ~/.claude/settings.json.
-func claudeSettingsPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("cannot find home directory: %w", err)
-	}
-	return filepath.Join(home, ".claude", "settings.json"), nil
-}
-
-// statuslineCommand is the Claude statusline command that displays the
-// 8-char session ID prefix as the first element in the status line.
-// Format: "sid8 | model | ctx | tok | session"
-const statuslineCommand = `input=$(cat); sid=$(echo "$input" | jq -r '.session_id // "-"'); sid8=$(printf "%.8s" "$sid"); model=$(echo "$input" | jq -r '.model.display_name // empty'); used=$(echo "$input" | jq -r '.context_window.used_percentage // empty'); rem=$(echo "$input" | jq -r '.context_window.remaining_percentage // empty'); in_tok=$(echo "$input" | jq -r '.context_window.current_usage.input_tokens // 0'); out_tok=$(echo "$input" | jq -r '.context_window.current_usage.output_tokens // 0'); total_in=$(echo "$input" | jq -r '.context_window.total_input_tokens // 0'); total_out=$(echo "$input" | jq -r '.context_window.total_output_tokens // 0'); [ -n "$used" ] && [ -n "$rem" ] && ctx="ctx ${used}%/ ${rem}%" || ctx="ctx --"; tok="in:${in_tok} out:${out_tok}"; session="total:${total_in}/${total_out}"; [ -n "$model" ] && echo "${sid8} | ${model} | ${ctx} | ${tok} | ${session}" || echo "${sid8} | ${ctx} | ${tok} | ${session}"`
-
-// StatuslineStatus describes the current statusline configuration state.
-type StatuslineStatus int
-
-const (
-	StatuslineOK          StatuslineStatus = iota // already configured correctly
-	StatuslineNotSet                               // no statusline configured
-	StatuslineDifferent                            // has statusline but doesn't show session prefix
-)
-
-// checkStatusline reads ~/.claude/settings.json and determines whether the
-// statusline is configured to show the session ID prefix.
-func checkStatusline() (StatuslineStatus, error) {
-	path, err := claudeSettingsPath()
-	if err != nil {
-		return StatuslineNotSet, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return StatuslineNotSet, nil
-		}
-		return StatuslineNotSet, fmt.Errorf("cannot read %s: %w", path, err)
-	}
-
-	var settings map[string]any
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return StatuslineNotSet, fmt.Errorf("cannot parse %s: %w", path, err)
-	}
-
-	sl, ok := settings["statusLine"]
-	if !ok {
-		return StatuslineNotSet, nil
-	}
-
-	// Check if it's the pflow-managed command
-	slMap, ok := sl.(map[string]any)
-	if !ok {
-		return StatuslineDifferent, nil
-	}
-
-	if slMap["type"] != "command" {
-		return StatuslineDifferent, nil
-	}
-
-	cmd, _ := slMap["command"].(string)
-	// Check that the command includes the session ID prefix pattern
-	if strings.Contains(cmd, "sid8") && strings.Contains(cmd, "session_id") {
-		return StatuslineOK, nil
-	}
-
-	return StatuslineDifferent, nil
-}
-
-// setupStatusline configures Claude's statusline to show the session ID prefix.
-// If a statusline already exists but differs, returns an error describing the conflict.
-// force=true overrides an existing statusline.
-func setupStatusline(force bool) error {
-	status, err := checkStatusline()
-	if err != nil {
-		return err
-	}
-
-	switch status {
-	case StatuslineOK:
-		return nil // already good
-	case StatuslineNotSet:
-		// Proceed with configuration
-	case StatuslineDifferent:
-		if !force {
-			return fmt.Errorf("existing statusline found in ~/.claude/settings.json; use -force to override, or ensure the statusline shows the 8-char session ID prefix first (e.g. | sid8 | ...)")
-		}
-		// force=true: overwrite
-	}
-
-	path, err := claudeSettingsPath()
-	if err != nil {
-		return err
-	}
-
-	// Ensure ~/.claude/ exists
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("cannot create ~/.claude: %w", err)
-	}
-
-	// Read existing settings (or start fresh)
-	var settings map[string]any
-	data, err := os.ReadFile(path)
-	if err == nil {
-		if err := json.Unmarshal(data, &settings); err != nil {
-			// Corrupt file — start fresh
-			settings = make(map[string]any)
-		}
-	} else {
-		settings = make(map[string]any)
-	}
-
-	settings["statusLine"] = map[string]any{
-		"type":    "command",
-		"command": statuslineCommand,
-	}
-
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return fmt.Errorf("cannot marshal settings: %w", err)
-	}
-
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, out, 0644); err != nil {
-		return fmt.Errorf("cannot write settings: %w", err)
-	}
-	return os.Rename(tmpPath, path)
-}
-
 // ── Claude session management ──────────────────────────────────────
-
-// claudePrefixRegex matches the 8-char hex session ID prefix in a Claude
-// status line. Format: "3ca06c7d | model | ctx ...".
-//
-// The regex requires a `|` separator after the hex prefix — this avoids
-// false positives from git hashes, hex dumps, or other 8-char hex sequences
-// that appear in conversation output.
-//
-// When a pane contains multiple statuslines (e.g. from /clear leaving old
-// output in scrollback), only the bottom-most (visually latest) one reflects
-// the currently running Claude session. Use extractClaudePrefix() which
-// scans lines from bottom to top.
-var claudePrefixRegex = regexp.MustCompile(`^\s*([a-fA-F0-9]{8})\s*\|\s`)
-
-// extractClaudePrefix scans pane text from bottom to top and returns the
-// first 8-char hex prefix found. Scanning bottom-up ensures we find the
-// current statusline even when old statuslines or false-positive matches
-// exist higher up in the scrollback.
-func extractClaudePrefix(text string) string {
-	lines := strings.Split(text, "\n")
-	// Scan from bottom (last line) upwards — the current statusline is
-	// always at the bottom of the visible pane.
-	for i := len(lines) - 1; i >= 0; i-- {
-		m := claudePrefixRegex.FindStringSubmatch(lines[i])
-		if m != nil {
-			return m[1]
-		}
-	}
-	return ""
-}
-
-// captureClaudePrefix uses tmux capture-pane to extract the 8-char Claude
-// session ID prefix from the status line within a tmux session.
-// Returns empty string if the prefix cannot be parsed within maxWait.
-func captureClaudePrefix(tmuxName string, maxWait time.Duration) (string, error) {
-	deadline := time.Now().Add(maxWait)
-	pane := tmuxName + ":0.0"
-	attempt := 0
-
-	for time.Now().Before(deadline) {
-		attempt++
-		out, err := exec.Command("tmux", "capture-pane", "-t", pane, "-p").Output()
-		if err != nil {
-			plogger.Debugf("captureClaudePrefix: attempt %d: capture-pane error: %v", attempt, err)
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-
-		text := string(out)
-		prefix := extractClaudePrefix(text)
-		if prefix != "" {
-			plogger.Debugf("captureClaudePrefix: attempt %d: found prefix=%s", attempt, prefix)
-			return prefix, nil
-		}
-
-		// Log first attempt and every 5th to see what's on screen
-		if attempt == 1 || attempt%5 == 0 {
-			lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-			total := len(lines)
-			// Capture last 10 lines — statusline might need more context
-			tail := lines
-			if len(tail) > 10 {
-				tail = tail[len(tail)-10:]
-			}
-			plogger.Debugf("captureClaudePrefix: attempt %d: no prefix match, total=%d lines, tail %d: %q",
-				attempt, total, len(tail), strings.Join(tail, "\\n"))
-		}
-
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	plogger.Debugf("captureClaudePrefix: timeout after %d attempts (%.1fs)", attempt, maxWait.Seconds())
-	return "", nil
-}
 
 // ── Full Claude session startup ────────────────────────────────────
 
 // StartClaudeSession creates a tmux session and starts Claude Code inside it.
-//
-// Two capture strategies are supported, controlled by SetClaudeCaptureMode():
-//
-//	DirScan (default):    claude -n <name> --permission-mode acceptEdits
-//	                      Scans ~/.claude/sessions/ for JSON files with
-//	                      matching "name" field to extract sessionId + PID.
-//	Statusline (legacy):  claude --permission-mode acceptEdits
-//	                      Configures statusline to show 8-char prefix,
-//	                      extracts via capture-pane.
+// Uses claude -n <name> --permission-mode acceptEdits and scans
+// ~/.claude/sessions/ for JSON files with a matching "name" field to
+// extract the session ID + PID.
 //
 // Parameters:
 //   - name: desired tmux session name (will be sanitized). Also used as
 //     Claude's -n name for stable identity across /clear and /resume.
 //   - workDir: working directory for the session
-//   - forceStatusline: overwrite existing Claude statusline if needed
-//     (only relevant in Statusline capture mode)
 //
 // Returns the created Session. Session ID capture is asynchronous — the
 // mapping is saved in the background when capture succeeds.
-func (m *Manager) StartClaudeSession(name, workDir string, forceStatusline bool) (*Session, string, error) {
+func (m *Manager) StartClaudeSession(name, workDir string) (*Session, string, error) {
 	absDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return nil, "", fmt.Errorf("cannot resolve path %q: %w", workDir, err)
 	}
-
-	switch claudeCaptureMode {
-	case ClaudeCaptureDirScan:
-		return m.startClaudeSessionDirScan(name, absDir)
-	default:
-		return m.startClaudeSessionStatusline(name, absDir, forceStatusline)
-	}
+	return m.startClaudeSessionDirScan(name, absDir)
 }
 
 // startClaudeSessionDirScan starts Claude using the directory scanning approach.
@@ -273,59 +50,14 @@ func (m *Manager) startClaudeSessionDirScan(name, absDir string) (*Session, stri
 		workDir:   absDir,
 		agentType: "claude",
 		command:   fmt.Sprintf("cd %s && claude -n %s --permission-mode acceptEdits", absDir, claudeName),
-		preLaunch: nil, // no statusline needed
+		preLaunch: nil,
 		captureSessionID: func(tmuxName string, maxWait time.Duration) (string, error) {
 			sessionID, pid, err := captureClaudeSessionIDByName(claudeName, maxWait)
 			if err != nil {
 				return "", err
 			}
-			// PID is recorded in the mapping by the launch() async goroutine.
-			// We embed it into the returned sessionID string for now — a
-			// cleaner approach would return a struct but that requires wider
-			// refactor. Instead we log it here and rely on the background
-			// sync to update PID in the mapping.
 			_ = pid
 			return sessionID, nil
-		},
-	})
-	if err != nil {
-		return nil, "", err
-	}
-	return sess, "", nil
-}
-
-// startClaudeSessionStatusline starts Claude using the legacy statusline
-// capture-pane approach. Preserved via code toggle.
-func (m *Manager) startClaudeSessionStatusline(name, absDir string, forceStatusline bool) (*Session, string, error) {
-	statuslineReady := false
-
-	sess, err := m.launch(launchConfig{
-		name:      name,
-		agentName: name, // statusline mode: use provided name as agentName ("" will fallback to dir basename)
-		workDir:   absDir,
-		agentType: "claude",
-		command:   fmt.Sprintf("cd %s && claude --permission-mode acceptEdits", absDir),
-		preLaunch: func() error {
-			status, err := checkStatusline()
-			if err != nil {
-				plogger.Warnf("StartClaudeSession: cannot check statusline: %v", err)
-				return nil // non-fatal
-			}
-			plogger.Debugf("StartClaudeSession: statusline status=%d (0=OK, 1=NotSet, 2=Different)", status)
-			if err := setupStatusline(forceStatusline); err != nil {
-				plogger.Warnf("StartClaudeSession: statusline setup skipped: %v", err)
-				return nil // non-fatal
-			}
-			statuslineReady = true
-			plogger.Debugf("StartClaudeSession: statusline is ready")
-			return nil
-		},
-		captureSessionID: func(tmuxName string, maxWait time.Duration) (string, error) {
-			if !statuslineReady {
-				plogger.Warn("StartClaudeSession: statusline not ready, skipping prefix capture")
-				return "", nil
-			}
-			return captureClaudePrefix(tmuxName, maxWait)
 		},
 	})
 	if err != nil {
@@ -337,20 +69,16 @@ func (m *Manager) startClaudeSessionStatusline(name, absDir string, forceStatusl
 // ── Tmux ↔ Claude lookup ──────────────────────────────────────────
 
 // LookupResult describes the result of looking up a tmux session by
-// Claude session ID.
+// agent session ID.
 type LookupResult struct {
 	Session  *Session // nil if no match
-	Verified bool     // true if live capture-pane confirmed the prefix match
-	Warning  string   // non-empty when found but not verified (e.g., Claude in auth mode)
+	Verified bool     // always false (no live verification without statusline)
+	Warning  string   // non-empty when the mapping might be stale
 }
 
 // LookupByClaudeSessionID finds a pflow-managed tmux session that is
 // associated with the given Claude session ID. It matches by the first
 // 8 characters of the session ID.
-//
-// If a saved mapping exists but live capture-pane verification fails
-// (e.g., Claude is in auth mode and the statusline isn't visible),
-// it still returns the mapping with Verified=false and a Warning.
 func (m *Manager) LookupByClaudeSessionID(claudeSessionID string) (*LookupResult, error) {
 	if len(claudeSessionID) < 8 {
 		return nil, fmt.Errorf("session ID too short: %q", claudeSessionID)
@@ -382,9 +110,6 @@ func (m *Manager) LookupByClaudeSessionID(claudeSessionID string) (*LookupResult
 			continue
 		}
 
-		// Try live verification via capture-pane
-		currentPrefix, _ := captureClaudePrefix(match.TmuxName, 2*time.Second)
-
 		var sess *Session
 		m.mu.Lock()
 		existing, ok := m.sessions[match.TmuxName]
@@ -398,31 +123,16 @@ func (m *Manager) LookupByClaudeSessionID(claudeSessionID string) (*LookupResult
 			}
 		}
 
-		if currentPrefix == prefix {
-			plogger.Infof("lookup: VERIFIED tmux=%s prefix=%s (live capture matches)", match.TmuxName, currentPrefix)
-			return &LookupResult{Session: sess, Verified: true}, nil
-		}
-
-		// Live verification failed — Claude might be in auth mode
-		// (statusline not visible). Return the saved mapping with a warning.
-		plogger.Infof("lookup: UNVERIFIED tmux=%s saved_prefix=%s current_prefix=%q — returning mapping with warning",
-			match.TmuxName, prefix, currentPrefix)
-		return &LookupResult{
-			Session:  sess,
-			Verified: false,
-			Warning:  "Unable to live-verify the Claude session prefix (Claude may be in auth mode). The terminal session is based on saved data and may not match the current Claude session.",
-		}, nil
+		plogger.Infof("lookup: FOUND tmux=%s for prefix=%s (saved mapping)", match.TmuxName, prefix)
+		return &LookupResult{Session: sess, Verified: false}, nil
 	}
 
 	plogger.Infof("lookup: all %d mapping(s) for prefix=%s have dead tmux sessions", len(matches), prefix)
-	return &LookupResult{}, nil // all sessions dead
+	return &LookupResult{}, nil
 }
 
 // LookupBySessionID finds a pflow-managed tmux session associated with the
 // given agent session. It supports both Claude and Hermes session IDs.
-//
-// For Claude sessions, live verification via capture-pane is attempted.
-// For Hermes sessions, the saved mapping is used directly (no live verification).
 func (m *Manager) LookupBySessionID(agentType, sessionID string) (*LookupResult, error) {
 	mm, err := newMappingManager()
 	if err != nil {
@@ -474,29 +184,11 @@ func (m *Manager) LookupBySessionID(agentType, sessionID string) (*LookupResult,
 			}
 		}
 
-		// For Claude sessions: try live verification
-		if agentType == "claude" {
-			prefix := sessionID[:8]
-			currentPrefix, _ := captureClaudePrefix(match.TmuxName, 2*time.Second)
-			if currentPrefix == prefix {
-				plogger.Infof("lookup: VERIFIED tmux=%s prefix=%s (live capture matches)", match.TmuxName, currentPrefix)
-				return &LookupResult{Session: sess, Verified: true}, nil
-			}
-			plogger.Infof("lookup: UNVERIFIED tmux=%s saved_prefix=%s current_prefix=%q",
-				match.TmuxName, prefix, currentPrefix)
-			return &LookupResult{
-				Session:  sess,
-				Verified: false,
-				Warning:  "Unable to live-verify the Claude session prefix (Claude may be in auth mode). The terminal session is based on saved data and may not match the current Claude session.",
-			}, nil
-		}
-
-		// For Hermes sessions: use saved mapping directly (no live verification)
 		plogger.Infof("lookup: FOUND tmux=%s for agent=%s sessionID=%s (saved mapping)",
 			match.TmuxName, agentType, truncate8(sessionID))
 		return &LookupResult{
 			Session:  sess,
-			Verified: false, // Hermes has no live verification mechanism
+			Verified: false,
 		}, nil
 	}
 
