@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, h, type Component } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, h, nextTick, type Component } from 'vue'
 import {
   NLayout,
   NLayoutHeader,
@@ -51,6 +51,55 @@ import type { SessionGroup } from '../components/GroupCard.vue'
 import type { ReminderScoreInfo } from '../types/dashboard'
 import { FOCUS_CONFIG } from '../composables/useReminderScores'
 import { STAR_BONUS_MINUTES } from '../config/attention'
+
+// ── Props ─────────────────────────────────────────────────────────
+
+const props = defineProps<{
+  initialGoal?: string
+}>()
+
+// ── Daily goal ────────────────────────────────────────────────────
+
+const todayGoal = ref(props.initialGoal ?? '')
+
+async function updateGoal(newGoal: string) {
+  todayGoal.value = newGoal
+  try {
+    await fetch('/api/v1/daily-boot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_goal', goal: newGoal }),
+    })
+  } catch {
+    // Silently fail
+  }
+}
+
+// Inline editing
+const editingGoalInline = ref(false)
+const editGoalTextInline = ref('')
+const goalInlineInputRef = ref<HTMLInputElement | null>(null)
+
+function startEditGoalInline() {
+  editGoalTextInline.value = todayGoal.value
+  editingGoalInline.value = true
+  nextTick(() => {
+    goalInlineInputRef.value?.focus()
+    goalInlineInputRef.value?.select()
+  })
+}
+
+function saveGoalInline() {
+  editingGoalInline.value = false
+  const trimmed = editGoalTextInline.value.trim()
+  if (trimmed !== todayGoal.value) {
+    updateGoal(trimmed)
+  }
+}
+
+function cancelEditGoalInline() {
+  editingGoalInline.value = false
+}
 
 // ── State ────────────────────────────────────────────────────────
 
@@ -974,6 +1023,26 @@ function rowProps(row: DashboardEntry) {
               />
             </div>
 
+            <!-- 🎯 今日目标 — standalone goal sentence between primary and suggest -->
+            <div v-if="todayGoal" class="zone-section">
+              <div class="goal-card">
+                <div class="goal-card-content">
+                  <span class="goal-card-star">🎯</span>
+                  <span v-if="!editingGoalInline" class="goal-card-text" @click="startEditGoalInline">{{ todayGoal }}</span>
+                  <input
+                    v-else
+                    ref="goalInlineInputRef"
+                    v-model="editGoalTextInline"
+                    class="goal-card-input"
+                    @keydown.enter="saveGoalInline"
+                    @keydown.escape="cancelEditGoalInline"
+                    @blur="saveGoalInline"
+                  />
+                  <span v-if="!editingGoalInline" class="goal-card-edit-icon" title="编辑今日目标" @click="startEditGoalInline">✎</span>
+                </div>
+              </div>
+            </div>
+
             <!-- 🔔 军情哨 — suggest analysis, full width between primary and secondary -->
             <div class="zone-section">
               <SuggestCard :suggestions="suggestions" />
@@ -1402,6 +1471,64 @@ function rowProps(row: DashboardEntry) {
   border-radius: 12px;
   padding: 4px;
   border: 1px solid rgba(24, 160, 88, 0.2);
+}
+
+/* ── Goal card ──────────────────────────────── */
+
+.goal-card {
+  background: rgba(74, 144, 217, 0.08);
+  border: 1px solid rgba(74, 144, 217, 0.2);
+  border-radius: 10px;
+  padding: 14px 20px;
+}
+
+.goal-card-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.goal-card-star {
+  color: #4A90D9;
+  font-size: 20px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.goal-card-text {
+  font-size: 18px;
+  color: #c8d6e5;
+  cursor: text;
+  line-height: 1.5;
+  flex: 1;
+  min-width: 0;
+}
+
+.goal-card-edit-icon {
+  color: #555;
+  cursor: pointer;
+  font-size: 14px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.goal-card-content:hover .goal-card-edit-icon {
+  opacity: 1;
+}
+
+.goal-card-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid #4A90D9;
+  color: #c8d6e5;
+  font-size: 18px;
+  padding: 2px 4px;
+  outline: none;
+  font-family: inherit;
+  line-height: 1.5;
+  min-width: 0;
 }
 
 .zone-title {

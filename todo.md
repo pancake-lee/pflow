@@ -21,6 +21,7 @@
 | ✅ Done | 16   | 会话管理   | tmux 会话绑定同步                  | 后台轮询 + JSON 目录扫描自动检测 session 变更                                                            |
 | ✅ Done | 18   | Agent 管理 | 多 Agent 类型启动（`pflow hermes`）| Hermes Agent tmux 托管会话，支持 -model/-resume/-no-attach                                               |
 | ✅ Done | 27-35| 会话管理   | 终端会话映射全套方案               | 结构化升级、Claude/Hermes 双数据源、自动销毁、孤儿清理、CLI 命令                                         |
+| ✅ Done | 37   | 交互体验   | 每日引导（Daily Boot）           | 三幕认知开机引导：启动热身/切换仪式/核心战局，目标锚定与 Dashboard 展示                    |
 
 ---
 

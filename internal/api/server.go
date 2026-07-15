@@ -20,6 +20,7 @@ import (
 	"github.com/pancake-lee/pflow/internal/hermes"
 	"github.com/pancake-lee/pflow/internal/project"
 	"github.com/pancake-lee/pflow/internal/session"
+	"github.com/pancake-lee/pflow/internal/state"
 	"github.com/pancake-lee/pflow/internal/suggest"
 	"github.com/pancake-lee/pflow/internal/timetrack"
 	plogger "github.com/pancake-lee/pgo/pkg/plogger"
@@ -83,6 +84,7 @@ type Server struct {
 	staticFS   fs.FS // optional embedded static files (web/dist)
 	sessionMgr *session.Manager
 	projectMgr *project.Manager
+	stateMgr   *state.Manager
 }
 
 // NewServer creates a new API server with registered routes.
@@ -92,6 +94,7 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 		staticFS:   staticFS,
 		sessionMgr: sessionMgr,
 		projectMgr: project.NewManager(),
+		stateMgr:   state.NewManager(),
 	}
 	s.HandleFunc("/api/v1/dashboard", s.handleDashboard)
 
@@ -113,6 +116,10 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	// Focus mode endpoints
 	s.HandleFunc("POST /api/v1/focus/extend", s.handleFocusExtend)
 	s.HandleFunc("POST /api/v1/focus/stop", s.handleFocusStop)
+
+	// Daily boot endpoints
+	s.HandleFunc("GET /api/v1/daily-boot", s.handleGetDailyBoot)
+	s.HandleFunc("POST /api/v1/daily-boot", s.handlePostDailyBoot)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -1202,6 +1209,60 @@ func (s *Server) handleFocusStop(w http.ResponseWriter, r *http.Request) {
 	active, minutes := attention.GetFocus().Stop()
 	plogger.Infof("api: focus stop → active=%v minutes=%.0f", active, minutes)
 	writeJSON(w, http.StatusOK, focusResponse{OK: true, Active: active, Minutes: minutes})
+}
+
+// ── Daily Boot handlers ──────────────────────────────────────────
+
+type dailyBootResponse struct {
+	Completed bool   `json:"completed"`
+	Goal      string `json:"goal"`
+	Date      string `json:"date"`
+}
+
+// handleGetDailyBoot handles GET /api/v1/daily-boot.
+// Returns today's daily boot completion status and goal.
+func (s *Server) handleGetDailyBoot(w http.ResponseWriter, r *http.Request) {
+	entry, err := s.stateMgr.GetTodayBoot()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, dailyBootResponse{
+		Completed: entry.Completed,
+		Goal:      entry.Goal,
+		Date:      time.Now().Format("2006-01-02"),
+	})
+}
+
+// handlePostDailyBoot handles POST /api/v1/daily-boot.
+// Marks today's daily boot as completed and saves the goal.
+// Request body: {"goal": "完成支付模块的接口联调"} (optional)
+// Also supports {"action": "update_goal", "goal": "..."} for in-dashboard edits.
+func (s *Server) handlePostDailyBoot(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Action string `json:"action"` // "complete" (default) or "update_goal"
+		Goal   string `json:"goal"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body: " + err.Error()})
+		return
+	}
+
+	var err error
+	switch req.Action {
+	case "update_goal":
+		err = s.stateMgr.UpdateTodayGoal(req.Goal)
+	default:
+		err = s.stateMgr.CompleteTodayBoot(req.Goal)
+	}
+
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func writeTerminalError(w http.ResponseWriter, msg string, code int) {

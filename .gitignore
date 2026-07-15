@@ -36,3 +36,4 @@ pflow
 # .vscode/
 .local
 logs
+.pids

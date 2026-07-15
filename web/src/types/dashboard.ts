@@ -110,3 +110,16 @@ export interface TerminalLookupResponse {
   hint?: string
   warning?: string
 }
+
+// ── Daily Boot types ──────────────────────────────────────────────
+
+export interface DailyBootState {
+  completed: boolean
+  goal: string
+}
+
+export interface DailyBootResponse {
+  completed: boolean
+  goal: string
+  date: string
+}

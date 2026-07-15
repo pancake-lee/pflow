@@ -60,7 +60,7 @@ const isMainStarred = computed(() =>
   !!props.mainSession && props.mainSession.session_id === props.starredSessionId,
 )
 
-/** Cumulative focus minutes across all sessions in this project group. */
+// ── Cumulative focus minutes ────────────────────────
 const projectTotalMinutes = computed(() => {
   if (!props.group) return 0
   return props.group.sessions.reduce((sum, s) => sum + (s.today_minutes ?? 0), 0)
