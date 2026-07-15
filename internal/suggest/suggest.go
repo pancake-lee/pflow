@@ -280,11 +280,11 @@ func Generate(input Input) []Suggestion {
 	// S12: 🔴 multiple waiting sessions
 	out = appendIf(out, checkMultipleWaiting(waitingSessions, primary, secondary, input.Now))
 
-	// S3: 🟡 primary idle > 30 min (no waiting)
-	out = appendIf(out, checkPrimaryIdle(primary, projMap, input.Now, 30*time.Minute, waitingSessions, "🟡", "scenario_003"))
+	// S3: 🟡 primary idle 30–60 min (no waiting)
+	out = appendIf(out, checkPrimaryIdle(primary, projMap, input.Now, 30*time.Minute, 60*time.Minute, waitingSessions, "🟡", "scenario_003"))
 
 	// S4: 🔶 primary idle > 60 min
-	out = appendIf(out, checkPrimaryIdle(primary, projMap, input.Now, 60*time.Minute, waitingSessions, "🔶", "scenario_004"))
+	out = appendIf(out, checkPrimaryIdle(primary, projMap, input.Now, 60*time.Minute, 0, waitingSessions, "🔶", "scenario_004"))
 
 	// S5: 🔵 secondary waiting but primary active
 	out = appendIf(out, checkSecondaryWaitingPrimaryActive(waitingSessions, secondary, primary, currentProject, input.Now))
@@ -307,8 +307,8 @@ func Generate(input Input) []Suggestion {
 	// S9: ✅ multiple busy (positive)
 	out = appendIf(out, checkMultipleBusy(busySessions, primary, secondary))
 
-	// S15: 🎉 primary today ≥ 20 msgs (~60 min) + all good
-	out = appendIf(out, checkTodayEfficient(primary, projMap, waitingSessions, thresholdEfficientMinutes))
+	// S15: 🎉 primary today 60–90 min + all good
+	out = appendIf(out, checkTodayEfficient(primary, projMap, waitingSessions, thresholdEfficientMinutes, thresholdOver4hMinutes))
 
 	// S20: 🏆 primary today ≥ 30 msgs (~90 min)
 	out = appendIf(out, checkPrimaryOver4h(primary, projMap, thresholdOver4hMinutes))
@@ -338,7 +338,10 @@ func Generate(input Input) []Suggestion {
 		return out[i].Priority < out[j].Priority
 	})
 
-	return out
+	// Deduplicate by text body (strip icon prefix) as a safety net.
+	// Same text body with different icons should only appear once,
+	// keeping the first one (which is the highest priority after sort).
+	return deduplicate(out)
 }
 
 // ── Scenario check functions ──────────────────────────────────────────
@@ -419,12 +422,18 @@ func checkMultipleWaiting(waiting []SessionInfo, _ *ProjectSummary, _ *ProjectSu
 }
 
 // S3/S4: Primary idle > threshold (no waiting sessions on primary).
-func checkPrimaryIdle(primary *ProjectSummary, projMap map[string]ProjectSummary, _ time.Time, threshold time.Duration, waiting []SessionInfo, icon string, scenarioID string) *Suggestion {
+// upperThreshold, if > 0, suppresses this scenario when idle reaches the
+// higher threshold — used to keep escalation pairs (S3→S4) mutually exclusive.
+func checkPrimaryIdle(primary *ProjectSummary, projMap map[string]ProjectSummary, _ time.Time, threshold time.Duration, upperThreshold time.Duration, waiting []SessionInfo, icon string, scenarioID string) *Suggestion {
 	if primary == nil {
 		return nil
 	}
 	p, ok := projMap[primary.Path]
 	if !ok || p.IdleMinutes < threshold.Minutes() {
+		return nil
+	}
+	// Don't fire if a higher-severity escalation covers this range
+	if upperThreshold > 0 && p.IdleMinutes >= upperThreshold.Minutes() {
 		return nil
 	}
 	// Don't fire if primary has waiting sessions (S1/S2 handle that)
@@ -612,13 +621,19 @@ func checkMultipleBusy(busy []SessionInfo, primary *ProjectSummary, secondary *P
 	}
 }
 
-// S15: Primary today > 2h + all good (positive celebration).
-func checkTodayEfficient(primary *ProjectSummary, projMap map[string]ProjectSummary, waiting []SessionInfo, thresholdMinutes float64) *Suggestion {
+// S15: Primary today ≥ threshold + all good (positive celebration).
+// upperThresholdMinutes, if > 0, suppresses this scenario when today's
+// minutes reach the higher threshold — keeps S15/S20 mutually exclusive.
+func checkTodayEfficient(primary *ProjectSummary, projMap map[string]ProjectSummary, waiting []SessionInfo, thresholdMinutes float64, upperThresholdMinutes float64) *Suggestion {
 	if primary == nil || len(waiting) > 0 {
 		return nil
 	}
 	p, ok := projMap[primary.Path]
 	if !ok || p.TodayMinutes < thresholdMinutes {
+		return nil
+	}
+	// Don't fire if a higher-severity escalation (S20) covers this range
+	if upperThresholdMinutes > 0 && p.TodayMinutes >= upperThresholdMinutes {
 		return nil
 	}
 	hours := p.TodayMinutes / 60
@@ -860,6 +875,38 @@ func formatMinutes(minutes int) string {
 		return fmt.Sprintf("%dh", h)
 	}
 	return fmt.Sprintf("%dh%dm", h, m)
+}
+
+// deduplicate removes suggestions whose text body (icon prefix stripped) is
+// identical to a higher-priority suggestion already in the list. The input
+// must already be sorted by priority (ascending). Different projects
+// naturally produce different text bodies because the project name is
+// embedded in the text.
+func deduplicate(in []Suggestion) []Suggestion {
+	if len(in) <= 1 {
+		return in
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]Suggestion, 0, len(in))
+	for _, s := range in {
+		body := textBody(s.Text)
+		if seen[body] {
+			continue
+		}
+		seen[body] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// textBody returns the suggestion text with the leading icon+space prefix
+// stripped. All suggestion texts follow the pattern "emoji body...".
+func textBody(text string) string {
+	runes := []rune(text)
+	if len(runes) >= 2 && runes[1] == ' ' {
+		return string(runes[2:])
+	}
+	return text
 }
 
 // ComputeProjectSummaries builds ProjectSummary from sessions and project roots.
