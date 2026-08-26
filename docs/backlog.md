@@ -50,7 +50,7 @@
 
 ### 27-35. 终端会话映射方案（tmux）
 
-详见 [`docs/cycles/07-terminal-session-mapping.md`](./cycles/07-terminal-session-mapping.md)。核心改动：
+详见当前设计文档 [`docs/design/07-terminal-session-mapping.md`](./design/07-terminal-session-mapping.md)。核心改动：
 
 - **Claude**：从 statusline 截屏方案 → `claude -n <name>` + 扫描 `~/.claude/sessions/` 目录 JSON 文件，通过 `name` 字段匹配（保留旧方案为代码开关）
 - **Hermes**：从 `hermes sessions export` → `tmux send-keys /status` + `capture-pane` 截屏解析 Session ID

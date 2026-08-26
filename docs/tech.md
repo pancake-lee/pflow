@@ -201,6 +201,34 @@ Session 状态（waiting/busy/idle）
 
 **MVP 简化**：初始版本用 session 状态变化作为用户活跃的代理指标（项目下有 busy session → 用户在该项目活跃），后续可接入更精确的操作监听（终端输入等）。
 
+### 2.5 运行约束与数据路径
+
+开发和验证时遵守以下运行约束：
+
+- 使用 `make build` 构建，先生成 `web/dist/`，再由 `embed.go` 嵌入 Go 二进制；不要直接使用 `go build`。
+- 用户数据主要位于 `~/.pflow/`；Claude 数据位于 `~/.claude/`；Hermes 数据位于 `~/.hermes/`。测试不得污染真实数据。
+- JSON 配置和映射文件必须采用临时文件写入后 rename 的原子化方式。
+- Session 发现失败应保留可诊断错误；tmux、Claude 或 Hermes 不可用时，手动验收需明确记录前置条件。
+
+常用数据文件：
+
+| 路径 | 内容 | 主要管理模块 |
+| --- | --- | --- |
+| `~/.pflow/project_roots.json` | 项目根和 slot 映射 | `internal/project/` |
+| `~/.pflow/mappings.json` | tmux 与 Agent session 映射 | `internal/session/` |
+| `~/.pflow/focus.log` | tmux 焦点事件 | `internal/timetrack/` |
+| `~/.claude/sessions/` | Claude 目录扫描元数据 | `internal/session/` |
+| `~/.claude/projects/` | Claude transcript | `internal/claude/` |
+| `~/.hermes/sessions/` | Hermes 活跃 session 和请求快照 | `internal/hermes/` |
+
+### 2.6 当前架构决策速查
+
+- Dashboard 是信息聚合中心，Web 终端是辅助入口，不替代用户已有的终端和编辑器。
+- Claude 默认优先使用 JSON 目录扫描关联 session，旧 statusline 捕获模式保留兼容性。
+- 活跃时间使用 tmux focus 日志、session 消息数、wall-clock 的三级降级链。
+- 提醒分数和军情哨以状态、等待时间、专注时间和项目策略作为主要证据，保持结果可解释。
+- 提醒分数当前采用无状态计算；桌面通知、主动推送、偏好学习和换肤仍由 backlog 管理。
+
 ## 3. 实施阶段
 
 ### 3.1 阶段一：可行性验证 ✅ 已完成

@@ -36,4 +36,4 @@
 | Pending  | 21   | 智能分析   | 统帅偏好学习                       | 推送频率自适应，根据用户行为学习偏好                                                                     |
 | Pending  | 23   | 扩展能力   | 双层换肤系统                       | 内容层 + 遮罩层独立换肤，支持社区皮肤                                                                   |
 
-> 💡 建议：下一周期前先完成代码质量整理（见 `docs/code-review.md`）。
+> 💡 历史代码质量审查已归档至 [`docs/archive/reviews/2026-06-27-code-review.md`](./docs/archive/reviews/2026-06-27-code-review.md)。下一周期应按 Harness 评估流程重新验证，而不是直接沿用旧结论。

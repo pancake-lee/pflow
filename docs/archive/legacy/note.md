@@ -1,7 +1,7 @@
 # note
 
 > 参考笔记：记录不随每次上下文加载、但偶尔需要翻阅的规则、知识、历史决定等。
-> 详细的开发日志和实现记录已归档到 [`docs/cycles/`](./cycles/)。
+> 详细的开发日志和实现记录已归档到 [`../cycles/`](../cycles/)。
 
 ## 核心设计理念
 
@@ -9,13 +9,13 @@
 
 pflow 是信息层，不替代用户已有的工作软件（终端、VSCode 等）。用户看 Dashboard 获取信息后，自己切换到终端/VSCode 操作。"亲赴前线"是用户的自然行为——不需要 pflow 提供按钮或内嵌终端来完成。
 
-详见 [`prd.md §3.3`](./prd.md)。
+详见 [`prd.md §3.3`](../../prd.md)。
 
 ### "路径即项目"
 
 不引入独立的项目 ID/名称实体。session 元数据中已有的 working directory 就是天然的归属标识。用户只需标记"哪些路径是项目根"，子目录 session 自动按最长前缀匹配归入。目录名即"项目名"。
 
-详见 [`prd.md §4.1`](./prd.md), [`tech.md §2.3`](./tech.md)。
+详见 [`prd.md §4.1`](../../prd.md), [`tech.md §2.3`](../../tech.md)。
 
 ### 信息聚合优于功能堆叠
 
@@ -92,7 +92,7 @@ busy 状态时清除 Last Resp（避免展示不匹配的 req/resp 对）。文�
 
 ### 提醒分数 MVP 简化
 
-阶段四 MVP 中，用户活跃追踪使用 session 状态作为代理指标（非鼠标/键盘监听）。每次 Dashboard API 请求时无状态计算，无需持久化。遮罩层预留 CSS 变量接口但不实现完整换肤。详见 [`cycles/05-phase4-kickoff.md`](./cycles/05-phase4-kickoff.md)。
+阶段四 MVP 中，用户活跃追踪使用 session 状态作为代理指标（非鼠标/键盘监听）。每次 Dashboard API 请求时无状态计算，无需持久化。遮罩层预留 CSS 变量接口但不实现完整换肤。详见 [`cycles/05-phase4-kickoff.md`](../cycles/05-phase4-kickoff.md)。
 
 ## Claude 会话扫描模式
 
@@ -139,11 +139,11 @@ busy 状态时清除 Last Resp（避免展示不匹配的 req/resp 对）。文�
 
 | 文件 | 周期 | 内容 |
 |------|------|------|
-| [`cycles/01-phase1-phase2-foundation.md`](./cycles/01-phase1-phase2-foundation.md) | 2026-06-11 | 可行性验证 + Web Dashboard + CLI + Subprocess |
-| [`cycles/02-hermes-integration.md`](./cycles/02-hermes-integration.md) | 2026-06-11 | Hermes Agent 集成调研 + 元数据字段参考 |
-| [`cycles/03-tmux-ttyd.md`](./cycles/03-tmux-ttyd.md) | 2026-06-12 | tmux + ttyd Web 终端集成 |
-| [`cycles/04-phase3-design-and-ui.md`](./cycles/04-phase3-design-and-ui.md) | 2026-06-13~14 | 阶段三设计决策 + Dashboard UI 重构 |
-| [`cycles/05-phase4-kickoff.md`](./cycles/05-phase4-kickoff.md) | 2026-06-15 | 阶段四启动：提醒分数 + 遮罩层 MVP 规划 |
-| [`cycles/06-phase4-reminder-attention-mask.md`](./cycles/06-phase4-reminder-attention-mask.md) | 2026-06-16 | 阶段四实现：提醒分数引擎 + 注意力遮罩层 |
-| [`cycles/07-terminal-session-mapping.md`](./cycles/07-terminal-session-mapping.md) | 2026-06-17 | 终端会话映射方案重构 |
-| [`cycles/08-knowledge-anchor.md`](./cycles/08-knowledge-anchor.md) | 2026-06-25 | 知识锚点 + 军情哨提示系统 |
+| [`cycles/01-phase1-phase2-foundation.md`](../cycles/01-phase1-phase2-foundation.md) | 2026-06-11 | 可行性验证 + Web Dashboard + CLI + Subprocess |
+| [`cycles/02-hermes-integration.md`](../cycles/02-hermes-integration.md) | 2026-06-11 | Hermes Agent 集成调研 + 元数据字段参考 |
+| [`cycles/03-tmux-ttyd.md`](../cycles/03-tmux-ttyd.md) | 2026-06-12 | tmux + ttyd Web 终端集成 |
+| [`cycles/04-phase3-design-and-ui.md`](../cycles/04-phase3-design-and-ui.md) | 2026-06-13~14 | 阶段三设计决策 + Dashboard UI 重构 |
+| [`cycles/05-phase4-kickoff.md`](../cycles/05-phase4-kickoff.md) | 2026-06-15 | 阶段四启动：提醒分数 + 遮罩层 MVP 规划 |
+| [`cycles/06-phase4-reminder-attention-mask.md`](../cycles/06-phase4-reminder-attention-mask.md) | 2026-06-16 | 阶段四实现：提醒分数引擎 + 注意力遮罩层 |
+| [`design/07-terminal-session-mapping.md`](../../design/07-terminal-session-mapping.md) | 2026-06-17 | 终端会话映射方案重构 |
+| [`cycles/08-knowledge-anchor.md`](../cycles/08-knowledge-anchor.md) | 2026-06-25 | 知识锚点 + 军情哨提示系统 |

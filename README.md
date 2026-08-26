@@ -78,7 +78,8 @@ pflow suggest
 | [`docs/prd.md`](./docs/prd.md) | 产品需求文档 |
 | [`docs/tech.md`](./docs/tech.md) | 技术设计方案 |
 | [`docs/backlog.md`](./docs/backlog.md) | 全部需求池 |
-| [`docs/changelog.md`](./docs/changelog.md) | 版本历史 |
+| [`docs/harness.md`](./docs/harness.md) | AI 辅助开发工作流与文档入口 |
+| [`docs/archive/changelog.md`](./docs/archive/changelog.md) | 版本历史（归档） |
 | [`docs/screenshot.png`](./docs/screenshot.png) | 最新截图 |
 
 ## License

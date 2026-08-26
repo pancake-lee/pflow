@@ -1,5 +1,7 @@
 # CLAUDE.md — pflow AI 工作规则
 
+> 本文件与 [`AGENTS.md`](./AGENTS.md) 内容必须同步。完整 Harness 入口见 [`docs/harness.md`](./docs/harness.md)。
+
 ## 项目概况
 
 pflow 是一个 Go 项目，目标是在 cc-connect 的"与 Claude Code CLI 通信"能力之上，构建多 Agent 会话的注意力管理与调度工具。详见 [`README.md`](./README.md)。
@@ -39,21 +41,18 @@ make run          # 构建并启动完整服务
 
 ### 文档原则
 
-- `README.md` 面向人，写项目是什么、怎么用
-- `CLAUDE.md` 面向 AI，写怎么开发、规则和禁忌
-- `docs/prd.md` 面向产品功能，不写技术实现
-- `docs/tech.md` 面向技术架构，不写代码级细节
-- `docs/backlog.md` 维护完整需求池
-- `docs/note.md` 参考笔记——不随上下文加载，偶尔需要翻阅的规则/知识/历史决策。如设计理念原因、已知坑点、关键数据路径速查
-- `docs/cycles/` 按功能/周期归档的开发日志——note.md 中过长的实现记录应迁移到此
-- `docs/design/` 重要功能的设计文档，按编号命名（`02-*` 当前开发、`99-*` 远期预留）
-- 代码是实现的唯一真相源，文档只描述架构层面的设计
+- `README.md` 面向用户；`CLAUDE.md` / `AGENTS.md` 面向 AI。
+- `docs/prd.md` 写产品承诺，`docs/tech.md` 写架构，`docs/design/` 写当前功能方案，`docs/backlog.md` 写可执行方案与验收。
+- 当前规则和项目速查见 `docs/handbook/`；历史周期、审查、版本记录见 `docs/archive/`。
+- 代码是实现的唯一真相源；不要在文档中复制已经落地的函数、字段和 API 细节。
 
-### 工作流程
+### Harness 工作流程
 
-1. 每次对话开始时读 [`todo.md`](./todo.md) 了解当前任务
-2. 完成任务后更新 `todo.md` 的进度
-3. 开发过程中值得记录的技术细节写入 `docs/cycles/` 对应的周期文件（按功能/日期命名）
-4. 发现新的需求/想法补充到 [`docs/backlog.md`](./docs/backlog.md)
-5. 需要长期参考的规则/知识/决策更新到 [`docs/note.md`](./docs/note.md)
-6. 周期结束后将 todo.md 完成项回写到 backlog.md，清理 todo.md 开始新周期
+完整触发词和交接协议见 [`docs/handbook/work-modes.md`](./docs/handbook/work-modes.md)。核心约束如下：
+
+1. 每次对话开始读 [`todo.md`](./todo.md)；按范围补读 backlog、PRD、tech、design 和 handbook。
+2. `评估` 只收集证据、评分和问题现象，不修改代码、不提出修复方案。
+3. `规划` 将背景、技术方案、任务拆分和验收写进 `docs/backlog.md`；中大型任务再建 design 文档。
+4. `实现` 按已规划条目改代码，并运行相关测试；完成后同步 backlog、todo 和当前文档。
+5. 新需求进入 backlog；已完成的周期性材料进入 `docs/archive/`，当前有效结论迁移到 handbook、tech 或 design。
+6. 修改本文件时必须同步修改 `AGENTS.md`。

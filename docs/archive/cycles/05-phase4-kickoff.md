@@ -24,9 +24,9 @@
 ## 关键设计决策
 
 - **Activity tracking 使用 session 状态（busy/running）作为用户活跃的代理指标**，而非监听鼠标/键盘——MVP 简化。后续可升级为真实操作监听。
-- **遮罩层使用 `::before` + CSS 变量预留皮肤接口**——不阻塞后续双层换肤系统（[`99-dual_layer_skinning_system.md`](../design/99-dual_layer_skinning_system.md)），但 MVP 只做半透明黑。
+- **遮罩层使用 `::before` + CSS 变量预留皮肤接口**——不阻塞后续双层换肤系统（[`99-dual_layer_skinning_system.md`](../../design/99-dual_layer_skinning_system.md)），但 MVP 只做半透明黑。
 - **提醒分数在每次 Dashboard API 请求时重新计算**——无状态设计，无需持久化。后续引入 WebSocket 推送时再考虑增量计算。
 
 ## 开发计划
 
-详见 [`todo.md`](../../todo.md)。
+详见 [`todo.md`](../../../todo.md)。

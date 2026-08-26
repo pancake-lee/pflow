@@ -1,7 +1,7 @@
 # 知识锚点（Knowledge Anchor）开发记录
 
 **日期**: 2026-06-25  
-**关联设计**: [`docs/design/10-tips.md`](../design/10-tips.md)  
+**关联设计**: [`docs/design/10-tips.md`](../../design/10-tips.md)  
 **关联需求**: Backlog #36
 
 ## 实现概述

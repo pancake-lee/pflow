@@ -1,6 +1,6 @@
 # TODO
 
-> 当前周期的开发任务，从 [`docs/backlog.md`](./docs/backlog.md) 中挑选。
+> 当前周期的开发任务，从 [`docs/backlog.md`](../../backlog.md) 中挑选。
 
 
 | 状态    | 序号 | 类别       | 任务                               | 简述                                                                                                     |

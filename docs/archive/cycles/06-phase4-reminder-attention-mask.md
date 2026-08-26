@@ -23,9 +23,9 @@
 
 ### 设计文档
 
-- [`docs/design/02-reminder_score_algorithm.md`](../design/02-reminder_score_algorithm.md) — 算法设计
-- [`docs/design/03-attention_mask.md`](../design/03-attention_mask.md) — 遮罩层技术方案
-- [`docs/design/04-test-cases.md`](../design/04-test-cases.md) — 测试用例
+- [`docs/design/02-reminder_score_algorithm.md`](../../design/02-reminder_score_algorithm.md) — 算法设计
+- [`docs/design/03-attention_mask.md`](../../design/03-attention_mask.md) — 遮罩层技术方案
+- [`docs/design/04-test-cases.md`](../../design/04-test-cases.md) — 测试用例
 
 ## 关键决策回顾
 

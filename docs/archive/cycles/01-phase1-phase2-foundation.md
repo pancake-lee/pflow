@@ -4,7 +4,7 @@
 
 ## 阶段切换
 
-- 阶段一已完成，P1/P2 未完成项回写到 [`backlog.md`](../backlog.md)
+- 阶段一已完成，P1/P2 未完成项回写到 [`backlog.md`](../../backlog.md)
 - Web Dashboard 从 P3（远期）提前到阶段二，优先于 TUI 方案
 - 前端选型确认：**Vue 3 + Naive UI + TypeScript + Vite**
 - 理由：模板语法适合 Dashboard，Naive UI DataTable/Tag/Card 开箱即用，暗色主题一流
