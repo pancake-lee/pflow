@@ -18,6 +18,7 @@ import (
 	"github.com/pancake-lee/pflow"
 	"github.com/pancake-lee/pflow/internal/api"
 	"github.com/pancake-lee/pflow/internal/claude"
+	"github.com/pancake-lee/pflow/internal/codex"
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
 	"github.com/pancake-lee/pflow/internal/project"
@@ -51,6 +52,8 @@ func main() {
 		runClaudeCmd(os.Args[2:])
 	case "hermes":
 		runHermesCmd(os.Args[2:])
+	case "codex":
+		runCodexCmd(os.Args[2:])
 	case "session":
 		runSessionCmd(os.Args[2:])
 	case "suggest":
@@ -95,6 +98,7 @@ Commands:
   serve    Start HTTP Dashboard API server
   claude   Start a managed Claude Code session in tmux
   hermes   Start a managed Hermes Agent session in tmux
+  codex    Start a managed Codex CLI session in tmux
   session  Manage tmux session mappings (list, destroy)
   suggest  Show analysis suggestions based on session state
   help     Show this help
@@ -130,11 +134,14 @@ func runStatus(window time.Duration, maxInactive int, source string) {
 	claudeResult, claudeErr := claude.Scan(opts)
 	// Scan Hermes sessions
 	hermesResult, hermesErr := hermes.Scan(opts)
+	// Scan Codex CLI sessions
+	codexResult, codexErr := codex.Scan(opts)
 
 	// Handle total failure
-	if claudeErr != nil && hermesErr != nil {
+	if claudeErr != nil && hermesErr != nil && codexErr != nil {
 		fmt.Fprintf(os.Stderr, "pflow: claude: %v\n", claudeErr)
 		fmt.Fprintf(os.Stderr, "pflow: hermes: %v\n", hermesErr)
+		fmt.Fprintf(os.Stderr, "pflow: codex: %v\n", codexErr)
 		os.Exit(1)
 	}
 
@@ -260,6 +267,23 @@ func runStatus(window time.Duration, maxInactive int, source string) {
 		fmt.Println("── Hermes Agent: no recent sessions ─────────────────────────────────")
 	}
 
+	if codexErr == nil && len(codexResult.Sessions) > 0 {
+		fmt.Println("── Codex CLI ────────────────────────────────────────────────────────")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "SESSION ID\tPROJECT\tSTATUS\tNAME\tLAST ACTIVE\tSUM ACTIVE\tLAST REQ\tLAST RESP")
+		for _, s := range codexResult.Sessions {
+			sumActive := timetrack.SessionTodayMinutes(s.MessageCount, s.FirstActive, s.LastActive, todayStart, now)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", shortID(s.SessionID, 8), s.Project, s.StatusLabel(), escapeNewlines(truncate(s.Name, 15)), formatSince(s.LastActive), formatMinutes(sumActive), escapeNewlines(truncate(s.LastReq, 15)), escapeNewlines(truncate(s.LastResp, 15)))
+		}
+		w.Flush()
+		totalSessions += len(codexResult.Sessions)
+		fmt.Println()
+	} else if codexErr != nil {
+		fmt.Printf("── Codex CLI: %v ───────────────────────────────────\n\n", codexErr)
+	} else {
+		fmt.Println("── Codex CLI: no recent sessions ───────────────────────────────────")
+	}
+
 	// Footer
 	fmt.Println(strings.Repeat("─", 70))
 	fmt.Printf("%d sessions\n", totalSessions)
@@ -295,9 +319,16 @@ func runProbeCmd(args []string) {
 
 	// Check Hermes
 	hermesResult, _ := hermes.Scan(opts)
+	codexResult, _ := codex.Scan(opts)
 	for _, s := range hermesResult.Sessions {
 		if s.SessionID == sessionID || strings.HasPrefix(s.SessionID, sessionID) {
 			printHermesProbe(s, hermesResult.GatewayAlive)
+			found = true
+		}
+	}
+	for _, s := range codexResult.Sessions {
+		if s.SessionID == sessionID || strings.HasPrefix(s.SessionID, sessionID) {
+			printCodexProbe(s)
 			found = true
 		}
 	}
@@ -306,6 +337,13 @@ func runProbeCmd(args []string) {
 		fmt.Printf("Session %q not found.\n", sessionID)
 		os.Exit(1)
 	}
+}
+
+func printCodexProbe(s codex.SessionSummary) {
+	fmt.Println("── Codex CLI Session ────────────────────────────────────────────────")
+	fmt.Printf("  Session ID:  %s\n  Project:     %s\n  Status:      %s\n", s.SessionID, s.Project, s.StatusLabel())
+	fmt.Printf("  Messages:    %d\n  First:       %s\n  Last:        %s (%s)\n", s.MessageCount, formatTime(s.FirstActive), formatTime(s.LastActive), formatSince(s.LastActive))
+	fmt.Printf("  Last Req:    %s\n  Last Resp:   %s\n\n", s.LastReq, s.LastResp)
 }
 
 func printClaudeProbe(s claude.SessionSummary) {
@@ -487,6 +525,42 @@ func runClaudeCmd(args []string) {
 }
 
 // ── hermes ────────────────────────────────────────────────────────────
+
+func runCodexCmd(args []string) {
+	flagSet := flag.NewFlagSet("codex", flag.ExitOnError)
+	name := flagSet.String("name", "", "Session name (default: codex-<dirbasename>)")
+	dir := flagSet.String("dir", "", "Working directory (default: current directory)")
+	noAttach := flagSet.Bool("no-attach", false, "Don't attach to the tmux session after creation")
+	flagSet.Parse(args)
+	workDir := *dir
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pflow codex: cannot get current directory: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	codexName := *name
+	if codexName == "" {
+		codexName = filepath.Base(workDir) + "-codex"
+	}
+	mgr := session.NewManager(0, "127.0.0.1")
+	sess, err := mgr.StartCodexSession(codexName, workDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pflow codex: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("=== Codex Session Started ===\n  Tmux session:  %s\n  Work dir:      %s\n\n", sess.Name, sess.WorkDir)
+	if !*noAttach {
+		fmt.Printf("Attaching to tmux session %s...\n(Press Ctrl+B then D to detach without stopping Codex)\n", sess.Name)
+		cmd := exec.Command("tmux", "attach", "-t", sess.Name)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "pflow codex: tmux attach failed: %v\n", err)
+		}
+	}
+}
 
 func runHermesCmd(args []string) {
 	flagSet := flag.NewFlagSet("hermes", flag.ExitOnError)
@@ -760,6 +834,7 @@ func runSuggestCmd(args []string) {
 	// Scan both agent types
 	claudeResult, _ := claude.Scan(opts)
 	hermesResult, _ := hermes.Scan(opts)
+	codexResult, _ := codex.Scan(opts)
 
 	// Load project roots for priority matching
 	projMgr := project.NewManager()
@@ -813,6 +888,16 @@ func runSuggestCmd(args []string) {
 			if matched != nil {
 				si.MatchedRoot = matched.Path
 				si.RootPriority = string(matched.Priority)
+			}
+			sessions = append(sessions, si)
+		}
+	}
+	if codexResult != nil {
+		for _, s := range codexResult.Sessions {
+			matched := project.MatchRootFromList(rootsFile.Roots, s.Project)
+			si := suggest.SessionInfo{AgentType: "codex", AgentName: s.Name, ProjectPath: s.Project, Status: s.Status, LastActive: s.LastActive, FirstActive: s.FirstActive, IsRunning: s.Status == "busy", LastReq: s.LastReq, MessageCount: s.MessageCount}
+			if matched != nil {
+				si.MatchedRoot, si.RootPriority = matched.Path, string(matched.Priority)
 			}
 			sessions = append(sessions, si)
 		}

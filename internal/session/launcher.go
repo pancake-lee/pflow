@@ -18,7 +18,7 @@ type launchConfig struct {
 	name             string // tmux session name (will be sanitized; may be empty for auto-derivation)
 	agentName        string // stable agent display name (Claude -n name, Hermes session name)
 	workDir          string
-	agentType        string // "claude" or "hermes"
+	agentType        string // "claude", "hermes", or "codex"
 	command          string // full command to send to tmux (e.g., "claude -n foo --permission-mode acceptEdits")
 	preLaunch        func() error
 	captureSessionID func(tmuxName string, maxWait time.Duration) (string, error)
@@ -138,19 +138,19 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 				plogger.Infof("launch: async captured sessionID=%s for tmux=%s agent=%s (took %.1fs)",
 					sessionID, tmuxName, agentType, elapsed.Seconds())
 				if mm, err := newMappingManager(); err == nil {
-						mm.addMapping(Mapping{
-							TmuxName:       tmuxName,
-							WorkDir:        absWorkDir,
-							AgentType:      agentType,
-							AgentName:      displayName,
-							AgentSessionID: sessionID,
-							ClaudePrefix:   claudePrefixFromSessionID(sessionID, agentType),
-							Status:         "active",
-							CreatedAt:      time.Now(),
-							LastUpdated:    time.Now(),
-						})
-					}
-				} else {
+					mm.addMapping(Mapping{
+						TmuxName:       tmuxName,
+						WorkDir:        absWorkDir,
+						AgentType:      agentType,
+						AgentName:      displayName,
+						AgentSessionID: sessionID,
+						ClaudePrefix:   claudePrefixFromSessionID(sessionID, agentType),
+						Status:         "active",
+						CreatedAt:      time.Now(),
+						LastUpdated:    time.Now(),
+					})
+				}
+			} else {
 				plogger.Warnf("launch: async capture returned empty for tmux=%s agent=%s after %.1fs",
 					tmuxName, agentType, elapsed.Seconds())
 			}

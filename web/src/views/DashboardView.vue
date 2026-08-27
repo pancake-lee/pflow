@@ -244,6 +244,7 @@ const agentFilterOptions = [
   { label: 'All Agents', value: 'all' },
   { label: 'Claude Code', value: 'claude' },
   { label: 'Hermes', value: 'hermes' },
+  { label: 'Codex', value: 'codex' },
 ]
 
 const refreshOptions = [
@@ -318,8 +319,8 @@ async function openTerminalFromTable(row: DashboardEntry) {
     await startTerminal()
     return
   }
-  if (row.agent_type === 'claude' && row.session_id) {
-    await lookupTerminal(row.session_id)
+  if ((row.agent_type === 'claude' || row.agent_type === 'codex') && row.session_id) {
+    await lookupTerminal(row.session_id, row.agent_type)
     if (terminalFound.value) {
       await startTerminal()
     }
@@ -611,8 +612,8 @@ function openDetail(row: DashboardEntry) {
   }
   selectedSession.value = row
   showDetail.value = true
-  if (row.agent_type === 'claude' && row.session_id) {
-    lookupTerminal(row.session_id)
+  if ((row.agent_type === 'claude' || row.agent_type === 'codex') && row.session_id) {
+    lookupTerminal(row.session_id, row.agent_type)
   } else {
     terminalLookupDone.value = true
     terminalFound.value = false
@@ -625,14 +626,14 @@ function handleOpenTerminalFromCard(row: DashboardEntry) {
 
 // ── Terminal logic ──────────────────────────────────────────────
 
-async function lookupTerminal(sessionId: string) {
+async function lookupTerminal(sessionId: string, agentType = 'claude') {
   terminalLookupDone.value = false
   terminalFound.value = false
   terminalVerified.value = false
   terminalLookupHint.value = null
   terminalLookupWarning.value = null
   try {
-    const resp = await fetch(`/api/v1/terminal/lookup?session_id=${encodeURIComponent(sessionId)}`)
+    const resp = await fetch(`/api/v1/terminal/lookup?session_id=${encodeURIComponent(sessionId)}&agent_type=${encodeURIComponent(agentType)}`)
     if (!resp.ok) {
       terminalLookupHint.value = `Lookup failed (HTTP ${resp.status})`
       terminalLookupDone.value = true
@@ -647,7 +648,7 @@ async function lookupTerminal(sessionId: string) {
       if (data2.warning) terminalLookupWarning.value = data2.warning
       if (data2.ttyd_url) terminalUrl.value = data2.ttyd_url
     } else {
-      terminalLookupHint.value = data2.hint ?? 'No tmux session found for this Claude session'
+      terminalLookupHint.value = data2.hint ?? 'No tmux session found for this agent session'
     }
   } catch (e) {
     terminalLookupHint.value = e instanceof Error ? e.message : 'Lookup error'
@@ -860,7 +861,7 @@ const groupColumns: DataTableColumns<DashboardEntry> = [
     key: 'terminal',
     width: 50,
     render(row) {
-      if (row.agent_type !== 'claude' || !row.has_terminal) return null
+      if ((row.agent_type !== 'claude' && row.agent_type !== 'codex') || !row.has_terminal) return null
       return h(
         NButton,
         {
@@ -1164,7 +1165,7 @@ function rowProps(row: DashboardEntry) {
               <NIcon :size="16">
                 <component :is="agentIcon(selectedSession.agent_type)" />
               </NIcon>
-              <span>{{ selectedSession.agent_type === 'claude' ? 'Claude Code' : 'Hermes' }}</span>
+              <span>{{ selectedSession.agent_type === 'claude' ? 'Claude Code' : selectedSession.agent_type === 'codex' ? 'Codex' : 'Hermes' }}</span>
             </NSpace>
           </NDescriptionsItem>
           <NDescriptionsItem label="Project">
@@ -1203,7 +1204,7 @@ function rowProps(row: DashboardEntry) {
         </NDescriptions>
 
         <!-- Terminal Section -->
-        <div class="terminal-section" v-if="selectedSession?.agent_type === 'claude'">
+        <div class="terminal-section" v-if="selectedSession?.agent_type === 'claude' || selectedSession?.agent_type === 'codex'">
           <NSpace>
             <NButton
               size="small"
@@ -1224,7 +1225,7 @@ function rowProps(row: DashboardEntry) {
           <div v-if="terminalLookupDone && !terminalFound && !terminalError" class="terminal-placeholder">
             <p>{{ terminalLookupHint || 'No tmux session found' }}</p>
             <p class="terminal-placeholder-hint">
-              Start with: <code>pflow claude</code> in the project directory.
+              Start with: <code>pflow {{ selectedSession.agent_type }}</code> in the project directory.
             </p>
           </div>
         </div>

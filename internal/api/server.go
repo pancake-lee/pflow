@@ -16,6 +16,7 @@ import (
 
 	"github.com/pancake-lee/pflow/internal/attention"
 	"github.com/pancake-lee/pflow/internal/claude"
+	"github.com/pancake-lee/pflow/internal/codex"
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
 	"github.com/pancake-lee/pflow/internal/project"
@@ -29,7 +30,7 @@ import (
 // DashboardEntry is a unified session entry for the Dashboard API response.
 type DashboardEntry struct {
 	SessionID        string    `json:"session_id"`
-	AgentType        string    `json:"agent_type"` // "claude" or "hermes"
+	AgentType        string    `json:"agent_type"` // "claude", "hermes", or "codex"
 	Project          string    `json:"project"`
 	Status           string    `json:"status"`
 	IsActive         bool      `json:"is_active"`
@@ -37,12 +38,12 @@ type DashboardEntry struct {
 	Name             string    `json:"name"`
 	FirstActive      time.Time `json:"first_active"`
 	LastActive       time.Time `json:"last_active"`
-	LastReq          string    `json:"last_req"`          // truncated ~15 chars for table
-	LastResp         string    `json:"last_resp"`         // truncated ~15 chars for table
-	LastReqFull      string    `json:"last_req_full"`     // full text for detail view
-	LastRespFull     string    `json:"last_resp_full"`    // full text for detail view
-	Platform         string    `json:"platform,omitempty"`   // Hermes only
-	HasTerminal      bool      `json:"has_terminal"`         // true if a tmux mapping exists
+	LastReq          string    `json:"last_req"`                     // truncated ~15 chars for table
+	LastResp         string    `json:"last_resp"`                    // truncated ~15 chars for table
+	LastReqFull      string    `json:"last_req_full"`                // full text for detail view
+	LastRespFull     string    `json:"last_resp_full"`               // full text for detail view
+	Platform         string    `json:"platform,omitempty"`           // Hermes only
+	HasTerminal      bool      `json:"has_terminal"`                 // true if a tmux mapping exists
 	TerminalTmuxName string    `json:"terminal_tmux_name,omitempty"` // matched tmux session name
 	MatchedRoot      string    `json:"matched_root,omitempty"`       // matched project root path (empty = unmatched)
 	MessageCount     int       `json:"message_count"`                // number of messages today, used for time estimation
@@ -58,24 +59,24 @@ type ProjectRootJSON struct {
 
 // SuggestionJSON is the JSON representation of a suggest.Suggestion.
 type SuggestionJSON struct {
-	ScenarioID   string                   `json:"scenario_id"`
-	Icon         string                   `json:"icon"`
-	Text         string                   `json:"text"`
-	Priority     int                      `json:"priority"`
+	ScenarioID   string                    `json:"scenario_id"`
+	Icon         string                    `json:"icon"`
+	Text         string                    `json:"text"`
+	Priority     int                       `json:"priority"`
 	KnowledgeTip *suggest.KnowledgeTipJSON `json:"knowledge_tip,omitempty"`
 }
 
 // DashboardResponse is the JSON response for GET /api/v1/dashboard.
 type DashboardResponse struct {
-	Now            time.Time                          `json:"now"`
-	Window         string                             `json:"window"`
-	Slots          map[string]string                  `json:"slots,omitempty"` // slot → path mapping
-	ProjectRoots   []ProjectRootJSON                  `json:"project_roots"`
-	Sessions       []DashboardEntry                   `json:"sessions"`
+	Now            time.Time                           `json:"now"`
+	Window         string                              `json:"window"`
+	Slots          map[string]string                   `json:"slots,omitempty"` // slot → path mapping
+	ProjectRoots   []ProjectRootJSON                   `json:"project_roots"`
+	Sessions       []DashboardEntry                    `json:"sessions"`
 	ReminderScores map[string]attention.ReminderOutput `json:"reminder_scores"`
-	Suggestions    []SuggestionJSON                   `json:"suggestions"`
-	Focus          *attention.FocusSnapshot           `json:"focus,omitempty"`
-	Errors         []string                           `json:"errors,omitempty"`
+	Suggestions    []SuggestionJSON                    `json:"suggestions"`
+	Focus          *attention.FocusSnapshot            `json:"focus,omitempty"`
+	Errors         []string                            `json:"errors,omitempty"`
 }
 
 // Server is the pflow HTTP API server.
@@ -222,7 +223,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				IsActive:     s.IsActive(),
 				TrafficLight: s.TrafficLight(),
 				Name:         s.Name,
-					FirstActive:  s.FirstActive,
+				FirstActive:  s.FirstActive,
 				LastActive:   s.LastActive,
 				LastReq:      s.LastReq,
 				LastResp:     s.LastResp,
@@ -254,7 +255,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				IsActive:     s.IsActive(),
 				TrafficLight: s.TrafficLight(),
 				Name:         s.Name,
-					FirstActive:  s.FirstActive,
+				FirstActive:  s.FirstActive,
 				LastActive:   s.LastActive,
 				LastReq:      s.LastReq,
 				LastResp:     s.LastResp,
@@ -264,6 +265,26 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				Platform:     s.Platform,
 			}
 			// Match to project root
+			if rootsFile != nil {
+				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
+					entry.MatchedRoot = matched.Path
+				}
+			}
+			resp.Sessions = append(resp.Sessions, entry)
+		}
+	}
+
+	// Scan Codex CLI rollout sessions. Diagnostics are included without
+	// preventing other agents from being displayed.
+	codexResult, codexErr := codex.Scan(opts)
+	if codexErr != nil {
+		errors = append(errors, "codex: "+codexErr.Error())
+	} else {
+		for _, diagnostic := range codexResult.Diagnostics {
+			errors = append(errors, "codex: "+diagnostic)
+		}
+		for _, s := range codexResult.Sessions {
+			entry := DashboardEntry{SessionID: truncate8(s.SessionID), AgentType: "codex", Project: s.Project, Status: s.Status, IsActive: s.IsActive(), TrafficLight: s.TrafficLight(), Name: s.Name, FirstActive: s.FirstActive, LastActive: s.LastActive, LastReq: s.LastReq, LastResp: s.LastResp, MessageCount: s.MessageCount}
 			if rootsFile != nil {
 				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
 					entry.MatchedRoot = matched.Path
@@ -335,7 +356,6 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-
 	// Load tmux mappings (used for terminal annotation and suggest).
 	mappings, mappingsErr := session.LoadMappings()
 
@@ -389,8 +409,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if focusLog != nil {
 		// Group entries by project to sum focus minutes
 		type projGroup struct {
-			entries   []*DashboardEntry
-			sessions  []timetrack.SessionData
+			entries  []*DashboardEntry
+			sessions []timetrack.SessionData
 		}
 		groups := make(map[string]*projGroup)
 		for i := range resp.Sessions {
@@ -436,7 +456,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	resp.ReminderScores = computeReminderScores(resp.Sessions, rootsFile, resp.Now, focusLog)
 
 	// Generate suggest analysis (军情哨)
-	resp.Suggestions = generateSuggestions(claudeResult, hermesResult, mappings, rootsFile, resp.Now, focusLog)
+	resp.Suggestions = generateSuggestions(claudeResult, hermesResult, codexResult, mappings, rootsFile, resp.Now, focusLog)
 
 	// Include focus state
 	if focusActive, focusedProject, focusMinutes, focusSince := attention.GetFocus().Snapshot(); focusActive {
@@ -781,13 +801,13 @@ func (s *Server) handleTerminalList(w http.ResponseWriter, r *http.Request) {
 // terminalLookupResponse is the response for GET /api/v1/terminal/lookup.
 type terminalLookupResponse struct {
 	Found    bool   `json:"found"`
-	Verified bool   `json:"verified"`            // live capture-pane confirmed the prefix
+	Verified bool   `json:"verified"` // live capture-pane confirmed the prefix
 	TmuxName string `json:"tmux_name,omitempty"`
 	WorkDir  string `json:"work_dir,omitempty"`
 	TtydPort int    `json:"ttyd_port,omitempty"`
 	TtydURL  string `json:"ttyd_url,omitempty"`
-	Hint     string `json:"hint,omitempty"`      // message when not found
-	Warning  string `json:"warning,omitempty"`   // shown when found but not verified
+	Hint     string `json:"hint,omitempty"`    // message when not found
+	Warning  string `json:"warning,omitempty"` // shown when found but not verified
 }
 
 // handleTerminalLookup handles GET /api/v1/terminal/lookup?session_id=<id>&agent_type=<type>.
@@ -880,8 +900,8 @@ func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFi
 
 	// Group sessions by project key (matched_root or project dir)
 	type sessionMetrics struct {
-		sessions   []DashboardEntry
-		isPrimary  bool
+		sessions  []DashboardEntry
+		isPrimary bool
 	}
 	groups := make(map[string]*sessionMetrics)
 	var groupOrder []string
@@ -1017,6 +1037,7 @@ func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFi
 func generateSuggestions(
 	claudeResult *claude.ScanResult,
 	hermesResult *hermes.ScanResult,
+	codexResult *codex.ScanResult,
 	mappings []session.Mapping,
 	rootsFile *project.RootsFile,
 	now time.Time,
@@ -1075,6 +1096,18 @@ func generateSuggestions(
 				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
 					si.MatchedRoot = matched.Path
 					si.RootPriority = string(matched.Priority)
+				}
+			}
+			sessions = append(sessions, si)
+		}
+	}
+
+	if codexResult != nil {
+		for _, s := range codexResult.Sessions {
+			si := suggest.SessionInfo{AgentType: "codex", AgentName: s.Name, ProjectPath: s.Project, Status: s.Status, LastActive: s.LastActive, FirstActive: s.FirstActive, IsRunning: s.Status == "busy", LastReq: s.LastReq, MessageCount: s.MessageCount}
+			if rootsFile != nil {
+				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
+					si.MatchedRoot, si.RootPriority = matched.Path, string(matched.Priority)
 				}
 			}
 			sessions = append(sessions, si)

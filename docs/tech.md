@@ -38,6 +38,8 @@ pflow/
 │   │   └── snapshot.go             # SessionSnapshot 状态快照
 │   ├── hermes/                     # Hermes Agent 会话监控
 │   │   └── activity.go             # Session 活动扫描（从 sessions export + gateway 读取）
+│   ├── codex/                      # Codex CLI rollout 会话扫描
+│   │   └── activity.go             # 本地 JSONL 只读发现和状态归纳
 │   ├── project/                    # 项目管理（阶段三新增）
 │   │   ├── store.go                # ~/.pflow/project_roots.json 读写
 │   │   └── strategy.go             # Slot 映射与优先级切换
@@ -115,6 +117,7 @@ pflow/
                     ┌──────▼───────────────┐
 Claude transcript ──┤                      │
 Hermes sessions ─── │  SessionSummary      │──→ attention.Score() ──→ reminder_score
+Codex rollout ───── │                      │
 Mappings ────────── │                      │
                     └──────────────────────┘
                            │
@@ -206,7 +209,7 @@ Session 状态（waiting/busy/idle）
 开发和验证时遵守以下运行约束：
 
 - 使用 `make build` 构建，先生成 `web/dist/`，再由 `embed.go` 嵌入 Go 二进制；不要直接使用 `go build`。
-- 用户数据主要位于 `~/.pflow/`；Claude 数据位于 `~/.claude/`；Hermes 数据位于 `~/.hermes/`。测试不得污染真实数据。
+- 用户数据主要位于 `~/.pflow/`；Claude 数据位于 `~/.claude/`；Hermes 数据位于 `~/.hermes/`；Codex rollout 位于 `~/.codex/`。测试不得污染真实数据。
 - JSON 配置和映射文件必须采用临时文件写入后 rename 的原子化方式。
 - Session 发现失败应保留可诊断错误；tmux、Claude 或 Hermes 不可用时，手动验收需明确记录前置条件。
 
@@ -220,6 +223,7 @@ Session 状态（waiting/busy/idle）
 | `~/.claude/sessions/` | Claude 目录扫描元数据 | `internal/session/` |
 | `~/.claude/projects/` | Claude transcript | `internal/claude/` |
 | `~/.hermes/sessions/` | Hermes 活跃 session 和请求快照 | `internal/hermes/` |
+| `~/.codex/sessions/` | Codex CLI rollout JSONL | `internal/codex/` |
 
 ### 2.6 当前架构决策速查
 

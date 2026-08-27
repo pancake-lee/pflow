@@ -228,7 +228,8 @@ func (mm *mappingManager) findByClaudePrefix(prefix string) ([]Mapping, error) {
 	return matches, nil
 }
 
-// findBySessionID looks up mappings by full agent session ID.
+// findBySessionID looks up mappings by full agent session ID or its displayed
+// prefix. Dashboard entries intentionally expose only the first eight chars.
 func (mm *mappingManager) findBySessionID(agentType, sessionID string) ([]Mapping, error) {
 	store, err := mm.load()
 	if err != nil {
@@ -236,7 +237,7 @@ func (mm *mappingManager) findBySessionID(agentType, sessionID string) ([]Mappin
 	}
 	var matches []Mapping
 	for _, m := range store.Mappings {
-		if m.AgentType == agentType && m.AgentSessionID == sessionID {
+		if m.AgentType == agentType && (m.AgentSessionID == sessionID || strings.HasPrefix(m.AgentSessionID, sessionID)) {
 			matches = append(matches, m)
 		}
 	}
@@ -356,5 +357,3 @@ func LoadMappings() ([]Mapping, error) {
 	}
 	return store.Mappings, nil
 }
-
-

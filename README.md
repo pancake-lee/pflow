@@ -25,6 +25,9 @@ pflow serve
 # 在当前项目启动 Claude 托管会话（tmux 自动配置）
 pflow claude -dir .
 
+# 在当前项目启动 Codex 托管会话
+pflow codex -dir .
+
 # 查看今日军情建议（专注/切换/授权提醒）
 pflow suggest
 ```
@@ -46,7 +49,7 @@ pflow suggest
 
 ## 已实现的核心能力
 
-- **多 Agent 监控**：Claude Code、Hermes 双引擎支持，状态实时同步
+- **多 Agent 监控**：Claude Code、Hermes、Codex CLI 会话统一展示
 - **项目策略管理**：主线/支线任务映射 + 提醒分数算法 + 注意力遮罩
 - **Web 终端集成**：Dashboard 侧边栏一键 attach 到 Agent 会话（基于 ttyd + tmux）
 - **注意力引导**：专注模式保护期 + 军情哨建议引擎（~20 个静态场景）

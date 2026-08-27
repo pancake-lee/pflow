@@ -3,7 +3,7 @@
 
 export interface DashboardEntry {
   session_id: string
-  agent_type: 'claude' | 'hermes'
+  agent_type: 'claude' | 'hermes' | 'codex'
   project: string
   status: string
   is_active: boolean
@@ -78,7 +78,7 @@ export interface ScanOptions {
   max_inactive: number
 }
 
-export type AgentFilter = 'all' | 'claude' | 'hermes'
+export type AgentFilter = 'all' | 'claude' | 'hermes' | 'codex'
 
 export type RefreshInterval = 0 | 10 | 30 | 60 // seconds, 0 = off
 

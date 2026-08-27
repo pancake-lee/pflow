@@ -263,7 +263,7 @@ function rowProps(row: DashboardEntry) {
         <template v-if="mainSession">
           <span class="h-sep">|</span>
           <NIcon :size="14" :component="agentIcon(mainSession.agent_type)" />
-          <span class="h-agent">{{ mainSession.agent_type === 'claude' ? 'Claude' : 'Hermes' }}</span>
+          <span class="h-agent">{{ mainSession.agent_type === 'claude' ? 'Claude' : mainSession.agent_type === 'codex' ? 'Codex' : 'Hermes' }}</span>
           <code class="h-sid">{{ mainSession.session_id }}</code>
           <NButton
             size="tiny"
