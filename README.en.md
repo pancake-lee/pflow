@@ -79,7 +79,6 @@ pflow suggest
 | [`docs/tech.md`](./docs/tech.md) | Technical Design Document |
 | [`docs/backlog.md`](./docs/backlog.md) | Full Feature Backlog |
 | [`docs/harness.md`](./docs/harness.md) | AI-assisted development workflow and documentation index |
-| [`docs/archive/changelog.md`](./docs/archive/changelog.md) | Version history (archived) |
 | [`docs/screenshot.png`](./docs/screenshot.png) | Latest Screenshot |
 
 ## License

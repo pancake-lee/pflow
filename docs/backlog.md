@@ -1,85 +1,72 @@
 # Backlog
 
-> 全部技术需求池，按序号排列。
-> 状态标记：Done、Pending、WIP、Approved、Abandoned、Rejected
+> 当前未完成的技术需求池，按序号排列。
+> 状态标记：Pending、WIP、Approved、Abandoned、Rejected。
+> 已完成的历史条目已迁移至版本归档，不在当前 backlog 重复维护。
 
-| 状态     | 序号 | 类别       | 任务                                  | 简述                                                                                                                                                     |
-| -------- | ---- | ---------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Done     | 0    | 核心架构   | 阶段一：可行性验证                    | 验证 cc-connect 通信能力、tmux 会话托管、Web 终端嵌入等核心技术可行性                                                                                    |
-| Done     | 1    | Web 前端   | 阶段二：Web Dashboard                 | Vue 3 + Naive UI 浏览器端可视化面板，DataTable 会话列表、红绿灯状态、筛选/排序、自动刷新、侧边栏详情、Go embed 单文件部署                                |
-| Done     | 2    | CLI 工具   | `pflow claude` CLI 子命令           | 一键创建 tmux + Claude 托管会话，自动配置 statusline、提取 session 前缀、保存关联映射。支持 `-name` / `-dir` / `-force` / `-no-attach`           |
-| Done     | 3    | 会话管理   | Web 终端集成（ttyd + tmux）           | 侧边栏通过 ttyd 嵌入 Web 终端，通过 Claude statusline 的 8 位 session ID 前缀关联 tmux↔Claude session，Dashboard 可自动 lookup 并打开终端交互           |
-| Done     | 4    | 会话管理   | Session 管理与映射持久化              | tmux + ttyd 进程生命周期管理、`~/.pflow/mappings.json` 映射持久化、statusline 自动配置、capture-pane 前缀解析                                          |
-| Done     | 5    | CLI 工具   | `pflow status`                      | 状态仪表盘，CLI 文本表格 + Web Dashboard 双模式                                                                                                          |
-| Done     | 6    | CLI 工具   | `pflow probe <id>`                  | 探测单个 session 详细状态                                                                                                                                |
-| Done     | 7    | 核心架构   | `pflow serve`                       | HTTP Dashboard API + Web Dashboard，单二进制部署                                                                                                         |
-| Done     | 8    | 核心架构   | 项目根标记                            | `~/.pflow/project_roots.json` 存储被标记为项目根的路径列表 + 优先级（primary/secondary/normal）。路径即项目，不引入独立 ID/名称实体                    |
-| Done     | 9    | 会话管理   | Session 自动归类                      | 最长前缀匹配算法：session cwd 匹配到某个项目根路径则自动归入。根目录 `/` 禁止标记。未匹配的作为独立 session 展示                                       |
-| Done     | 10   | Web 前端   | "识别为项目" UI                       | Dashboard 界面上每个 distinct 工作目录旁提供勾选框 + hover tooltip，一键标记/取消项目根                                                                  |
-| Done     | 11   | 核心架构   | 主线/支线策略引擎                     | 设定 1 主线 + 最多 2 支线，数量限制校验，优先级切换规则                                                                                                  |
-| Done     | 12   | Web 前端   | Dashboard 项目分组视图                | 前端从扁平表格改为按 root 分组的视图，按优先级分区展示（主线/支线/普通/未归类）                                                                          |
-| Done     | 13   | 注意力     | 提醒分数算法                          | 综合等待时长、专注持续、今日累计、项目优先级计算每个项目的提醒分数。设计文档：[`02-reminder_score_algorithm.md`](./design/02-reminder_score_algorithm.md) |
-| Done     | 14   | 注意力     | 注意力遮罩层                          | 双维度设计：雾化遮罩（Fog）+ 高亮跑马灯（Marquee）。专注模式统一遮罩覆盖非关注区域。设计文档：[`03-attention_mask.md`](./design/03-attention_mask.md)     |
-| Done     | 15   | 交互体验   | 项目折叠/展开                         | 记忆用户对普通项目和归档项目的折叠状态                                                                                                                   |
-| Done | 16   | 会话管理   | tmux 会话绑定同步                     | tmux 定期截图刷新 sessionId，`/clear` 和 `/resume` 或重启导致 session 绑定更换，同步到页面做重新绑定                                                 |
-| Done | 17   | 智能分析   | 军情哨分析建议（`pflow suggest`）   | 基于会话状态和历史数据，主动给出分析建议                                                                                                                 |
-| Done     | 18   | Agent 管理 | 多 Agent 类型启动（`pflow hermes`） | 支持启动不同类型的 AI Agent（Claude Code 以外的其他 Agent）                                                                                              |
-| Pending  | 19   | 通知系统   | 桌面通知                              | 分数超阈值时触发浏览器 Notification API                                                                                                                  |
-| Pending  | 20   | 智能分析   | 军情哨主动推送                        | 后台守护进程主动推送提醒（需守护进程支持）                                                                                                               |
-| Pending  | 21   | 智能分析   | 统帅偏好学习                          | 推送频率自适应，根据用户行为学习偏好                                                                                                                     |
-| Done     | 22   | 扩展能力   | Hermes 会话扫描系统                   | 通过 `hermes sessions export` CLI 获取全量会话数据（含 LastReq/LastResp/时间戳/CWD），支持 source 过滤（默认排除 cron）、时间窗口过滤、项目匹配       |
-| Pending  | 23   | 扩展能力   | 双层换肤系统                          | 内容层 + 遮罩层独立换肤，支持社区皮肤。设计文档已完成（[`99-dual_layer_skinning_system.md`](./design/99-dual_layer_skinning_system.md)）                  |
-| Pending  | 24   | 扩展能力   | Web AI 平台状态监控                   | 浏览器扩展监控 DeepSeek/Kimi/ChatGPT 等平台的 AI 对话状态。设计文档已完成（[`99-ai-chat-web-attach.md`](./design/99-ai-chat-web-attach.md)）              |
-| Pending  | 25   | 扩展能力   | 跨设备同步                            | 手机/平板看状态、点批准                                                                                                                                  |
-| Pending  | 26   | Agent 管理 | 多 Agent 类型支持                     | 支持 Cline、Codex CLI 等其他 Agent 类型（远期预留）                                                                                      |
-| Done     | 27   | 会话管理 | 映射数据结构升级                       | 参考 §4.3，Mapping 增加 agentName / status / lastUpdated / pid 字段                                                                       |
-| Done     | 28   | 会话管理 | Claude JSON 目录扫描替代截屏           | 参考 §4.1，通过 `claude -n <name>` + 扫描 `~/.claude/sessions/` 建立映射，保留旧方案为代码开关                                              |
-| Done     | 29   | 会话管理 | Claude 后台轮询监控                    | 参考 §4.1，每 5s 扫描 `~/.claude/sessions/` 检测 sessionId 变化并自动更新映射                                                             |
-| Done     | 30   | 会话管理 | Hermes `/status` 截屏解析             | 参考 §4.2，通过 `tmux send-keys /status` + `capture-pane` 解析 Session ID，替代 `hermes sessions export`                                |
-| Done     | 31   | 会话管理 | Tmux 自动销毁优化                      | 参考 §6.1，`trap '' TSTP` 阻止 Ctrl+Z，Agent 退出后自动 `tmux kill-session`                                                             |
-| Done     | 32   | 会话管理 | 孤儿会话清理                           | 参考 §6.3，启动时扫描 `pflow-*` tmux 会话并清理无映射记录的残留                                                                         |
-| Done     | 33   | CLI 工具 | `pflow session list`                  | 参考 §7.2，CLI 表格展示所有会话映射                                                                                                      |
-| Done     | 34   | CLI 工具 | `pflow session destroy`               | 参考 §7.4，销毁指定 tmux 会话 + 清理映射记录                                                                                             |
-| Done     | 35   | Web 前端 | Dashboard 终端映射优化                 | 参考 §7.3，使用新的 name 字段优化展示，确保 Claude name 传递路径正确                                                                     |
-| Done     | 36   | 交互体验 | 知识锚点（Knowledge Anchor）           | Dashboard 右下角知识卡片，展示军情建议的认知科学理论依据与设计逻辑，跟随军情自动切换，支持轮播和悬停翻阅                                 |
-| Done     | 37   | 交互体验 | 每日引导（Daily Boot）                 | 工作日开始前的认知开机引导程序：认知卸载 → 模式切换 → 目标锚定。设计文档：[`11-daily-boot.md`](./design/11-daily-boot.md)            |
+本版本已完成的 31 个条目（`#0–#18`、`#22`、`#27–#37`）已归档至 [`archive/cycles/09-v0.0.8-dynamic-attention-guidance.md`](archive/cycles/09-v0.0.8-dynamic-attention-guidance.md)。
 
----
+## 任务总览
 
-## 详细说明
+| 状态 | 序号 | 类别 | 任务 | 简述 |
+| ---- | ---- | ---- | ---- | ---- |
+| Pending | 19 | 通知系统 | 桌面通知 | 分数超阈值时触发浏览器 Notification API |
+| Pending | 20 | 智能分析 | 军情哨主动推送 | 后台守护进程主动推送提醒（需守护进程支持） |
+| Pending | 21 | 智能分析 | 统帅偏好学习 | 推送频率自适应，根据用户行为学习偏好 |
+| Pending | 23 | 扩展能力 | 双层换肤系统 | 内容层 + 遮罩层独立换肤，支持社区皮肤 |
+| Pending | 24 | 扩展能力 | Web AI 平台状态监控 | 浏览器扩展监控 DeepSeek/Kimi/ChatGPT 等平台的 AI 对话状态 |
+| Pending | 25 | 扩展能力 | 跨设备同步 | 手机/平板看状态、点批准 |
+| Pending | 26 | Agent 管理 | 多 Agent 类型支持 | 支持 Cline、Codex CLI 等其他 Agent 类型（远期预留） |
 
-### 27-35. 终端会话映射方案（tmux）
+## 待规划条目
 
-详见当前设计文档 [`docs/design/07-terminal-session-mapping.md`](./design/07-terminal-session-mapping.md)。核心改动：
+### #19 桌面通知
 
-- **Claude**：从 statusline 截屏方案 → `claude -n <name>` + 扫描 `~/.claude/sessions/` 目录 JSON 文件，通过 `name` 字段匹配（保留旧方案为代码开关）
-- **Hermes**：从 `hermes sessions export` → `tmux send-keys /status` + `capture-pane` 截屏解析 Session ID
-- **Mapping**：增加 agentName、status、lastUpdated、pid 字段
-- **Tmux**：添加 `trap '' TSTP` 自动销毁、孤儿会话清理
-- **CLI**：新增 `pflow session list` / `pflow session destroy` 命令
+- **状态**：Pending
+- **目标**：当项目提醒分数超过阈值时，通过浏览器 Notification API 通知用户。
+- **验收**：通知权限、阈值触发、重复通知抑制和权限拒绝均有明确行为。
 
-### 13. 提醒分数算法
+### #20 军情哨主动推送
 
-综合等待时长、专注持续、今日累计、项目优先级计算每个项目的提醒分数。设计文档：[`docs/design/02-reminder_score_algorithm.md`](./design/02-reminder_score_algorithm.md)。保护期 15min 不打扰，幂函数差异化防止多任务同时高亮。
+- **状态**：Pending
+- **目标**：由后台守护进程主动推送军情哨提醒，而不是等待 Dashboard 请求触发。
+- **依赖**：需要后台守护进程和可靠的推送通道。
+- **验收**：服务在无页面主动刷新时仍能按规则推送，并能查看推送原因和时间。
 
-### 14. 注意力遮罩层
+### #21 统帅偏好学习
 
-双维度设计：雾化遮罩（Fog，透明度随提醒分数变化）+ 高亮跑马灯（Marquee，边框动画）。专注模式统一遮罩覆盖非关注区域，颜色与页面背景一致。CSS 变量接口预留供后续换肤系统。设计文档：[`docs/design/03-attention_mask.md`](./design/03-attention_mask.md)。
+- **状态**：Pending
+- **目标**：根据用户对提醒的响应和忽略行为，自适应调整提醒频率。
+- **验收**：偏好数据可解释、可重置，学习结果不会突破用户设定的通知边界。
 
-### 22. Hermes 会话扫描系统
+### #23 双层换肤系统
 
-**已实现。** 通过 `hermes sessions export` CLI 获取全量会话数据（替代原计划的 SQLite 直读方案），以 JSONL 格式导出含 messages、system_prompt、last_active、source 等完整信息。支持：
-- **会话 ID 去重**：hermes ID 前缀 8 位为日期（重复），改取后缀 8/16 位作为唯一标识（与 `hermes sessions list` 行为一致）
-- **Source 过滤**：`--source` 参数按来源类型过滤（cli/weixin/cron），默认排除 cron
-- **时间窗口过滤**：`-window` 参数限制最近活跃的会话
-- **项目匹配**：从 system_prompt 提取 CWD，匹配到对应项目卡片
-- **LastReq/LastResp 提取**：从 export 的 messages 数组提取最后一条 user/assistant 消息
-- **Gateway 状态富化**：结合 sessions.json 补充 suspended/running 状态和 token 统计
+- **状态**：Pending
+- **目标**：内容层与注意力遮罩层独立换肤，支持可扩展的社区皮肤。
+- **设计依据**：[`design/99-dual_layer_skinning_system.md`](design/99-dual_layer_skinning_system.md)。
+- **验收**：皮肤可独立配置内容层和遮罩层，切换后不破坏提醒状态和可读性。
 
-### 23. 双层换肤系统
+### #24 Web AI 平台状态监控
 
-内容层 + 遮罩层独立换肤，支持社区皮肤。设计文档已完成（[`docs/design/99-dual_layer_skinning_system.md`](./design/99-dual_layer_skinning_system.md)），短期开发预留 CSS 变量接口即可。
+- **状态**：Pending
+- **目标**：通过浏览器扩展监控 DeepSeek、Kimi、ChatGPT 等 Web AI 平台的对话状态。
+- **设计依据**：[`design/99-ai-chat-web-attach.md`](design/99-ai-chat-web-attach.md)。
+- **验收**：扩展按最小权限读取状态，Dashboard 能区分平台、会话和状态变化。
 
-### 24. Web AI 平台状态监控
+### #25 跨设备同步
 
-浏览器扩展监控 DeepSeek/Kimi/ChatGPT 等平台的 AI 对话状态。设计文档已完成（[`docs/design/99-ai-chat-web-attach.md`](./design/99-ai-chat-web-attach.md)），需浏览器扩展开发 + 后端 WebSocket。
+- **状态**：Pending
+- **目标**：支持在手机或平板查看会话状态并执行批准操作。
+- **验收**：跨设备身份、状态同步、授权安全和离线/断线行为有明确方案。
+
+### #26 更多 Agent 类型支持
+
+- **状态**：Pending
+- **目标**：在 Claude Code 和 Hermes 之外支持 Cline、Codex CLI 等 Agent。
+- **验收**：Agent 适配边界、会话标识、状态采集和 Dashboard 展示方式统一。
+
+## 规划约束
+
+- 新需求先进入本文件，再由规划模式补充背景、方案、任务拆分和验收。
+- 方案、子任务和实施步骤统一写入对应 backlog 条目，不创建独立任务计划文档。
+- 完成后的条目在版本归档时迁移到 `docs/archive/`，并从当前 backlog 的总览和详情中删除。

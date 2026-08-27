@@ -1,60 +1,70 @@
-# pflow Harness
+# Harness Engineering — 架构概览
 
-> pflow 的 AI 辅助开发工作流入口。Harness 负责把需求、规划、实现、验证和归档连接起来；代码仍是实现的唯一真相源。
+> Harness 是 pflow 项目的 AI 辅助开发工作流体系，包含工作模式、评估系统和项目文档交接三个子系统。
+> 本文档是 Harness 的高层架构索引，只描述模块职责和关联关系，不展开实现细节。
 
-## 1. 架构概览
+## 1. 整体架构
 
 ```mermaid
 flowchart TD
-    A[用户问题或需求] --> B{路由}
-    B -->|评估 / 检查质量| C[Evaluate]
-    B -->|规划 / 设计 / Bug| D[Plan]
-    B -->|实现 / 按方案执行| E[Generate]
-    B -->|完整走一遍| F[Plan → Generate → Evaluate]
-    C -->|问题现象| G[Backlog]
-    D -->|方案与验收| G
-    G --> E
-    E -->|代码与测试| C
-    E -->|历史记录| H[docs/archive]
+    A[工作模式：规划 → 生成 → 评估]
+    A -->|触发词路由| B[CLAUDE.md / AGENTS.md]
+    B --> C[规划模式：分析 + 方案]
+    B --> D[全流程模式：Plan → Gen → Eval]
+    C --> E[生成模式：代码 + 测试]
+    D --> E
+    E --> F[评估模式：证据 + 评分]
+    F --> G[代码质量评估]
+    F --> H[功能效果评估]
+    F --> I[用户价值评估]
+    C --> J[docs/backlog.md]
+    F --> J
+    J --> E
+    E --> K[docs/archive：历史记录]
 ```
 
-Harness 的交接载体是 `docs/backlog.md`。设计文档解释功能和决策，backlog 记录可执行方案与验收，评估记录事实和问题；三者不互相替代。
+## 2. 子系统
 
-## 2. 文档入口
+### 2.1 工作模式
 
-### AI 工作手册
+AI 根据用户输入的触发词自动切换工作模式。评估、规划、生成、项目管理和全流程模式共同形成可交接的闭环。完整流程、方案确认边界、handoff 和专题中枢规则见 [`handbook/work-modes.md`](handbook/work-modes.md)。
 
-- [工作模式](handbook/work-modes.md)：评估、规划、生成、全流程和项目管理的触发词、流程与 handoff
-- [编码与验证规范](handbook/coding-conventions.md)：Go、Vue/TypeScript、文档和测试约束
-- [评估指南](handbook/eval-guide.md)：pflow 的代码质量、功能效果和用户价值评估方法
-- [文档审阅](handbook/doc-review.md)：文档治理、源码对齐和归档规则
+### 2.2 评估系统
+
+评估从代码质量、功能效果和用户价值三个层面收集证据并评分。评估器只判断好坏，不提出修复方案；发现问题时将现象写入 backlog，由规划模式负责后续方案。
+
+评估报告放在 `docs/eval/reports/`，评估基线放在 [`eval/baseline.md`](eval/baseline.md)。pflow 不依赖在线 LLM judge，采用可复现的命令行、单元测试、前端类型检查和按功能设计执行的手动验收。
+
+### 2.3 文档交接
+
+`docs/backlog.md` 是 Plan → Generate 的唯一交接载体，条目使用状态、背景、方案、分析和验收字段传递上下文。版本归档时，Done 条目的完整信息迁移到 `docs/archive/`，并从 backlog 的总览和详情中清除，只保留未完成条目。
+
+## 3. 文档索引
+
+### 流程与规范
+
+- [`handbook/work-modes.md`](handbook/work-modes.md) — 工作模式完整流程、路由和 handoff
+- [`handbook/eval-guide.md`](handbook/eval-guide.md) — AI 评估模式操作指南
+- [`handbook/coding-conventions.md`](handbook/coding-conventions.md) — Go、Web、Markdown 编码规范
+- [`handbook/doc-review.md`](handbook/doc-review.md) — 文档内部治理和源码对齐
+- [`../CLAUDE.md`](../CLAUDE.md) — Claude 工作流入口
+- [`../AGENTS.md`](../AGENTS.md) — Codex 工作流入口
 
 ### 项目文档
 
-- [产品需求](prd.md)
-- [技术架构](tech.md)
-- [Backlog](backlog.md)：规划与生成之间的唯一交接点
-- [当前周期](../todo.md)
-- [设计文档](design/)
-- [评估基线](eval/baseline.md)
-- [测试策略](testing.md)
-- [评估报告](eval/reports/)
+- [`prd.md`](prd.md) — 产品需求、用户故事和验收标准
+- [`tech.md`](tech.md) — 当前架构、API 契约和数据模型
+- [`backlog.md`](backlog.md) — 需求池和唯一交接载体
+- [`design/`](design/) — 当前功能设计
+- [`eval/`](eval/) — 评估基线和报告
+- [`testing.md`](testing.md) — 测试策略
+- [`archive/`](archive/) — 已完成版本和历史材料
 
-### 历史材料
+## 4. 关键设计决策
 
-- [归档目录](archive/)
-- [周期记录](archive/cycles/)
-- [旧版参考笔记](archive/legacy/note.md)
-
-## 3. 维护约束
-
-- `CLAUDE.md` 与 `AGENTS.md` 必须同步修改，内容保持一致。
-- 每次开发开始先读 `todo.md`；跨模块或有架构影响的工作还要读相关 PRD、tech、design 和 backlog 条目。
-- 方案写入 backlog；中大型功能再创建 design 文档。任务拆分不另建计划文档。
-- 评估只记录证据、分数和问题现象，不在评估阶段写修复方案。
-- 完成的周期记录、一次性审查和版本记录进入 `docs/archive/`，当前有效结论迁移到 handbook、tech、design 或 backlog。
-- 新文档必须使用仓库相对链接，并在提交前检查目标文件存在。
-
-## 4. 当前评估范围
-
-pflow 没有独立的 LLM judge 或在线评估服务。Harness 采用可复现的人工/命令行评估：`make vet`、`make test`、`make build`、前端类型检查，以及按功能设计执行的手动验收。评估报告放在 `docs/eval/reports/`，仅在确实执行评估时创建。
+- **评估不修改代码**：评估器只判断好坏，改进方案由规划模式产出。
+- **角色间 handoff**：通过 backlog 条目传递上下文，不依赖对话历史。
+- **规划落点唯一**：方案、子任务和实施步骤写入 backlog，不创建独立任务计划文档。
+- **中枢文档按需创建**：同一需求经历至少两轮循环且产生多份关联产物时，创建专题中枢文档统一索引。
+- **归档清理明确**：版本归档完成后，backlog 只保留未完成事项，历史证据保留在 archive。
+- **全流程模式轻量化**：适合单文件和低风险改动；跨模块、数据迁移和高风险删除走标准分步流程。

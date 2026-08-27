@@ -8,9 +8,9 @@
 
 | 功能/设计 | 参考理论 | 核心观点 | 来源 |
 |-----------|----------|----------|------|
-| `todo.md` 放在项目根目录作为“注意力锚点” | **情境认知（Situated Cognition）** + **外部认知卸载（External Cognitive Offloading）** | 环境中的物理线索（根目录文件）激活特定行为脚本；将待办事项写入文件释放工作记忆容量 | Hutchins, 1995; Risko & Gilbert, 2016 |
-| 根目录 `todo.md` 只放 3-5 条任务 | **工作记忆容量限制** | 人类主动工作记忆只能容纳 4±1 个信息块 | Miller, 1956; Cowan, 2001 |
-| 周期结束清空 `todo.md` | **情境折旧（Situational Decay）** | 过时的环境提示会误导注意力，定期重置保持线索有效性 | 基于情境认知的延伸 |
+| `docs/backlog.md` 作为需求与计划的唯一交接点 | **情境认知（Situated Cognition）** + **外部认知卸载（External Cognitive Offloading）** | 将待办事项和实施上下文写入稳定的项目文档，释放工作记忆容量并支持跨会话协作 | Hutchins, 1995; Risko & Gilbert, 2016 |
+| 当前工作范围从 backlog 中明确挑选 | **工作记忆容量限制** | 聚焦有限数量的候选任务，避免同时激活过多目标 | Miller, 1956; Cowan, 2001 |
+| 周期完成后归档周期记录，backlog 保留未完成事项 | **情境折旧（Situational Decay）** | 及时移除过时的工作提示，保持当前交接信息有效 | 基于情境认知的延伸 |
 | Dashboard 同时展示多个项目状态，但只高亮主线 | **注意力片段（Attention Fragments）** + **残留注意力（Attention Residue）** | 任务切换后仍有部分认知资源留在原任务；减少高亮项目可降低残留干扰 | Leroy, 2009; Mark et al., 2012 |
 
 ---
