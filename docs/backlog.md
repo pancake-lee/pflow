@@ -15,7 +15,7 @@
 | 待规划 | 视觉扩展 | 23 | 双层换肤系统 | — |
 | 待规划 | 平台扩展 | 24 | Web AI 平台状态监控 | — |
 | 待规划 | 平台扩展 | 25 | 跨设备同步 | — |
-| 待规划 | Agent 扩展 | 26 | 更多 Agent 类型支持 | — |
+| 已规划 | Agent 扩展 | 26 | Codex 会话支持 | — |
 
 > `v0.0.8` 已归档：#0–#18、#22、#27–#37，共 31 项，详见 [`archive/cycles/09-v0.0.8-dynamic-attention-guidance.md`](archive/cycles/09-v0.0.8-dynamic-attention-guidance.md)。
 
@@ -84,14 +84,23 @@
 
 ## Agent 扩展
 
-### #26 更多 Agent 类型支持
+### #26 Codex 会话支持
 
-- **状态**：待规划
+- **状态**：已规划
 - **分组**：Agent 扩展
-- **背景**：当前已支持 Claude Code 和 Hermes，其他 Agent 尚未接入统一会话模型。
-- **分析**：不同 Agent 的启动方式、会话标识和状态采集方式存在差异，需要先抽象适配边界和统一展示契约。
-- **方案**：待规划。方案应定义 Agent 适配接口、会话生命周期、状态采集和 Dashboard 展示方式。
-- **验收**：Agent 适配边界、会话标识、状态采集和 Dashboard 展示方式统一。
+- **背景**：当前 pflow 仅展示 Claude Code 与 Hermes 会话，用户通过 Codex CLI 完成的工作无法进入同一注意力面板。
+- **分析**：本机 Codex CLI 已将交互会话写入 `~/.codex/sessions/` 的 JSONL rollout 记录，并可按会话 ID 恢复。该记录含会话元数据、工作目录和事件时间线，适合作为无需常驻进程的发现源。Codex app-server 仍属实验能力，不作为本任务依赖；终端画面解析也不符合项目的稳定数据源约束。
+- **方案**：详见 [`design/2026-08-27-26-codex-session-support.md`](design/2026-08-27-26-codex-session-support.md)。在 `internal/codex/` 增加仅面向 Codex rollout JSONL 的扫描与状态归纳，输出与现有 Dashboard 所需信息等价的会话摘要。`status`、`probe`、Dashboard、提醒评分和军情哨直接接入该摘要，不引入面向未来 Agent 的通用适配接口。新增 `pflow codex`，复用现有 tmux/ttyd 生命周期；启动后按工作目录和启动时刻从 Codex 会话记录建立 tmux 映射，Dashboard 可继续一键进入对应终端。缺失、损坏或未知事件记录仅产生可诊断错误或 `unknown` 状态，不能中断 Claude/Hermes 数据展示。
+- **任务列表**：
+  - [ ] 26.1 实现 Codex rollout 扫描和状态归纳：解析会话元数据、工作目录、首末活动时间、用户请求/最终响应摘要、消息计数及运行/等待/空闲/未知状态；覆盖空目录、截断 JSONL、未知事件、时间窗口和多会话场景的单元测试。
+  - [ ] 26.2 接入现有聚合链路：将 Codex 摘要加入 CLI `status`、`probe`、Dashboard API、项目匹配、提醒评分和军情哨；保留既有 Claude/Hermes 行为，并补充 API/聚合测试。
+  - [ ] 26.3 提供托管会话入口：新增 `pflow codex`，复用 tmux/ttyd 管理与映射持久化，按 Codex 会话 ID 关联终端；更新 Dashboard 的 Codex 类型展示和使用说明，完成真实 Codex 环境手动验收。
+- **验收**：
+  - [ ] 近期 Codex CLI 会话能按工作目录、会话 ID、活动时间和状态显示在 CLI 与 Dashboard，且不读取或返回完整对话内容。
+  - [ ] Codex 正在执行、等待用户和已空闲会话在记录证据充足时映射为既有状态；证据不足时明确显示 `unknown`，不误报等待。
+  - [ ] Codex 会话参与项目归类、提醒分数和军情哨，既有 Claude/Hermes 结果不回归。
+  - [ ] 通过 `pflow codex` 创建的会话能在 Dashboard 中关联到 tmux/ttyd 终端；普通用户直接启动的 Codex 会话仍可被只读发现。
+  - [ ] `GOTOOLCHAIN=local make vet`、`GOTOOLCHAIN=local make test` 和 `make build` 均通过；真实 Codex 环境按设计文档手动验证。
 
 ## 产品定位决策
 
