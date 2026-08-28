@@ -91,3 +91,98 @@ pflow 的设计并非凭空想象，而是植根于多学科理论基础之上�
 - 《The Overflowing Brain》—— Torkel Klingberg
 
 > 注：本文档将作为 pflow 内置帮助系统的理论附录，随版本更新补充。
+
+---
+
+## 九、Claude Code statusLine 技术参考
+
+> 本节保留 pflow 早期 `pflow claude` 的基础技术验证记录。当前实现改用
+> `~/.claude/sessions/` 中的结构化元数据关联 tmux 与 Claude 会话，不读取或修改
+> `~/.claude/settings.json`，也不依赖 statusLine。会话关联的当前设计见
+> [`tech.md`](tech.md#54-web-终端集成ttyd--tmux--claude-关联已实现)。
+
+Claude Code 会把当前会话的 JSON 数据通过 stdin 传给 `statusLine.command`，命令的 stdout 会显示在终端状态栏。该机制可用于显示模型、上下文使用率和会话 ID 前缀，也可作为调试 Claude 提供数据的入口。
+
+### 配置位置与关键字段
+
+- 配置位于 `~/.claude/settings.json` 的 `statusLine` 字段。
+- 常用字段包括：`session_id`、`model.display_name`、`effort.level`，以及 `context_window.current_usage` 和 `context_window.used_percentage`。
+- 会话原始记录还会提供 `transcript_path`、`cwd`、`session_name`、版本、成本和 `context_window_size` 等信息；字段可能在会话刚开始或尚未调用 API 时缺失。
+- 调试时可先将 stdin 的实际内容落盘：
+
+```bash
+cat | tee /tmp/statusline-dump.json > /dev/null
+```
+
+之后使用 `jq` 或 `python3 -m json.tool` 查看该文件，再以同一份 JSON 单独测试 statusLine 命令。
+
+以下是早期调试得到的代表性输入结构，具体字段会随 Claude Code 版本和会话状态变化：
+
+```jsonc
+{
+  "session_id": "911b2385-ee8d-4956-a347-65d3dbecc16a",
+  "transcript_path": "/root/.claude/projects/-root-code-pflow/<session>.jsonl",
+  "cwd": "/root/code/pflow",
+  "effort": { "level": "high" },
+  "session_name": "Implement core todo list with mock data",
+  "model": { "id": "deepseek-v4-pro", "display_name": "deepseek-v4-pro" },
+  "workspace": {
+    "current_dir": "/root/code/pflow",
+    "project_dir": "/root/code/pflow",
+    "added_dirs": [],
+    "repo": { "host": "github.com", "owner": "pancake-lee", "name": "pflow" }
+  },
+  "version": "2.1.169",
+  "output_style": { "name": "default" },
+  "cost": {
+    "total_cost_usd": 30.745574,
+    "total_duration_ms": 138652104,
+    "total_api_duration_ms": 3336229,
+    "total_lines_added": 3384,
+    "total_lines_removed": 1577
+  },
+  "context_window": {
+    "total_input_tokens": 53185,
+    "total_output_tokens": 328,
+    "context_window_size": 200000,
+    "current_usage": {
+      "input_tokens": 65,
+      "output_tokens": 328,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 53120
+    },
+    "used_percentage": 27,
+    "remaining_percentage": 73
+  },
+  "exceeds_200k_tokens": false,
+  "fast_mode": false,
+  "thinking": { "enabled": true }
+}
+```
+
+### 累计 token 的计算
+
+`context_window.total_input_tokens` 和 `total_output_tokens` 描述的是当前上下文窗口，不是整个会话的累计 API 消耗：历史压缩、缓存读取和新一轮对话都会影响它们，`total_output_tokens` 还可能在用户发新消息时归零。
+
+若要显示累计输入/输出 token，应对每次 statusLine 调用的 `current_usage.input_tokens` 与 `current_usage.output_tokens` 增量累加，并按 session ID 保存上一次值与累计值。早期验证使用 `/tmp/claude_tokens_<session-id 前 8 位>` 作为临时状态文件；这种文件在重启或清理 `/tmp` 后会重新计数。
+
+### 示例：显示会话、模型和累计 token
+
+下面是早期验证使用的 `statusLine.command`。价格为当时的本地展示参数，不能视为当前模型价格或计费依据；如继续使用，应自行更新 `cus_input_price` 和 `cus_output_price`。
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "input=$(cat); sid=$(echo \"$input\" | jq -r '.session_id // \"-\"'); sid8=$(printf \"%.8s\" \"$sid\"); model=$(echo \"$input\" | jq -r '.model.display_name // empty'); used=$(echo \"$input\" | jq -r '.context_window.used_percentage // empty'); effort=$(echo \"$input\" | jq -r '.effort.level // empty'); curr_in=$(echo \"$input\" | jq -r '.context_window.current_usage.input_tokens // 0'); curr_out=$(echo \"$input\" | jq -r '.context_window.current_usage.output_tokens // 0'); cus_input_price=3; cus_output_price=6; token_file=\"/tmp/claude_tokens_${sid8}\"; if [ ! -f \"$token_file\" ]; then echo \"0 0 0 0\" > \"$token_file\"; fi; read last_sum_in last_sum_out last_curr_in last_curr_out < \"$token_file\"; new_sum_in=$last_sum_in; new_sum_out=$last_sum_out; if [ \"$curr_in\" -gt \"$last_curr_in\" ]; then delta_in=$((curr_in - last_curr_in)); new_sum_in=$((last_sum_in + delta_in)); fi; if [ \"$curr_out\" -gt \"$last_curr_out\" ]; then delta_out=$((curr_out - last_curr_out)); new_sum_out=$((last_sum_out + delta_out)); fi; echo \"$new_sum_in $new_sum_out $curr_in $curr_out\" > \"$token_file\"; cost_in=$(awk 'BEGIN {printf \"%.4f\", '$new_sum_in' * '$cus_input_price' / 1000000}'); cost_out=$(awk 'BEGIN {printf \"%.4f\", '$new_sum_out' * '$cus_output_price' / 1000000}'); [ -n \"$used\" ] && ctx=\"$used%\" || ctx=\"--\"; [ -n \"$effort\" ] && effort_str=\"$effort\" || effort_str=\"--\"; [ -n \"$model\" ] && echo \"${sid8} | ${model} | ${effort_str} | ctx ${ctx} | total:${new_sum_in}/${new_sum_out} | cos:${cost_in}/${cost_out}\" || echo \"${sid8} | ${effort_str} | ctx ${ctx} | total:${new_sum_in}/${new_sum_out} | cos:${cost_in}/${cost_out}\""
+  }
+}
+```
+
+### 排查要点
+
+- `jq` 不属于所有系统的预装工具。缺失时，解析命令会返回空值，状态栏常表现为 `ctx --` 和空的 token 字段。先安装 `jq` 或改用可用的 JSON 解析器。
+- 调试阶段不要把 `jq` 的 stderr 重定向到 `/dev/null`，否则 `command not found` 等根因会被隐藏。
+- 用 dump 的 JSON 单独验证命令时，可执行 `cat /tmp/statusline-dump.json | bash -c '你的statusLine命令'`。
+- `settings.json` 内嵌 shell 命令的引号转义容易出错。若要程序化修改，使用 JSON 序列化写入并保持原子替换，避免手工拼接转义字符串。
+- 对可能缺失的字段使用 `// empty` 或 `// 0` 等默认值，避免首次渲染或空会话导致整条状态栏失败。

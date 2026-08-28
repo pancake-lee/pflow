@@ -346,16 +346,16 @@ pflow 以 MIT License 发布，`LICENSE` 文件已就位。
 
 **定位**：辅助功能，非主要交互路径。用户的主要操作在自有终端/VSCode 中进行，Web 终端仅作为便捷备选。
 
-**核心思路**：通过 Claude 的 `/statusline` 功能，在终端状态行显示 session ID 的前 8 个字符作为前缀。pflow 管理的 tmux session 可以通过 `tmux capture-pane` 解析出这个前缀，从而建立 **tmux session ↔ Claude session** 的关联。
+**核心思路**：`pflow claude` 以稳定的会话名称启动 Claude。随后从 `~/.claude/sessions/` 扫描与该名称匹配的会话元数据，建立 **tmux session ↔ Claude session** 的关联。该方式使用 Claude 的本地结构化数据，不依赖终端 UI 渲染。
 
 **关联流程**：
 
 ```
 pflow claude 启动流程:
-  1. 检查并配置 Claude statusline（~/.claude/settings.json）
-  2. 创建 tmux session + 启动 Claude
-  3. 异步 wait + tmux capture-pane 提取 8-char session 前缀
-  4. 保存映射到 ~/.pflow/mappings.json
+  1. 确定 Claude 会话名称和工作目录
+  2. 创建 tmux session，以 `claude -n <name>` 启动 Claude
+  3. 异步扫描 ~/.claude/sessions/，按名称取得 Claude session ID
+  4. 保存 session ID 前缀与 tmux session 的映射到 ~/.pflow/mappings.json
 
 Dashboard 可选操作:
   1. GET /api/v1/terminal/lookup?session_id=<prefix>
@@ -368,7 +368,7 @@ Dashboard 可选操作:
 | 组件 | 角色 | 文件 |
 |------|------|------|
 | Session Manager | tmux + ttyd 进程管理器：创建/销毁会话、分配端口、追踪进程状态 | `internal/session/manager.go` |
-| Claude Session | Claude statusline 配置、Claude 进程启动、capture-pane 前缀解析 | `internal/session/claude.go` |
+| Claude Session | Claude 进程启动、按名称扫描会话元数据并保存关联 | `internal/session/claude.go`、`internal/session/claude_scan.go` |
 | Mapping | tmux↔Claude session 映射持久化（`~/.pflow/mappings.json`） | `internal/session/mapping.go` |
 | CLI: `pflow claude` | 一键创建 tmux + Claude 托管会话 | `cmd/pflow/main.go:runClaudeCmd` |
 | API: terminal/* | 终端启动/停止/列表/lookup 端点 | `internal/api/server.go` |
@@ -376,7 +376,8 @@ Dashboard 可选操作:
 **外部依赖**：
 - `tmux`（必须）— 终端多路复用
 - `ttyd`（可选）— Web 终端网关
-- `jq`（必须）— Claude statusline 命令中用于解析 JSON
+
+Claude Code statusLine 的 stdin JSON 和令牌累计方法属于已验证的历史技术参考，见 [`reference.md`](reference.md#九claude-code-statusline-技术参考)。当前 `pflow claude` 不配置 statusLine，也不依赖 `jq`。
 
 **安全设计**：
 - ttyd 绑定 `127.0.0.1` 仅监听本地，不暴露到公网
