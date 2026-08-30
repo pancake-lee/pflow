@@ -110,6 +110,11 @@ type rolloutLine struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+type responseContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 func parseRollout(path string) (SessionSummary, []string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -160,13 +165,16 @@ func parseRollout(path string) (SessionSummary, []string) {
 			}
 		case "event_msg":
 			var p struct {
-				Type string `json:"type"`
+				Type    string `json:"type"`
+				Message string `json:"message"`
 			}
 			if json.Unmarshal(line.Payload, &p) != nil {
 				diags = append(diags, fmt.Sprintf("%s:%d: invalid event", path, lineNo))
 				continue
 			}
 			switch p.Type {
+			case "user_message":
+				setSessionName(&s, p.Message)
 			case "task_started":
 				s.Status = "busy"
 			case "task_complete", "turn_aborted":
@@ -174,34 +182,23 @@ func parseRollout(path string) (SessionSummary, []string) {
 			}
 		case "response_item":
 			var p struct {
-				Type    string `json:"type"`
-				Role    string `json:"role"`
-				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"content"`
+				Type    string            `json:"type"`
+				Role    string            `json:"role"`
+				Content []responseContent `json:"content"`
 			}
 			if json.Unmarshal(line.Payload, &p) != nil {
 				diags = append(diags, fmt.Sprintf("%s:%d: invalid response item", path, lineNo))
 				continue
 			}
-			text := ""
-			for _, c := range p.Content {
-				if c.Text != "" {
-					text = c.Text
-					break
-				}
-			}
+			text := lastUserMessage(p.Content)
 			switch {
 			case p.Type == "message" && p.Role == "user":
 				s.MessageCount++
 				s.LastReq = truncate(text, 160)
-				if s.Name == "" {
-					s.Name = truncate(text, 48)
-				}
+				setSessionName(&s, text)
 				s.Status = "busy"
 			case p.Type == "message" && p.Role == "assistant":
-				s.LastResp = truncate(text, 160)
+				s.LastResp = truncate(firstContentText(p.Content), 160)
 				s.Status = "idle"
 			case p.Type == "function_call", p.Type == "custom_tool_call":
 				s.Status = "busy"
@@ -214,17 +211,22 @@ func parseRollout(path string) (SessionSummary, []string) {
 	if s.Status == "" {
 		s.Status = "unknown"
 	}
+	if s.Name == "" {
+		s.Name = projectBaseName(s.Project)
+	}
 	return s, diags
 }
 
-// FindSessionStartedAfter finds the newest session for workDir created after start.
+// FindSessionStartedAfter finds the newest session for workDir that was
+// created or became active after start. Codex may persist session metadata
+// before the first request but delay the rollout file until that request.
 func FindSessionStartedAfter(workDir string, start time.Time) (string, error) {
 	result, err := Scan(config.ScanOptions{Window: 24 * time.Hour, MaxInactive: 0})
 	if err != nil {
 		return "", err
 	}
 	for _, s := range result.Sessions {
-		if s.Project == workDir && !s.FirstActive.Before(start) {
+		if s.Project == workDir && (!s.FirstActive.Before(start) || !s.LastActive.Before(start)) {
 			return s.SessionID, nil
 		}
 	}
@@ -239,6 +241,70 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+
+func sessionName(message string) string {
+	message = cleanUserMessage(message)
+	if message == "" {
+		return ""
+	}
+	return truncate(strings.Join(strings.Fields(message), " "), 48)
+}
+
+func setSessionName(s *SessionSummary, message string) {
+	if s.Name != "" {
+		return
+	}
+	s.Name = sessionName(message)
+}
+
+func lastUserMessage(content []responseContent) string {
+	for i := len(content) - 1; i >= 0; i-- {
+		if message := cleanUserMessage(content[i].Text); message != "" {
+			return message
+		}
+	}
+	return ""
+}
+
+func firstContentText(content []responseContent) string {
+	for _, item := range content {
+		if item.Text != "" {
+			return item.Text
+		}
+	}
+	return ""
+}
+
+func cleanUserMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if strings.HasPrefix(message, "# AGENTS.md instructions for ") ||
+		strings.HasPrefix(message, "The following instructions are provided") ||
+		strings.HasPrefix(message, "<environment_context>") {
+		return ""
+	}
+
+	for _, marker := range []string{
+		"\n# AGENTS.md instructions for ",
+		"\n<environment_context>",
+	} {
+		if index := strings.Index(message, marker); index >= 0 {
+			message = message[:index]
+		}
+	}
+	return strings.TrimSpace(message)
+}
+
+func projectBaseName(project string) string {
+	if project == "" {
+		return "Codex session"
+	}
+	base := filepath.Base(filepath.Clean(project))
+	if base == "." || base == string(filepath.Separator) {
+		return "Codex session"
+	}
+	return base
+}
+
 func truncate(text string, max int) string {
 	r := []rune(strings.TrimSpace(text))
 	if len(r) <= max {

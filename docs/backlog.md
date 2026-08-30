@@ -16,6 +16,9 @@
 | 待规划 | 平台扩展 | 24 | Web AI 平台状态监控 | — |
 | 待规划 | 平台扩展 | 25 | 跨设备同步 | — |
 | Done | Agent 扩展 | 26 | Codex 会话支持 | — |
+| Done | Agent 扩展 | 38 | Codex 会话名称提取 | — |
+| Done | Agent 扩展 | 39 | Codex 会话标题回退修复 | — |
+| Done | 服务管理 | 40 | `make start` 误杀 Codex 会话 | — |
 
 > `v0.0.8` 已归档：#0–#18、#22、#27–#37，共 31 项，详见 [`archive/cycles/09-v0.0.8-dynamic-attention-guidance.md`](archive/cycles/09-v0.0.8-dynamic-attention-guidance.md)。
 
@@ -82,6 +85,26 @@
 - **方案**：待规划。方案应先明确设备身份、同步范围、授权确认和离线行为。
 - **验收**：跨设备身份、状态同步、授权安全和离线/断线行为有明确方案。
 
+## 服务管理
+
+### #40 `make start` 误杀 Codex 会话
+
+- **状态**：Done
+- **分组**：服务管理
+- **背景**：`make start` 会终止正在运行的 `pflow codex` 会话；预期只停止由该服务管理流程启动的 `pflow serve`。
+- **分析**：主因位于 `pflow serve` 启动路径：`CleanOrphanSessions` 会销毁所有未出现在 `~/.pflow/mappings.json` 的 `pflow-*` tmux 会话。Codex 的映射依赖启动后的异步会话 ID 捕获，但实际 rollout JSONL 的第一行会在 tmux 启动约 52–57 秒后才首次落盘；现有捕获仅等待 15 秒，必然留下无映射的正常 Codex 会话，进而被 `tmux kill-session` 终止。日志已记录多次 `orphan: destroyed pflow-pflow-codex`，并且按真实启动时间复核，rollout 在捕获超时后可被扫描器找到。此外，`Makefile` 的 PID 文件仅保存数字 PID，也存在服务退出后 PID 复用而误杀其他进程的独立风险。
+- **方案**：保留有价值的 tmux 孤儿清理，但改为基于完整生命周期信息判断：`pflow codex` 创建 tmux 会话时同步持久化一个待关联映射，以先声明该会话受 pflow 管理；后台持续重试关联 rollout，直到取得 Codex 会话 ID 后原子更新同一映射。`serve` 的清理逻辑只处理具备明确失效证据的已登记会话，映射缺失不能单独作为销毁依据，因而兼容旧版或异常启动留下的活跃会话。与此同时，将服务 PID 记录扩展为可验证的进程身份（PID 与 Linux 进程启动标识）；`stop` 与 `status` 身份不一致时仅清理陈旧记录，不操作该进程，并兼容旧 PID 文件的 `pflow serve` 命令核验。
+- **任务列表**：
+  - [x] 40.1 在 Codex tmux 创建时同步写入待关联映射；将 rollout 关联改为可持续重试，并在获得会话 ID 后更新映射。
+  - [x] 40.2 保持 `serve` 的 tmux 孤儿清理规则不变，并让待关联映射参与既有清理判定。
+  - [ ] 40.3 调整 `Makefile` 的服务身份记录、停止和状态检查逻辑，拒绝对身份不匹配的 PID 发信号。
+  - [ ] 40.4 增加可重复验证：rollout 延迟超过 15 秒时 Codex 映射最终仍可建立且 `make start` 不会终止会话；陈旧 PID 与非 `serve` 进程均不会被终止；正常 `serve` 仍可启动、查询和停止。
+- **验收**：
+  - [x] rollout 延迟落盘时，`pflow codex` 会先存在待关联映射，随后自动关联到正确的 Codex 会话 ID。
+  - [x] `pflow codex` 的映射缺失或捕获超时后，`make start` 不会终止其 tmux 会话、Codex 进程或外层客户端。
+  - [x] 正常 `pflow serve` 可被 `make stop` 停止，`make status` 只在身份一致时报告运行中。
+  - [x] `make start` 连续执行时只替换其管理的 `pflow serve` 实例。
+
 ## Agent 扩展
 
 ### #26 Codex 会话支持
@@ -101,6 +124,38 @@
   - [x] Codex 会话参与项目归类、提醒分数和军情哨，既有 Claude/Hermes 测试未回归。
   - [ ] 通过 `pflow codex` 创建的会话能在 Dashboard 中关联到 tmux/ttyd 终端，需运行时：在交互式终端执行设计文档中的手动验证；普通用户直接启动的 Codex 会话已通过只读发现验证。
   - [x] `GOTOOLCHAIN=local make vet`、`GOTOOLCHAIN=local make test` 和 `make build` 均通过。
+
+### #38 Codex 会话名称提取
+
+- **状态**：Done
+- **分组**：Agent 扩展
+- **背景**：Codex 会话名称当前显示 AGENTS 注入上下文，而非用户实际要处理的工作。
+- **分析**：现有解析器把第一条 `response_item` user 消息写入 `Name`。本机 rollout 另有 159 条 `event_msg` / `user_message`；它不含首次 `response_item` 中的 AGENTS 注入记录。`session_meta` 提供 cwd、git 分支、提交和来源，但没有独立会话标题；reasoning summary 也不是稳定标题。
+- **方案**：采用首个真实用户请求作为稳定的会话主题。解析 `event_msg` / `user_message` 生成名称，清理已知 AGENTS 注入、压缩空白并截断；`response_item` 继续仅用于最后请求摘要。缺失真实请求时回退为工作目录基名。
+- **任务列表**：
+  - [x] 38.1 确认名称语义：首个真实用户请求或最新用户请求。
+  - [x] 38.2 调整解析、补充注入上下文/多轮/缺失事件测试，并接入 CLI、Dashboard 与军情哨。
+- **验收**：
+  - [x] 首个 `event_msg` / `user_message` 稳定作为会话名称；AGENTS 注入片段会被剥离，后续回合不改名。
+  - [x] `user_message` 缺失时显示工作目录基名，空工作目录显示 `Codex session`。
+  - [x] `GOTOOLCHAIN=local make vet`、`GOTOOLCHAIN=local make test` 与 `GOTOOLCHAIN=local make build` 均通过。
+
+### #39 Codex 会话标题回退修复
+
+- **状态**：Done
+- **分组**：Agent 扩展
+- **背景**：Dashboard 中近期 Codex 会话多显示为工作目录基名，例如 `photo-agent`、`pflow`，无法帮助用户判断该会话实际在处理什么工作；个别会话还显示注入提示的开头。
+- **分析**：当前扫描器只用 `event_msg/user_message` 的首条记录生成稳定标题。实际 rollout 中，用户任务也会出现在 `response_item/message/user`，这一路已被解析为“最后请求”，却未参与标题生成；当首条记录是注入上下文或没有有效事件时，标题最终退回目录基名。目录名应仅作为没有任何可用任务文本时的最后兜底。
+- **方案**：标题固定为首条非注入的真实用户任务。扫描 `event_msg` 与 `response_item` 两类输入，统一过滤 AGENTS/运行环境注入；目录名只在两类记录都没有有效任务时使用。保留“最后请求”展示字段的现有语义，避免追问改变标题。增加包含注入上下文、仅 `response_item`、多轮请求、无任务文本的回归测试，并接入 CLI、Dashboard 与军情哨。
+- **任务列表**：
+  - [x] 39.1 调整标题候选提取和注入内容过滤，按记录顺序保留首条有效真实用户任务。
+  - [x] 39.2 覆盖回退、注入、多轮和跨输入记录的回归测试。
+  - [x] 39.3 验证 CLI、Dashboard 与军情哨使用同一标题。
+- **验收**：
+  - [x] 有可用用户任务文本的 Codex 会话不再显示目录名或注入提示作为标题。
+  - [x] 标题稳定保留首条有效用户任务；“最后请求”仍显示最新任务。
+  - [x] 无可用任务文本时仍安全回退为工作目录基名或 `Codex session`。
+  - [x] `GOTOOLCHAIN=local make vet`、`GOTOOLCHAIN=local make test` 与 `make build` 通过。
 
 ## 产品定位决策
 

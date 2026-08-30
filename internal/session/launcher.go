@@ -77,7 +77,10 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 	m.mu.Unlock()
 
 	// If tmux session already exists, check if it's orphaned (no clients attached)
-	// or actively in use by another terminal.
+	// or actively in use by another terminal. Existing sessions still go through
+	// asynchronous mapping capture so a restarted pflow codex can finish a
+	// mapping that was pending before the restart.
+	sessionExists := false
 	if tmuxSessionExists(name) {
 		if tmuxHasClients(name) {
 			return nil, fmt.Errorf(
@@ -86,34 +89,39 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 			)
 		}
 		// Orphaned session: reconnect without restarting the agent.
-		return &Session{
-			Name:    name,
-			WorkDir: absDir,
-		}, nil
-	}
-
-	// 1. Run agent-specific pre-launch hook.
-	if cfg.preLaunch != nil {
-		if err := cfg.preLaunch(); err != nil {
-			plogger.Warnf("launch: preLaunch hook failed for %s: %v", cfg.agentType, err)
-			// Non-fatal — don't block tmux+agent startup.
+		sessionExists = true
+		if cfg.agentType == "codex" {
+			m.registerPendingMapping(name, absDir, displayName)
 		}
 	}
 
-	// 2. Create tmux session with auto-destroy and Ctrl+Z protection.
-	//
-	// The shell command:
-	//   trap '' TSTP        — block Ctrl+Z (prevents suspending the agent)
-	//   <agent_command>     — start the agent
-	//   tmux kill-session   — auto-destroy the container when agent exits
-	//
-	// No separate send-keys step needed — the command runs as the
-	// tmux session's initial shell, not sent via send-keys.
-	shellCmd := fmt.Sprintf("trap '' TSTP; %s; tmux kill-session -t %s", cfg.command, name)
-	plogger.Debugf("launch: creating tmux session name=%s workDir=%s agent=%s", name, absDir, cfg.agentType)
-	create := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", absDir, shellCmd)
-	if out, err := create.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("tmux new-session failed: %w (output: %s)", err, string(out))
+	if !sessionExists {
+		// 1. Run agent-specific pre-launch hook.
+		if cfg.preLaunch != nil {
+			if err := cfg.preLaunch(); err != nil {
+				plogger.Warnf("launch: preLaunch hook failed for %s: %v", cfg.agentType, err)
+				// Non-fatal — don't block tmux+agent startup.
+			}
+		}
+
+		// 2. Create tmux session with auto-destroy and Ctrl+Z protection.
+		//
+		// The shell command:
+		//   trap '' TSTP        — block Ctrl+Z (prevents suspending the agent)
+		//   <agent_command>     — start the agent
+		//   tmux kill-session   — auto-destroy the container when agent exits
+		//
+		// No separate send-keys step needed — the command runs as the
+		// tmux session's initial shell, not sent via send-keys.
+		shellCmd := fmt.Sprintf("trap '' TSTP; %s; tmux kill-session -t %s", cfg.command, name)
+		plogger.Debugf("launch: creating tmux session name=%s workDir=%s agent=%s", name, absDir, cfg.agentType)
+		create := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", absDir, shellCmd)
+		if out, err := create.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("tmux new-session failed: %w (output: %s)", err, string(out))
+		}
+		if cfg.agentType == "codex" {
+			m.registerPendingMapping(name, absDir, displayName)
+		}
 	}
 
 	// 4. Launch async session ID capture in background.
@@ -126,7 +134,7 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 		absWorkDir := absDir
 		agentType := cfg.agentType
 		go func() {
-			plogger.Debugf("launch: async capture started for tmux=%s agent=%s (max 15s)", tmuxName, agentType)
+			plogger.Debugf("launch: async capture started for tmux=%s agent=%s", tmuxName, agentType)
 			start := time.Now()
 			sessionID, err := cfg.captureSessionID(tmuxName, 15*time.Second)
 			elapsed := time.Since(start)
@@ -161,6 +169,29 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 		Name:    name,
 		WorkDir: absDir,
 	}, nil
+}
+
+// registerPendingMapping records a managed Codex tmux session before its
+// rollout becomes visible. Codex may not write the rollout until the first
+// user request, so the mapping must exist while the session is idle.
+func (m *Manager) registerPendingMapping(tmuxName, workDir, agentName string) {
+	mm, err := newMappingManager()
+	if err != nil {
+		plogger.Warnf("mapping: cannot create pending Codex mapping for tmux=%s: %v", tmuxName, err)
+		return
+	}
+	now := time.Now()
+	if err := mm.addMapping(Mapping{
+		TmuxName:    tmuxName,
+		WorkDir:     workDir,
+		AgentType:   "codex",
+		AgentName:   agentName,
+		Status:      "pending",
+		CreatedAt:   now,
+		LastUpdated: now,
+	}); err != nil {
+		plogger.Warnf("mapping: cannot save pending Codex mapping for tmux=%s: %v", tmuxName, err)
+	}
 }
 
 // claudePrefixFromSessionID returns an 8-char prefix from a session ID, used

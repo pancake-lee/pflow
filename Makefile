@@ -53,7 +53,7 @@ install: build
 
 # ── 服务管理 ──────────────────────────────────────────────────────
 
-PID_DIR := .pids
+PID_DIR := .local/.pids
 LOG_DIR := logs
 
 ## start: build and start pflow serve in background
