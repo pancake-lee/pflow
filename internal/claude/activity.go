@@ -181,6 +181,13 @@ func readSessionMetas(claudeDir string) map[string]*SessionMeta {
 		if err := json.Unmarshal(data, &m); err != nil {
 			continue
 		}
+		// The same session resumed in a new process (claude -r) leaves
+		// multiple metadata files sharing one sessionId. Keep only the
+		// most recently updated one, so a stale "waiting" from an old
+		// process doesn't shadow the live session's state.
+		if prev, ok := result[m.SessionID]; ok && prev.UpdatedAt >= m.UpdatedAt {
+			continue
+		}
 		result[m.SessionID] = &m
 	}
 	return result
@@ -274,9 +281,9 @@ func aggregate(metas map[string]*SessionMeta, history []HistoryEntry) []SessionS
 			if m.CWD != "" {
 				ss.Project = m.CWD
 			}
-				if m.Name != "" {
-					ss.Name = m.Name
-				}
+			if m.Name != "" {
+				ss.Name = m.Name
+			}
 		}
 
 		// Merge history stats
@@ -319,9 +326,9 @@ func aggregate(metas map[string]*SessionMeta, history []HistoryEntry) []SessionS
 // transcriptInfo holds the last user request and assistant response extracted
 // from a Claude Code transcript file (~/.claude/projects/.../<session>.jsonl).
 type transcriptInfo struct {
-	lastReq     string // truncated (15 chars) for table display
-	lastResp    string // truncated (15 chars) for table display
-	lastReqFull string // full text for detail view
+	lastReq      string // truncated (15 chars) for table display
+	lastResp     string // truncated (15 chars) for table display
+	lastReqFull  string // full text for detail view
 	lastRespFull string // full text for detail view
 }
 

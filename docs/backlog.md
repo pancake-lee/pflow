@@ -18,6 +18,7 @@
 | Done | Agent 扩展 | 26 | Codex 会话支持 | — |
 | Done | Agent 扩展 | 38 | Codex 会话名称提取 | — |
 | Done | Agent 扩展 | 39 | Codex 会话标题回退修复 | — |
+| Done | Agent 扩展 | 41 | Claude 会话误报 waiting（同 sessionId 元数据覆盖） | — |
 | Done | 服务管理 | 40 | `make start` 误杀 Codex 会话 | — |
 
 > `v0.0.8` 已归档：#0–#18、#22、#27–#37，共 31 项，详见 [`archive/cycles/09-v0.0.8-dynamic-attention-guidance.md`](archive/cycles/09-v0.0.8-dynamic-attention-guidance.md)。
@@ -156,6 +157,17 @@
   - [x] 标题稳定保留首条有效用户任务；“最后请求”仍显示最新任务。
   - [x] 无可用任务文本时仍安全回退为工作目录基名或 `Codex session`。
   - [x] `GOTOOLCHAIN=local make vet`、`GOTOOLCHAIN=local make test` 与 `make build` 通过。
+
+### #41 Claude 会话误报 waiting（同 sessionId 元数据覆盖）
+
+- **状态**：Done
+- **分组**：Agent 扩展
+- **背景**：alanz-site 项目 session `20aa3620` 已完成对话、无等待操作，Dashboard 仍显示 waiting 且边框闪烁。
+- **分析**：该 session 昨天经 `claude -r` 恢复到新进程，老进程未退出且卡在 permission prompt，`~/.claude/sessions/` 下两个 PID 文件指向同一 sessionId。`readSessionMetas` 用 map 按 sessionId 直接覆盖，`os.ReadDir` 按文件名排序使旧文件（`944733.json`，waiting）后读并覆盖新文件（`1230917.json`，idle）。误报 waiting 同时污染了注意力评分的等待时长。已排查并排除"截取短 ID 撞车"假设：两个文件完整 UUID 逐字符相同，合并发生在完整 sessionId 层面。
+- **方案**：`readSessionMetas` 在 sessionId 冲突时保留 `updatedAt` 最新的元数据，避免遗留进程的过期状态遮蔽活跃会话；补充覆盖线上踩坑顺序（旧 waiting 后读）的单元测试。
+- **验收**：
+  - [x] 同 sessionId 双元数据（旧 waiting / 新 idle）时，扫描结果取 idle。
+  - [x] `gofmt`、`go vet`、`go test ./internal/...` 通过。
 
 ## 产品定位决策
 
