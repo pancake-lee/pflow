@@ -52,6 +52,7 @@ pflow/
 │   ├── timetrack/                  # 活跃时间估算（阶段四新增）
 │   │   ├── timetrack.go            # 三级降级链：tmux focus → 消息数 → wall-clock
 │   │   └── focus.go                # tmux 焦点事件日志读写
+│   ├── schedule/                   # 日程与模板：本地计划、执行记录、时间状态
 │   ├── suggest/                    # 军情哨分析引擎（阶段四新增）
 │   │   └── suggest.go              # ~20 个分析场景 + 知识锚点数据
 │   ├── session/                    # Tmux + ttyd 会话管理
@@ -220,6 +221,7 @@ Session 状态（waiting/busy/idle）
 | `~/.pflow/project_roots.json` | 项目根和 slot 映射 | `internal/project/` |
 | `~/.pflow/mappings.json` | tmux 与 Agent session 映射 | `internal/session/` |
 | `~/.pflow/focus.log` | tmux 焦点事件 | `internal/timetrack/` |
+| `~/.pflow/schedules.json` | 实际日程、模板和日程执行记录 | `internal/schedule/` |
 | `~/.claude/sessions/` | Claude 目录扫描元数据 | `internal/session/` |
 | `~/.claude/projects/` | Claude transcript | `internal/claude/` |
 | `~/.hermes/sessions/` | Hermes 活跃 session 和请求快照 | `internal/hermes/` |
@@ -271,7 +273,7 @@ Vue 3 + Naive UI 浏览器端面板。产出：`pflow serve` 单二进制部署�
 
 | 阶段 | 内容 |
 |------|------|
-| 阶段四后续 | 桌面通知、卡片动画、军情哨主动推送、偏好学习 |
+| 阶段四后续 | 日程与模板、桌面通知、卡片动画、军情哨主动推送、偏好学习 |
 | 阶段五：体验层 | TUI Dashboard、双层换肤系统、浏览器扩展监控、游戏化外壳、跨设备同步 |
 
 ## 4. MIT 协议合规
