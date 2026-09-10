@@ -59,7 +59,7 @@ pflow suggest
 
 | 层级 | 技术 |
 |------|------|
-| CLI 框架 | Cobra + Bubble Tea |
+| CLI 框架 | Go 标准库（手写子命令分发） |
 | Web Dashboard | Vue 3 + Naive UI（Go embed 单二进制部署） |
 | 后端 | Go（tmux 管理、状态扫描、session 映射） |
 | Agent 集成 | Claude Code（statusline + JSON 扫描）、Hermes（export 解析） |

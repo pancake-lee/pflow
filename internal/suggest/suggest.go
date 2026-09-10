@@ -117,62 +117,62 @@ func (k *KnowledgeTip) ToJSON() *KnowledgeTipJSON {
 // See docs/design/10-tips.md §4 for the full content reference.
 var allKnowledgeTips = []KnowledgeTip{
 	{
-		ID:    "kt_attention_residue",
-		Title: "注意力残留与认知惰性",
-		Theory: "从任务 A 切换到 B 时，注意力不会完全转移——仍有部分「残留」在 A 上。重启中断的任务，需额外消耗 30%-40% 的脑能量。",
-		Design: "主线保护期 15 分钟不推送干扰，正是为了尊重这一能耗规律。",
+		ID:     "kt_attention_residue",
+		Title:  "注意力残留与任务切换成本",
+		Theory: "从任务 A 切换到 B 时，注意力不会完全转移——仍有部分「残留」在 A 上，影响对新任务的投入（注意力残留，Leroy, 2009）。任务切换本身也伴随真实的认知成本（switch cost，Monsell, 2003）。",
+		Design: "主线切换后设 15 分钟保护期不推送干扰——给注意力留出「脱离旧任务、投入新任务」的过渡时间。",
 		RelatedScenarios: []string{
 			"scenario_001", "scenario_002", "scenario_003", "scenario_004", "scenario_012",
 		},
 	},
 	{
-		ID:    "kt_cognitive_offloading",
-		Title: "认知卸载的双面性",
-		Theory: "「替代性卸载」（AI 替你做判断）会导致能力退化；「互补性卸载」（AI 替你记忆，你做判断）才带来认知扩增。",
+		ID:     "kt_cognitive_offloading",
+		Title:  "认知卸载的双面性",
+		Theory: "「替代性卸载」（AI 替你做判断）可能让相关能力因缺少练习而退化；「互补性卸载」（AI 替你记忆，你做判断）则保留你的判断力（Risko & Gilbert, 2016）。",
 		Design: "pflow 只展示状态，永远不替你做「切不切」的决策——把判断留给你，把监控交给系统。",
 		RelatedScenarios: []string{
 			"scenario_008", "scenario_009", "scenario_015", "scenario_018",
 		},
 	},
 	{
-		ID:    "kt_metacognitive_bottleneck",
-		Title: "元认知监控的代价",
-		Theory: "大脑无法同时运行「当前任务」和「监控当前任务」——后者会占用近 50% 的执行控制资源。",
-		Design: "遮罩层和红绿灯把监控「外包」给视觉皮层——扫一眼就知道全局，不用费脑去记。",
+		ID:     "kt_metacognitive_bottleneck",
+		Title:  "元认知监控的代价",
+		Theory: "边工作边监控自己「有没有分心」几乎不可能——自我监控与任务本身争夺同一份有限的注意力（双任务干扰，Pashler, 1994）。",
+		Design: "遮罩层和红绿灯把「监控」变成一眼可读的视觉信号——扫一眼就知道全局，不必在脑内另开一条监控线程。",
 		RelatedScenarios: []string{
 			"scenario_010", "scenario_011", "scenario_006",
 		},
 	},
 	{
-		ID:    "kt_embodied_cognition",
-		Title: "物理环境即思维外挂",
-		Theory: "物理环境（屏幕布局、光标位置）是思维最强大的外挂支架——视觉皮层能以无意识速度处理环境线索。",
-		Design: "pflow 不内嵌终端，就是让你用「物理性切换窗口」的动作重置大脑上下文。",
+		ID:     "kt_embodied_cognition",
+		Title:  "物理环境即思维外挂",
+		Theory: "物理环境（屏幕布局、光标位置）是思维的「外挂」——把状态放在眼前，比记在脑里更省力（延展心智，Clark & Chalmers, 1998）。",
+		Design: "pflow 不内嵌终端，就是让你用「物理性切换窗口」的动作重置大脑上下文——用身体动作完成「上下文切换」。",
 		RelatedScenarios: []string{
 			"scenario_006", "scenario_007", "scenario_019",
 		},
 	},
 	{
-		ID:    "kt_interruption_recovery",
-		Title: "中断恢复的代价",
-		Theory: "被中断后，平均需要 23 分钟才能回到原有的深度工作状态。中断越频繁，有效深度工作时间越短。",
+		ID:     "kt_interruption_recovery",
+		Title:  "中断恢复的代价",
+		Theory: "被中断后，平均需要约 23 分钟才能回到原有的深度工作状态（Mark 等, 2008）。中断越频繁，有效深度工作时间越短。",
 		Design: "提醒分数用「幂函数放大」机制，避免多项目同时高亮——只有远超阈值的才推送通知。",
 		RelatedScenarios: []string{
 			"scenario_001", "scenario_002", "scenario_003", "scenario_004",
 		},
 	},
 	{
-		ID:    "kt_prediction_error",
-		Title: "预测误差与判断信心",
-		Theory: "自己思考得出答案时，大脑会产生奖励信号；AI 直接给出答案时，信号消失，长期会削弱判断信心。",
+		ID:     "kt_prediction_error",
+		Title:  "预测误差与判断信心",
+		Theory: "自己思考得出答案时，大脑会产生奖励信号；AI 直接给出答案时，这个信号不会产生。长期依赖现成答案，独立判断可能缺少锻炼。",
 		Design: "Agent 持续运行超 10 分钟时提醒「可能卡住，建议检查」——让你重新介入判断，保持异常监测敏感度。",
 		RelatedScenarios: []string{
 			"scenario_014",
 		},
 	},
 	{
-		ID:    "kt_primary_secondary_strategy",
-		Title: "为何强制设定 1 个主线",
+		ID:     "kt_primary_secondary_strategy",
+		Title:  "为何强制设定 1 个主线",
 		Theory: "工作记忆容量有限（约 4 个组块），超出容量的多线程管理本身就是认知负担。",
 		Design: "强制设定 1 主线 + 最多 2 支线，把「排序」决策前置化，避免工作过程中反复纠结优先级。",
 		RelatedScenarios: []string{
@@ -180,8 +180,8 @@ var allKnowledgeTips = []KnowledgeTip{
 		},
 	},
 	{
-		ID:    "kt_multitasking_illusion",
-		Title: "多任务只是快速切换的幻觉",
+		ID:     "kt_multitasking_illusion",
+		Title:  "多任务只是快速切换的幻觉",
 		Theory: "大脑本质上是串行处理器——所谓的「并行」只是极速切换的幻觉。每次切换都有能耗。",
 		Design: "红绿灯状态撕掉「并行」伪装：此刻只有一个 🟡 的会话在占用你的思考排队名额。",
 		RelatedScenarios: []string{
@@ -189,15 +189,15 @@ var allKnowledgeTips = []KnowledgeTip{
 		},
 	},
 	{
-		ID:    "kt_chunking",
-		Title: "组块化认知与零归类设计",
-		Theory: "长时记忆依靠「组块」压缩信息——把零散信息打包成有意义的单元，是大脑处理复杂信息的核心机制。",
-		Design: "「路径即项目」——用目录路径作为天然分组依据，避免手动维护分组的心力消耗。",
+		ID:               "kt_chunking",
+		Title:            "组块化认知与零归类设计",
+		Theory:           "长时记忆依靠「组块」压缩信息——把零散信息打包成有意义的单元，是大脑处理复杂信息的核心机制。",
+		Design:           "「路径即项目」——用目录路径作为天然分组依据，避免手动维护分组的心力消耗。",
 		RelatedScenarios: []string{},
 	},
 	{
-		ID:    "kt_positive_feedback",
-		Title: "正向反馈驱动持续专注",
+		ID:     "kt_positive_feedback",
+		Title:  "正向反馈驱动持续专注",
 		Theory: "多巴胺系统在获得正向反馈时被激活，能增强持续专注的动机。小胜利的记录比大目标更能维持日常动力。",
 		Design: "一切正常或高效完成时给出 ✅ / 🎉 级正向反馈——不是空话，是对大脑奖励机制的调用。",
 		RelatedScenarios: []string{
@@ -205,8 +205,8 @@ var allKnowledgeTips = []KnowledgeTip{
 		},
 	},
 	{
-		ID:    "kt_decision_fatigue",
-		Title: "决策疲劳与调度前置",
+		ID:     "kt_decision_fatigue",
+		Title:  "决策疲劳与调度前置",
 		Theory: "每做一个决策都消耗认知资源。决策次数累积后，后续决策质量会下降——这就是决策疲劳。",
 		Design: "把「切不切」的判断前置到策略设定阶段，执行阶段只需看状态、按计划行动，大幅减少执行中的决策次数。",
 		RelatedScenarios: []string{
@@ -214,10 +214,10 @@ var allKnowledgeTips = []KnowledgeTip{
 		},
 	},
 	{
-		ID:    "kt_offloading_boundary",
-		Title: "卸载的边界：保留不可让渡的阵地",
-		Theory: "价值观判断、审美选择、生死攸关的直觉——这些领域的卸载会导致不可逆的能力丧失。",
-		Design: "pflow 帮你「记住状态」，但永远不替你「做出选择」。你是统帅，兵权不可让渡。",
+		ID:               "kt_offloading_boundary",
+		Title:            "卸载的边界：保留不可让渡的阵地",
+		Theory:           "价值观判断、审美选择、生死攸关的直觉——这些领域一旦过度卸载，相关能力可能明显退化。卸载不是越彻底越好。",
+		Design:           "pflow 帮你「记住状态」，但永远不替你「做出选择」。你是统帅，兵权不可让渡。",
 		RelatedScenarios: []string{},
 	},
 }
@@ -997,7 +997,6 @@ func ComputeProjectSummaries(sessions []SessionInfo, now time.Time, focusLog *ti
 			IdleMinutes:  idleMin,
 		})
 	}
-
 
 	// Tier 1: override with tmux focus events if available.
 	// Focus log has higher precision than per-session message estimates.

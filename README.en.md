@@ -56,7 +56,7 @@ pflow suggest
 
 | Layer | Technology |
 |-------|------------|
-| CLI Framework | Cobra + Bubble Tea |
+| CLI Framework | Go standard library (hand-written subcommand dispatch) |
 | Web Dashboard | Vue 3 + Naive UI (Go embed single-binary deployment) |
 | Backend | Go (tmux management, state scanning, session mapping) |
 | Agent Integration | Claude Code (statusline + JSON scanning), Hermes (export parsing) |

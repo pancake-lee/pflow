@@ -39,6 +39,15 @@ AI 根据用户输入的触发词自动切换工作模式。评估、规划、�
 
 `docs/backlog.md` 是 Plan → Generate 的唯一交接载体，条目使用状态、背景、方案、分析和验收字段传递上下文。版本归档时，Done 条目的完整信息迁移到 `docs/archive/`，并从 backlog 的总览和详情中清除，只保留未完成条目。
 
+### 2.4 协作规则中央化（pancake 同步）
+
+CLAUDE.md、AGENTS.md 与 `docs/handbook/` 中跨项目通用的内容，以 harness marker（HTML 注释标记块）包裹，基准统一维护在 pancake 仓库 `30-Tools/harness/common/`。pancake 是唯一事实源：
+
+- 改公共规则：编辑 pancake 中的基准 → `bash 30-Tools/harness/sync.sh diff` 审阅 → `push` 同步到各项目
+- 项目内 marker 块禁止手改，`sync.sh check` 检测漂移
+- 项目专有内容（本项目的 `docs/reference.md`、eval-guide 的验证命令工具箱等）写在 marker 之外，保持独立
+- 适用项目与完整说明见 pancake 仓库 `30-Tools/harness/README.md`
+
 ## 3. 文档索引
 
 ### 流程与规范
