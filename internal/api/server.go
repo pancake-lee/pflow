@@ -133,6 +133,9 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	s.HandleFunc("GET /api/v1/schedules", s.handleGetSchedule)
 	s.HandleFunc("PUT /api/v1/schedules", s.handlePutSchedule)
 	s.HandleFunc("GET /api/v1/schedule-templates", s.handleGetTemplates)
+	s.HandleFunc("PUT /api/v1/schedule-templates", s.handlePutTemplate)
+	s.HandleFunc("DELETE /api/v1/schedule-templates", s.handleDeleteTemplate)
+	s.HandleFunc("POST /api/v1/schedules/action", s.handleScheduleAction)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -190,6 +193,112 @@ func (s *Server) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, f.Templates)
+}
+
+func (s *Server) handlePutTemplate(w http.ResponseWriter, r *http.Request) {
+	var template schedule.Template
+	if err := json.NewDecoder(r.Body).Decode(&template); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	if template.ID == "" {
+		template.ID = fmt.Sprintf("template-%d", time.Now().UnixNano())
+	}
+	if template.Name == "" {
+		writeJSON(w, 400, map[string]string{"error": "template name is required"})
+		return
+	}
+	f, err := s.scheduleMgr.Load()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	for index := range f.Templates {
+		if f.Templates[index].ID == template.ID {
+			f.Templates[index] = template
+			if err := s.scheduleMgr.Save(f); err != nil {
+				writeJSON(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, 200, template)
+			return
+		}
+	}
+	f.Templates = append(f.Templates, template)
+	if err := s.scheduleMgr.Save(f); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, template)
+}
+
+func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeJSON(w, 400, map[string]string{"error": "id is required"})
+		return
+	}
+	f, err := s.scheduleMgr.Load()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	filtered := f.Templates[:0]
+	for _, t := range f.Templates {
+		if t.ID != id {
+			filtered = append(filtered, t)
+		}
+	}
+	f.Templates = filtered
+	if err := s.scheduleMgr.Save(f); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Date   string `json:"date"`
+		ID     string `json:"id"`
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	if req.Action != "completed" && req.Action != "skipped" {
+		writeJSON(w, 400, map[string]string{"error": "action must be completed or skipped"})
+		return
+	}
+	f, err := s.scheduleMgr.Load()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	day, ok := f.Days[req.Date]
+	if !ok {
+		writeJSON(w, 404, map[string]string{"error": "schedule not found"})
+		return
+	}
+	found := false
+	for i := range day.Items {
+		if day.Items[i].ID == req.ID {
+			day.Items[i].Status = req.Action
+			day.Items[i].CompletedAt = time.Now()
+			found = true
+		}
+	}
+	if !found {
+		writeJSON(w, 404, map[string]string{"error": "item not found"})
+		return
+	}
+	f.Days[req.Date] = day
+	if err := s.scheduleMgr.Save(f); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, day)
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
