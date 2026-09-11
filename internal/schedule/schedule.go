@@ -164,6 +164,19 @@ func nextItem(items []Item, currentID string) *Item {
 	return nil
 }
 
+// Advance pins the item shown as "next" after fromID as the new current, so a
+// user complete/skip immediately promotes it regardless of wall time. When no
+// pending item remains it clears the pin and falls back to the free schedule.
+func Advance(day *Day, fromID string) (Item, *Item) {
+	next := nextItem(day.Items, fromID)
+	if next == nil {
+		day.CurrentID = ""
+		return Item{Title: "自由日程"}, nil
+	}
+	day.CurrentID = next.ID
+	return *next, nextItem(day.Items, next.ID)
+}
+
 func SetCurrent(day *Day, now time.Time) (Item, *Item) {
 	current, next := Current(*day, now)
 	if day.CurrentID == "" && current.ID != "" {

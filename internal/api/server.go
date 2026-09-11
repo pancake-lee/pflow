@@ -318,8 +318,7 @@ func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if day.CurrentID == req.ID {
-		day.CurrentID = ""
-		_, _ = schedule.SetCurrent(&day, time.Now())
+		_, _ = schedule.Advance(&day, req.ID)
 	}
 	if !found {
 		writeJSON(w, 404, map[string]string{"error": "item not found"})

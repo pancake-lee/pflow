@@ -6,6 +6,7 @@ import {
   zhCN,
   NConfigProvider,
   NMessageProvider,
+  NModal,
 } from 'naive-ui'
 import DashboardView from './views/DashboardView.vue'
 import DailyBootView from './views/DailyBootView.vue'
@@ -81,8 +82,19 @@ async function onBootSkip() {
       />
       <!-- Dashboard: show after boot check completes and boot is not needed -->
       <SettingsView v-else-if="showSettings" @close="showSettings = false" />
-      <ScheduleEditor v-else-if="showScheduleEditor" @close="showScheduleEditor = false" />
-      <DashboardView v-else-if="bootChecked" :initial-goal="todayGoal" @open-settings="showSettings = true" @open-schedule="showScheduleEditor = true" />
+      <template v-else-if="bootChecked">
+        <DashboardView :initial-goal="todayGoal" @open-settings="showSettings = true" @open-schedule="showScheduleEditor = true" />
+        <NModal
+          v-model:show="showScheduleEditor"
+          preset="card"
+          title="今日日程编辑"
+          :style="{ width: 'min(960px, calc(100vw - 32px))' }"
+          :mask-closable="false"
+          closable
+        >
+          <ScheduleEditor @close="showScheduleEditor = false" />
+        </NModal>
+      </template>
       <!-- Loading state while checking boot status -->
       <div v-else class="boot-loading" />
     </NMessageProvider>

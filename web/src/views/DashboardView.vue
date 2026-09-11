@@ -241,6 +241,46 @@ const maxActive = ref(0)
 const maxInactive = ref(1)
 const agentFilter = ref<AgentFilter>('all')
 const refreshInterval = ref<RefreshInterval>(30)
+const FILTER_PREFERENCES_KEY = 'pflow:dashboard-filters'
+const filterPreferencesLoaded = ref(false)
+
+type FilterPreferences = {
+  window?: string
+  maxActive?: number
+  maxInactive?: number
+  agentFilter?: AgentFilter
+  refreshInterval?: RefreshInterval
+}
+
+function loadFilterPreferences(): FilterPreferences {
+  try {
+    const raw = localStorage.getItem(FILTER_PREFERENCES_KEY)
+    if (!raw) return {}
+    const stored = JSON.parse(raw) as FilterPreferences
+    return {
+      window: windowOptions.some((option) => option.value === stored.window) ? stored.window : undefined,
+      maxActive: typeof stored.maxActive === 'number' && stored.maxActive >= 0 && stored.maxActive <= 10 ? stored.maxActive : undefined,
+      maxInactive: typeof stored.maxInactive === 'number' && stored.maxInactive >= 0 && stored.maxInactive <= 10 ? stored.maxInactive : undefined,
+      agentFilter: agentFilterOptions.some((option) => option.value === stored.agentFilter) ? stored.agentFilter : undefined,
+      refreshInterval: refreshOptions.some((option) => option.value === stored.refreshInterval) ? stored.refreshInterval : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function persistFilterPreferences() {
+  if (!filterPreferencesLoaded.value) return
+  try {
+    localStorage.setItem(FILTER_PREFERENCES_KEY, JSON.stringify({
+      window: selectedWindow.value,
+      maxActive: maxActive.value,
+      maxInactive: maxInactive.value,
+      agentFilter: agentFilter.value,
+      refreshInterval: refreshInterval.value,
+    }))
+  } catch { /* ignore unavailable browser storage */ }
+}
 
 const agentFilterOptions = [
   { label: 'All Agents', value: 'all' },
@@ -255,6 +295,8 @@ const refreshOptions = [
   { label: '30s', value: 30 },
   { label: '60s', value: 60 },
 ]
+
+watch([selectedWindow, maxActive, maxInactive, agentFilter, refreshInterval], persistFilterPreferences)
 
 // Detail drawer
 const showDetail = ref(false)
@@ -708,7 +750,16 @@ onMounted(async () => {
       if (settings.dashboard?.max_inactive !== undefined) maxInactive.value = settings.dashboard.max_inactive
       if (settings.dashboard?.refresh_seconds !== undefined) refreshInterval.value = settings.dashboard.refresh_seconds as RefreshInterval
     }
-  } finally { refresh() }
+  } finally {
+    const stored = loadFilterPreferences()
+    if (stored.window) selectedWindow.value = stored.window
+    if (stored.maxActive !== undefined) maxActive.value = stored.maxActive
+    if (stored.maxInactive !== undefined) maxInactive.value = stored.maxInactive
+    if (stored.agentFilter) agentFilter.value = stored.agentFilter
+    if (stored.refreshInterval !== undefined) refreshInterval.value = stored.refreshInterval
+    filterPreferencesLoaded.value = true
+    refresh()
+  }
 })
 usePolling(refresh, refreshInterval)
 
@@ -1016,7 +1067,7 @@ function rowProps(row: DashboardEntry) {
             </div>
 
             <!-- 🔔 行动建议与知识库 -->
-            <div class="zone-section suggestion-knowledge-row">
+            <div class="suggestion-knowledge-row">
               <SuggestCard :suggestions="suggestions" />
               <KnowledgeAnchor :suggestions="suggestions" />
             </div>
@@ -1234,7 +1285,13 @@ function rowProps(row: DashboardEntry) {
   min-height: 100vh;
 }
 
-.suggestion-knowledge-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; gap: 16px; }
+.suggestion-knowledge-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 16px;
+}
+.suggestion-knowledge-row > * { min-width: 0; }
 @media (max-width: 760px) { .suggestion-knowledge-row { grid-template-columns: 1fr; } }
 
 /* ── Header ─────────────────────────────────── */

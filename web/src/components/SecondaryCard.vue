@@ -237,57 +237,61 @@ function rowProps(row: DashboardEntry) {
     <!-- Header: slot title + dropdown + main session metadata inline -->
     <div class="card-header">
       <div class="card-header-content">
-        <!-- Slot title: 🚩 支线项目1 / 🚩 支线项目2 -->
-        <span class="slot-title">🚩 支线项目{{ index + 1 }}</span>
+        <div class="project-summary">
+          <!-- Slot title: 🚩 支线项目1 / 🚩 支线项目2 -->
+          <span class="slot-title">🚩 支线项目{{ index + 1 }}</span>
 
-        <!-- Project dropdown (replaces text, shows selected project) -->
-        <NSelect
-          size="tiny"
-          :value="selectedProject"
-          :options="projectOptions"
-          :disabled="disabled"
-          placeholder="Assign..."
-          clearable
-          style="width: 200px"
-          @update:value="onProjectSelect"
-        />
+          <!-- Project dropdown (replaces text, shows selected project) -->
+          <NSelect
+            size="tiny"
+            :value="selectedProject"
+            :options="projectOptions"
+            :disabled="disabled"
+            placeholder="Assign..."
+            clearable
+            style="width: 200px"
+            @update:value="onProjectSelect"
+          />
 
-        <span class="h-sep">|</span>
-        <NTooltip>
-          <template #trigger>
-            <span class="h-project-total">⏱ {{ formatMinutes(projectTotalMinutes) }}</span>
-          </template>
-          {{ projectTotalMinutes.toFixed(1) }} min today
-        </NTooltip>
-
-        <!-- Main session metadata (if available) -->
-        <template v-if="mainSession">
           <span class="h-sep">|</span>
-          <NIcon :size="14" :component="agentIcon(mainSession.agent_type)" />
-          <span class="h-agent">{{ mainSession.agent_type === 'claude' ? 'Claude' : mainSession.agent_type === 'codex' ? 'Codex' : 'Hermes' }}</span>
-          <code class="h-sid">{{ mainSession.session_id }}</code>
-          <NButton
-            size="tiny"
-            quaternary
-            :title="isMainStarred ? '取消星标' : starTooltip"
-            @click.stop="emit('starSession', mainSession.session_id)"
-          >
-            {{ isMainStarred ? '🌟' : '⭐' }}
-          </NButton>
-          <NButton
-            v-if="mainSession.has_terminal"
-            size="tiny"
-            quaternary
-            title="Open terminal"
-            @click.stop="emit('openTerminal', mainSession)"
-          >
-            🖥
-          </NButton>
-          <NTag :type="trafficColor(mainSession.traffic_light)" size="small" :bordered="false">
-            {{ mainSession.traffic_light }} {{ mainSession.status }}
-          </NTag>
+          <NTooltip>
+            <template #trigger>
+              <span class="h-project-total">⏱ {{ formatMinutes(projectTotalMinutes) }}</span>
+            </template>
+            {{ projectTotalMinutes.toFixed(1) }} min today
+          </NTooltip>
+        </div>
+
+        <!-- Main session metadata remains together after the time boundary. -->
+        <div v-if="mainSession" class="session-flow">
           <span class="h-time">last {{ formatSince(mainSession.last_active) }} | sum {{ formatMinutes(mainSession.today_minutes) }}</span>
-        </template>
+          <div class="session-meta">
+            <span class="h-sep">|</span>
+            <NIcon :size="14" :component="agentIcon(mainSession.agent_type)" />
+            <span class="h-agent">{{ mainSession.agent_type === 'claude' ? 'Claude' : mainSession.agent_type === 'codex' ? 'Codex' : 'Hermes' }}</span>
+            <code class="h-sid">{{ mainSession.session_id }}</code>
+            <NButton
+              size="tiny"
+              quaternary
+              :title="isMainStarred ? '取消星标' : starTooltip"
+              @click.stop="emit('starSession', mainSession.session_id)"
+            >
+              {{ isMainStarred ? '🌟' : '⭐' }}
+            </NButton>
+            <NButton
+              v-if="mainSession.has_terminal"
+              size="tiny"
+              quaternary
+              title="Open terminal"
+              @click.stop="emit('openTerminal', mainSession)"
+            >
+              🖥
+            </NButton>
+            <NTag :type="trafficColor(mainSession.traffic_light)" size="small" :bordered="false">
+              {{ mainSession.traffic_light }} {{ mainSession.status }}
+            </NTag>
+          </div>
+        </div>
         <!-- Focus controls -->
         <span class="h-sep">|</span>
         <NButton size="tiny" quaternary @click.stop="emit('focusExtend', group?.fullPath ?? '')" :loading="focusLoading">🎯 专注 +15min</NButton>
@@ -459,6 +463,14 @@ function rowProps(row: DashboardEntry) {
   flex-shrink: 0;
 }
 
+.project-summary {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
 .h-sep {
   color: var(--n-text-color-4);
   font-size: 11px;
@@ -489,6 +501,24 @@ function rowProps(row: DashboardEntry) {
 .h-time {
   font-size: 10px;
   color: var(--n-text-color-4);
+  white-space: nowrap;
+}
+
+.session-flow {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.session-meta {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 5px;
+  white-space: nowrap;
 }
 
 .h-focus-label {

@@ -193,9 +193,6 @@ watch(
 <style scoped>
 .knowledge-anchor {
   min-width: 0;
-  min-height: 180px;
-  max-height: 260px;
-  overflow-y: auto;
   background: rgba(15, 23, 42, 0.75);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -206,7 +203,7 @@ watch(
   flex-direction: column;
   gap: 8px;
   transition: background 0.3s, border-color 0.3s;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
 }
 
 .knowledge-anchor.is-hovered {

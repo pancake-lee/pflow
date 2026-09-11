@@ -38,7 +38,7 @@ defineProps<{
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 180px;
+  min-width: 0;
 }
 
 .suggest-header {
@@ -58,7 +58,6 @@ defineProps<{
   display: flex;
   flex-direction: column;
   gap: 6px;
-  overflow-y: auto;
 }
 
 .suggest-item {
