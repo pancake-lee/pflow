@@ -164,7 +164,17 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		f.Days[date] = day
 		_ = s.scheduleMgr.Save(f)
 	}
-	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "templates": f.Templates})
+	phase := "free"
+	if current.ID != "" {
+		phase = "focus"
+		var hour, minute int
+		_, _ = fmt.Sscanf(current.Start, "%d:%d", &hour, &minute)
+		started := time.Date(time.Now().Year(), time.Now().Month(), time.Now().Day(), hour, minute, 0, 0, time.Now().Location())
+		if time.Now().After(started.Add(time.Duration(current.FocusMinutes)*time.Minute)) && time.Now().Before(started.Add(time.Duration(current.FocusMinutes+current.BreakMinutes)*time.Minute)) {
+			phase = "break"
+		}
+	}
+	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "templates": f.Templates})
 }
 
 func (s *Server) handlePutSchedule(w http.ResponseWriter, r *http.Request) {
