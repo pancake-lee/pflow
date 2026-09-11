@@ -1,140 +1,153 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { NButton, NInput, NInputNumber, NSelect, useMessage } from 'naive-ui'
+import { computed, onMounted, ref } from 'vue'
+import { NAlert, NButton, NCheckbox, NInput, NInputNumber, NSelect, NTag, useMessage } from 'naive-ui'
 
-type Item = { id: string; start: string; title: string; focus_minutes: number; break_minutes: number; until_end?: boolean }
+type Item = { id: string; start: string; title: string; focus_minutes: number; break_minutes: number; until_end?: boolean; status?: 'completed' | 'skipped'; completed_at?: string }
 type Template = { id: string; name: string; items: Item[] }
+type SchedulePayload = { day: { date: string; items: Item[] }; templates: Template[] }
 
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; saved: [] }>()
 const message = useMessage()
-const date = ref(new Date().toISOString().slice(0, 10))
+const date = ref(today())
+const loadedDate = ref('')
 const items = ref<Item[]>([])
+const loadedItems = ref<Item[]>([])
 const templates = ref<Template[]>([])
+const selectedTemplateID = ref<string | null>(null)
 const templateName = ref('')
+const loading = ref(false)
 const saving = ref(false)
+const savingTemplate = ref(false)
+const deletingTemplateID = ref('')
+const saveConflict = ref(false)
+const error = ref('')
+let uidSeq = 0
 
-function newItem() {
-  items.value.push({ id: crypto.randomUUID(), start: '09:00', title: '新日程', focus_minutes: 50, break_minutes: 10 })
+function today() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
+function cloneItems(itemList: Item[]) { return itemList.map((item) => ({ ...item })) }
+function uid() { return `item-${Date.now()}-${uidSeq++}` }
+const dirty = computed(() => JSON.stringify(items.value) !== JSON.stringify(loadedItems.value))
+const selectedTemplate = computed(() => templates.value.find((template) => template.id === selectedTemplateID.value) ?? null)
 
-async function load() {
-  const response = await fetch(`/api/v1/schedules?date=${date.value}`)
-  if (!response.ok) {
-    message.error('读取日程失败')
-    return
-  }
-  const payload = await response.json()
-  items.value = payload.day.items
-  templates.value = payload.templates
+function startAfterLastItem() {
+  const last = items.value.at(-1)
+  if (!last || last.until_end) return '09:00'
+  const [hour, minute] = last.start.split(':').map(Number)
+  const total = Math.min(hour * 60 + minute + last.focus_minutes + last.break_minutes, 23 * 60 + 50)
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
 }
-
-async function save() {
-  saving.value = true
+function newItem() { items.value.push({ id: uid(), start: startAfterLastItem(), title: '', focus_minutes: 50, break_minutes: 10 }) }
+function sortItems() { items.value.sort((left, right) => left.start.localeCompare(right.start)) }
+function setUntilEnd(item: Item, enabled: boolean) {
+  item.until_end = enabled
+  if (enabled) { item.focus_minutes = 0; item.break_minutes = 0 } else { item.focus_minutes = 50; item.break_minutes = 10 }
+}
+async function readError(response: Response, fallback: string) {
+  try { return ((await response.json()) as { error?: string }).error || fallback } catch { return fallback }
+}
+async function load(targetDate = date.value) {
+  loading.value = true
+  error.value = ''
   try {
-    const response = await fetch('/api/v1/schedules', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date: date.value, items: items.value }),
-    })
-    if (!response.ok) throw new Error()
-    message.success('当日日程已保存')
-  } catch {
-    message.error('保存日程失败，请检查时间与内容')
-  } finally {
-    saving.value = false
-  }
+    const response = await fetch(`/api/v1/schedules?date=${encodeURIComponent(targetDate)}`)
+    if (!response.ok) throw new Error(await readError(response, '读取日程失败'))
+    const payload = await response.json() as SchedulePayload
+    date.value = targetDate
+    loadedDate.value = targetDate
+    items.value = cloneItems(payload.day.items)
+    loadedItems.value = cloneItems(payload.day.items)
+    templates.value = payload.templates
+    selectedTemplateID.value = null
+    saveConflict.value = false
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '读取日程失败'
+    date.value = loadedDate.value || date.value
+  } finally { loading.value = false }
 }
-
+async function changeDate() {
+  const targetDate = date.value
+  if (targetDate === loadedDate.value) return
+  if (dirty.value && !window.confirm('切换日期会放弃当前未保存的编辑，确定切换吗？')) { date.value = loadedDate.value; return }
+  await load(targetDate)
+}
+async function save(replaceRecorded = false) {
+  saving.value = true
+  error.value = ''
+  try {
+    const response = await fetch('/api/v1/schedules', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date: date.value, items: items.value, replace_recorded: replaceRecorded }) })
+    if (response.status === 409) { saveConflict.value = true; return }
+    if (!response.ok) throw new Error(await readError(response, '保存日程失败'))
+    const day = await response.json() as { items: Item[] }
+    items.value = cloneItems(day.items)
+    loadedItems.value = cloneItems(day.items)
+    saveConflict.value = false
+    message.success(`${date.value} 日程已保存`)
+    emit('saved')
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : '保存日程失败' } finally { saving.value = false }
+}
+function applyTemplate() {
+  if (!selectedTemplate.value) return
+  if (dirty.value && !window.confirm('应用模板会替换当前未保存的编辑，确定继续吗？')) return
+  items.value = cloneItems(selectedTemplate.value.items).map((item) => ({ ...item, id: uid(), status: undefined, completed_at: undefined }))
+  message.success(`已将“${selectedTemplate.value.name}”填入编辑器，保存后才会写入 ${date.value}`)
+}
 async function saveTemplate() {
   const name = templateName.value.trim()
-  if (!name) {
-    message.warning('请输入模板名称')
-    return
-  }
-  const response = await fetch('/api/v1/schedule-templates', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: crypto.randomUUID(), name, items: items.value }),
-  })
-  if (!response.ok) {
-    message.error('另存模板失败')
-    return
-  }
-  templateName.value = ''
-  message.success('模板已保存')
-  await load()
+  if (!name) { error.value = '请输入模板名称'; return }
+  savingTemplate.value = true
+  error.value = ''
+  try {
+    const response = await fetch('/api/v1/schedule-templates', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items: items.value }) })
+    if (!response.ok) throw new Error(await readError(response, '另存模板失败'))
+    const template = await response.json() as Template
+    templates.value = [...templates.value, template]
+    selectedTemplateID.value = template.id
+    templateName.value = ''
+    message.success('模板已保存，当前编辑不会被重置')
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : '另存模板失败' } finally { savingTemplate.value = false }
 }
-
-function applyTemplate(id: string) {
-  const template = templates.value.find((item) => item.id === id)
-  if (!template) return
-  items.value = structuredClone(template.items).map((item: Item) => ({ ...item, id: crypto.randomUUID() }))
-  message.success('模板已应用到未保存编辑内容')
+async function delTemplate(template: Template) {
+  if (!window.confirm(`删除模板“${template.name}”不会影响已保存日程，确定删除吗？`)) return
+  deletingTemplateID.value = template.id
+  error.value = ''
+  try {
+    const response = await fetch(`/api/v1/schedule-templates?id=${encodeURIComponent(template.id)}`, { method: 'DELETE' })
+    if (!response.ok) throw new Error(await readError(response, '删除模板失败'))
+    templates.value = templates.value.filter((item) => item.id !== template.id)
+    if (selectedTemplateID.value === template.id) selectedTemplateID.value = null
+    message.success('模板已删除')
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : '删除模板失败' } finally { deletingTemplateID.value = '' }
 }
-
-async function delTemplate(id: string) {
-  const response = await fetch(`/api/v1/schedule-templates?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-  if (!response.ok) {
-    message.error('删除模板失败')
-    return
-  }
-  message.success('模板已删除')
-  await load()
+function close() {
+  if (dirty.value && !window.confirm('关闭会放弃当前未保存的编辑，确定关闭吗？')) return
+  emit('close')
 }
-
 onMounted(() => void load())
 </script>
 
 <template>
-  <main class="editor">
-    <div class="editor-date">
-      <label for="schedule-date">日期</label>
-      <input id="schedule-date" v-model="date" type="date" @change="load" />
-    </div>
+  <main class="editor" :aria-busy="loading || saving">
+    <div class="editor-toolbar"><div><span class="eyebrow">日程编辑</span><h2>{{ date }}</h2></div><NTag v-if="dirty" type="warning" size="small">有未保存编辑</NTag><NTag v-else type="success" size="small">已保存</NTag></div>
+    <div class="date-row"><label for="schedule-date">编辑日期</label><input id="schedule-date" v-model="date" type="date" @change="changeDate" /><small>切换日期前会保护未保存编辑</small></div>
+    <NAlert v-if="error" type="error" closable @close="error = ''">{{ error }}</NAlert>
+    <NAlert v-if="saveConflict" type="warning">此次修改会替换或删除已完成/跳过的日程及其记录。<NButton size="small" type="warning" :loading="saving" @click="save(true)">确认替换记录并保存</NButton></NAlert>
 
-    <section v-for="(item, index) in items" :key="item.id" class="item">
-      <NInput v-model:value="item.start" aria-label="开始时间" placeholder="09:00" class="item-time" />
-      <NInput v-model:value="item.title" aria-label="日程内容" placeholder="日程内容" />
-      <NInputNumber v-model:value="item.focus_minutes" :min="1" aria-label="专注分钟" />
-      <span>分钟</span>
-      <NInputNumber v-model:value="item.break_minutes" :min="0" aria-label="休息分钟" />
-      <span>休息</span>
-      <NButton size="small" @click="items.splice(index, 1)">删除</NButton>
+    <section class="timeline" aria-label="日程时间轴"><div class="section-head"><div><h3>时间轴</h3><p>按开始时间排序。每项的休息时间属于该项，不能与下一项重叠。</p></div><div class="timeline-actions"><NButton @click="sortItems">按时间排序</NButton><NButton @click="newItem">添加日程项</NButton></div></div>
+      <div v-if="items.length === 0" class="empty-state">还没有日程项。可添加一项，或选择模板后应用。</div>
+      <article v-for="(item, index) in items" :key="item.id" class="item-card"><div class="item-order"><strong>{{ index + 1 }}</strong></div>
+        <div class="item-fields"><label>开始时间<input v-model="item.start" type="time" /></label><label class="item-title">内容<NInput v-model:value="item.title" placeholder="例如：撰写方案" /></label><label>专注分钟<NInputNumber v-model:value="item.focus_minutes" :min="1" :disabled="item.until_end" /></label><label>休息分钟<NInputNumber v-model:value="item.break_minutes" :min="0" :disabled="item.until_end" /></label><NCheckbox :checked="item.until_end" :disabled="index !== items.length - 1" @update:checked="setUntilEnd(item, $event)">持续至当天结束</NCheckbox></div>
+        <div class="item-actions"><NTag v-if="item.status" :type="item.status === 'completed' ? 'success' : 'warning'" size="small">{{ item.status === 'completed' ? '已完成记录' : '已跳过记录' }}</NTag><NButton size="small" tertiary type="error" @click="items.splice(index, 1)">删除</NButton></div></article>
     </section>
 
-    <div class="editor-actions">
-      <NButton @click="newItem">添加日程项</NButton>
-      <NButton type="primary" :loading="saving" @click="save">保存当日日程</NButton>
-    </div>
-
-    <section class="templates">
-      <h3>模板</h3>
-      <div class="template-actions">
-        <NSelect :options="templates.map((item) => ({ label: item.name, value: item.id }))" placeholder="应用模板" @update:value="applyTemplate" />
-        <NInput v-model:value="templateName" placeholder="模板名称" />
-        <NButton @click="saveTemplate">另存为模板</NButton>
-      </div>
-      <div v-for="template in templates" :key="template.id" class="template-row">
-        <span>{{ template.name }}</span>
-        <NButton size="tiny" @click="delTemplate(template.id)">删除模板</NButton>
-      </div>
-    </section>
-
-    <div class="editor-footer">
-      <NButton @click="emit('close')">关闭</NButton>
-    </div>
+    <section class="templates"><div class="section-head"><div><h3>模板</h3><p>模板只保存日程内容，不保存完成或跳过记录。</p></div></div><div class="template-apply"><NSelect v-model:value="selectedTemplateID" :options="templates.map((template) => ({ label: template.name, value: template.id }))" placeholder="选择一个模板" clearable /><NButton :disabled="!selectedTemplate" @click="applyTemplate">应用到编辑器</NButton></div><p v-if="selectedTemplate" class="template-preview">“{{ selectedTemplate.name }}”含 {{ selectedTemplate.items.length }} 项；应用后仍需保存 {{ date }} 日程。</p><div class="template-save"><NInput v-model:value="templateName" placeholder="将当前编辑另存为新模板" @keyup.enter="saveTemplate" /><NButton :loading="savingTemplate" @click="saveTemplate">另存为模板</NButton></div><div v-if="templates.length" class="template-list"><div v-for="template in templates" :key="template.id" class="template-row"><span>{{ template.name }} · {{ template.items.length }} 项</span><NButton size="tiny" tertiary type="error" :loading="deletingTemplateID === template.id" @click="delTemplate(template)">删除</NButton></div></div></section>
+    <footer class="editor-footer"><NButton @click="close">关闭</NButton><NButton type="primary" :loading="saving" @click="save()">保存 {{ date }} 日程</NButton></footer>
   </main>
 </template>
 
 <style scoped>
-.editor { display: flex; flex-direction: column; gap: 16px; }
-.editor-date, .item, .editor-actions, .template-actions, .template-row, .editor-footer { display: flex; gap: 10px; align-items: center; }
-.editor-date input { color-scheme: dark; }
-.item > :deep(.n-input), .item > :deep(.n-input-number), .template-actions > :deep(.n-select), .template-actions > :deep(.n-input) { flex: 1; min-width: 0; }
-.item-time { max-width: 100px; }
-.templates { padding-top: 12px; border-top: 1px solid var(--n-divider-color); }
-.templates h3 { margin: 0 0 10px; font-size: 14px; }
-.template-row { justify-content: space-between; margin-top: 8px; }
-.editor-footer { justify-content: flex-end; }
-@media (max-width: 760px) { .item, .template-actions { align-items: stretch; flex-direction: column; } .item-time { max-width: none; } }
+.editor { display: flex; flex-direction: column; gap: 20px; padding-bottom: 4px; }.editor-toolbar,.date-row,.section-head,.item-card,.item-fields,.item-actions,.template-apply,.template-save,.template-row,.editor-footer,.timeline-actions { display: flex; gap: 12px; align-items: center; }.editor-toolbar,.section-head,.editor-footer { justify-content: space-between; }.eyebrow { color: var(--n-text-color-3); font-size: 12px; }.editor-toolbar h2,.section-head h3 { margin: 2px 0 0; }.date-row { flex-wrap: wrap; }.date-row input,.item-fields input { color-scheme: dark; }.item-fields input { box-sizing: border-box; width: 100%; min-height: 34px; padding: 0 10px; color: var(--n-text-color-base); border: 1px solid var(--n-border-color); border-radius: var(--n-border-radius); background: var(--n-input-color); }.date-row small,.section-head p,.template-preview { margin: 0; color: var(--n-text-color-3); font-size: 12px; }.timeline,.templates { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--n-divider-color); }.item-card { align-items: stretch; padding: 12px; border: 1px solid var(--n-border-color); border-radius: 8px; }.item-order { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 26px; color: var(--n-text-color-3); }.item-fields { flex: 1; align-items: end; flex-wrap: wrap; }.item-fields label { display: flex; flex: 0 1 112px; flex-direction: column; gap: 5px; color: var(--n-text-color-3); font-size: 12px; }.item-fields .item-title { flex: 1 1 190px; }.item-fields :deep(.n-checkbox) { padding-bottom: 7px; }.item-actions { flex-direction: column; justify-content: center; align-items: flex-end; }.empty-state { padding: 18px; border: 1px dashed var(--n-border-color); border-radius: 8px; color: var(--n-text-color-3); text-align: center; }.template-apply > :deep(.n-select),.template-save > :deep(.n-input) { flex: 1; min-width: 0; }.template-list { display: flex; flex-direction: column; gap: 6px; }.template-row { justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--n-divider-color); }.editor-footer { position: sticky; bottom: 0; padding-top: 12px; background: var(--n-color-modal); }
+@media (max-width: 760px) { .item-card { flex-direction: column; }.item-order { flex-direction: row; justify-content: space-between; }.reorder-actions { flex-direction: row; }.item-fields { display: grid; grid-template-columns: 1fr 1fr; align-items: end; }.item-fields label,.item-fields .item-title { min-width: 0; }.item-title,.item-fields :deep(.n-checkbox) { grid-column: 1 / -1; }.item-actions { flex-direction: row; justify-content: space-between; align-items: center; }.template-apply,.template-save { align-items: stretch; flex-direction: column; } }
 </style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed } from 'vue'
-import { NButton } from 'naive-ui'
+import { NAlert, NButton, useMessage } from 'naive-ui'
 import { highlightToMarquee } from '../composables/useReminderScores'
 
 type Item = { id: string; start: string; title: string; focus_minutes: number; break_minutes: number; status?: string }
@@ -11,19 +11,28 @@ const next = ref<Item | null>(null)
 const phase = ref('free')
 const fog = ref(1)
 const reminder = ref(0)
+const breakRemainingMinutes = ref(0)
+const loadError = ref('')
 const emit = defineEmits<{ edit: [] }>()
+const message = useMessage()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 async function load() {
-  const response = await fetch('/api/v1/schedules')
-  if (!response.ok) return
-  const payload = await response.json()
-  day.value = payload.day.date
-  current.value = payload.current
-  next.value = payload.next
-  phase.value = payload.phase
-  fog.value = payload.fog
-  reminder.value = payload.reminder_score
+  try {
+    const response = await fetch('/api/v1/schedules')
+    if (!response.ok) throw new Error()
+    const payload = await response.json()
+    day.value = payload.day.date
+    current.value = payload.current
+    next.value = payload.next
+    phase.value = payload.phase
+    fog.value = payload.fog
+    reminder.value = payload.reminder_score
+    breakRemainingMinutes.value = payload.break_remaining_minutes ?? 0
+    loadError.value = ''
+  } catch {
+    loadError.value = '读取今日日程失败，操作暂不可用。'
+  }
 }
 
 async function act(action: 'completed' | 'skipped') {
@@ -33,7 +42,11 @@ async function act(action: 'completed' | 'skipped') {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ date: day.value, id: current.value.id, action }),
   })
-  if (response.ok) await load()
+  if (!response.ok) {
+    message.error('更新日程状态失败，请重试')
+    return
+  }
+  await load()
 }
 
 // Break drives the current card's orange marquee at full intensity.
@@ -74,8 +87,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section v-if="current" class="schedule">
+  <section v-if="current || loadError" class="schedule">
+    <NAlert v-if="loadError" type="error">{{ loadError }}</NAlert>
     <div
+      v-if="current"
       class="s-card s-card--current"
       :class="{ 's-card--break': phase === 'break' }"
       :style="currentStyle"
@@ -91,7 +106,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="s-body">
-        <span class="s-title">{{ phase === 'break' ? '☕ 休息中：' : '' }}{{ current.title }}</span>
+        <span class="s-title">{{ phase === 'break' ? `☕ 休息中（约 ${breakRemainingMinutes} 分钟）：` : '' }}{{ current.title }}</span>
         <small class="s-meta">{{ current.id ? `${current.start} · ${current.focus_minutes} 分钟` : '自由安排时间' }}</small>
       </div>
     </div>
@@ -164,7 +179,8 @@ onUnmounted(() => {
   opacity: var(--next-opacity, 1);
   transition: filter 0.5s ease, opacity 0.5s ease;
 }
-.s-card--next:hover .s-body {
+.s-card--next:hover .s-body,
+.s-card--next:focus-within .s-body {
   filter: blur(0);
   opacity: 1;
 }

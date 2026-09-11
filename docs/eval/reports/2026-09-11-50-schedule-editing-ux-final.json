@@ -1,0 +1,23 @@
+{
+  "report_id": "2026-09-11-50-schedule-editing-ux-final",
+  "backlog_id": "50",
+  "created_at": "2026-09-11T00:00:00Z",
+  "target": "日程编辑、模板、日期切换与 Dashboard 同步闭环修复",
+  "overall": 8.2,
+  "dimension_scores": {
+    "任务闭环与可恢复性": 8.5,
+    "表单交互与信息架构": 8.0,
+    "模板生命周期": 8.5,
+    "数据完整性": 8.5,
+    "Dashboard 状态与反馈": 8.0,
+    "布局、响应式与可访问性": 7.5,
+    "代码与自动化验证": 8.0
+  },
+  "findings_for_backlog": [],
+  "verification_runtime": [
+    "GOTOOLCHAIN=local make test PASS",
+    "GOTOOLCHAIN=local make vet PASS",
+    "cd web && pnpm build PASS",
+    "日程领域与 API 回归：记录保护、确认替换、模板执行状态清洗、时间重叠拒绝 PASS"
+  ]
+}

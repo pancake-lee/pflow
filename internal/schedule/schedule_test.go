@@ -1,6 +1,8 @@
 package schedule
 
 import (
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -102,5 +104,64 @@ func TestAdvanceFallsBackToFreeAfterLastItem(t *testing.T) {
 	}
 	if day.CurrentID != "" {
 		t.Fatalf("CurrentID=%s, want empty", day.CurrentID)
+	}
+}
+
+func TestPrepareDaySavePreservesUnchangedRecordAndRequiresReplacementConfirmation(t *testing.T) {
+	completedAt := time.Date(2026, 9, 11, 9, 50, 0, 0, time.UTC)
+	previous := Day{Date: "2026-09-11", CurrentID: "b", Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 50, Status: "completed", CompletedAt: completedAt},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 50},
+	}}
+	next := Day{Date: previous.Date, Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 50},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 50},
+	}}
+
+	prepared, err := PrepareDaySave(previous, next, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Items[0].Status != "completed" || !prepared.Items[0].CompletedAt.Equal(completedAt) {
+		t.Fatalf("record was not preserved: %+v", prepared.Items[0])
+	}
+	if prepared.CurrentID != "b" {
+		t.Fatalf("current ID=%q, want b", prepared.CurrentID)
+	}
+
+	next.Items[0].Title = "renamed"
+	_, err = PrepareDaySave(previous, next, false)
+	if !errors.Is(err, ErrRecordedItemsNeedConfirmation) {
+		t.Fatalf("error=%v, want replacement confirmation", err)
+	}
+	prepared, err = PrepareDaySave(previous, next, true)
+	if err != nil || prepared.Items[0].Status != "" {
+		t.Fatalf("confirmed replacement=%+v err=%v", prepared.Items[0], err)
+	}
+}
+
+func TestSaveSanitizesTemplateAndRejectsInvalidTimeline(t *testing.T) {
+	manager := NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	file := File{Days: map[string]Day{"2026-09-11": {Date: "2026-09-11", Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 50, BreakMinutes: 10},
+		{ID: "b", Start: "09:30", Title: "B", FocusMinutes: 50},
+	}}}}
+	if err := manager.Save(file); err == nil {
+		t.Fatal("overlapping timeline was accepted")
+	}
+
+	file.Days["2026-09-11"] = Day{Date: "2026-09-11", Items: []Item{{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 50}}}
+	file.Templates = []Template{{ID: "t", Name: "template", Items: []Item{{
+		ID: "a", Start: "09:00", Title: "A", FocusMinutes: 50, Status: "completed", CompletedAt: time.Now(),
+	}}}}
+	if err := manager.Save(file); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := manager.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Templates[0].Items[0].Status != "" || !loaded.Templates[0].Items[0].CompletedAt.IsZero() {
+		t.Fatalf("template retained execution data: %+v", loaded.Templates[0].Items[0])
 	}
 }

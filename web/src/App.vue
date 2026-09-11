@@ -102,7 +102,7 @@ async function onBootSkip() {
           :mask-closable="false"
           closable
         >
-          <ScheduleEditor @close="showScheduleEditor = false" />
+          <ScheduleEditor @close="showScheduleEditor = false" @saved="dashboardKey++" />
         </NModal>
       </template>
       <!-- Loading state while checking boot status -->

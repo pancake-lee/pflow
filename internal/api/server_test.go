@@ -1,8 +1,15 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pancake-lee/pflow/internal/schedule"
 )
 
 func TestComputeReminderScoresIncludesCodexSession(t *testing.T) {
@@ -21,5 +28,68 @@ func TestComputeReminderScoresIncludesCodexSession(t *testing.T) {
 	}
 	if score.Waiting != 8 {
 		t.Fatalf("waiting=%v, want 8", score.Waiting)
+	}
+}
+
+func TestPutScheduleRequiresConfirmationBeforeReplacingRecordedItem(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	completedAt := time.Date(2026, 9, 11, 9, 50, 0, 0, time.UTC)
+	file := schedule.File{Days: map[string]schedule.Day{"2026-09-11": {
+		Date:  "2026-09-11",
+		Items: []schedule.Item{{ID: "a", Start: "09:00", Title: "old", FocusMinutes: 50, Status: "completed", CompletedAt: completedAt}},
+	}}}
+	if err := server.scheduleMgr.Save(file); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := json.Marshal(map[string]any{"date": "2026-09-11", "items": []map[string]any{{
+		"id": "a", "start": "09:00", "title": "renamed", "focus_minutes": 50, "break_minutes": 0,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/schedules", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	server.handlePutSchedule(recorder, request)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want %d", recorder.Code, recorder.Body.String(), http.StatusConflict)
+	}
+
+	confirmedBody, err := json.Marshal(map[string]any{"date": "2026-09-11", "replace_recorded": true, "items": []map[string]any{{
+		"id": "a", "start": "09:00", "title": "renamed", "focus_minutes": 50, "break_minutes": 0,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPut, "/api/v1/schedules", bytes.NewReader(confirmedBody))
+	recorder = httptest.NewRecorder()
+	server.handlePutSchedule(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want %d", recorder.Code, recorder.Body.String(), http.StatusOK)
+	}
+}
+
+func TestPutTemplateReturnsSnapshotWithoutExecutionRecord(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	body, err := json.Marshal(map[string]any{"name": "weekday", "items": []map[string]any{{
+		"id": "a", "start": "09:00", "title": "plan", "focus_minutes": 50, "break_minutes": 10, "status": "completed",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/schedule-templates", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	server.handlePutTemplate(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response schedule.Template
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Items[0].Status != "" || !response.Items[0].CompletedAt.IsZero() {
+		t.Fatalf("template response retained execution data: %+v", response.Items[0])
 	}
 }

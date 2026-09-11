@@ -3,8 +3,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -165,6 +167,7 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		_ = s.scheduleMgr.Save(f)
 	}
 	phase := "free"
+	breakRemainingMinutes := 0
 	if current.ID != "" {
 		phase = "focus"
 		var hour, minute int
@@ -172,6 +175,8 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		started := time.Date(time.Now().Year(), time.Now().Month(), time.Now().Day(), hour, minute, 0, 0, time.Now().Location())
 		if time.Now().After(started.Add(time.Duration(current.FocusMinutes)*time.Minute)) && time.Now().Before(started.Add(time.Duration(current.FocusMinutes+current.BreakMinutes)*time.Minute)) {
 			phase = "break"
+			breakEnds := started.Add(time.Duration(current.FocusMinutes+current.BreakMinutes) * time.Minute)
+			breakRemainingMinutes = int(math.Ceil(time.Until(breakEnds).Minutes()))
 		}
 	}
 	reminder, fog := 0.0, 1.0
@@ -188,22 +193,36 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 		fog = 1 - reminder/100
 	}
-	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "reminder_score": reminder, "fog": fog, "templates": f.Templates})
+	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates})
 }
 
 func (s *Server) handlePutSchedule(w http.ResponseWriter, r *http.Request) {
-	var day schedule.Day
-	if err := json.NewDecoder(r.Body).Decode(&day); err != nil {
+	var request struct {
+		Date            string          `json:"date"`
+		Items           []schedule.Item `json:"items"`
+		ReplaceRecorded bool            `json:"replace_recorded"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	if _, err := time.Parse("2006-01-02", day.Date); err != nil {
+	if _, err := time.Parse("2006-01-02", request.Date); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "invalid date"})
 		return
 	}
 	f, err := s.scheduleMgr.Load()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	previous := f.Days[request.Date]
+	day, err := schedule.PrepareDaySave(previous, schedule.Day{Date: request.Date, Items: request.Items}, request.ReplaceRecorded)
+	if err != nil {
+		if errors.Is(err, schedule.ErrRecordedItemsNeedConfirmation) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "recorded_items_need_confirmation"})
+			return
+		}
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
 	f.Days[day.Date] = day
@@ -220,7 +239,7 @@ func (s *Server) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, f.Templates)
+	writeJSON(w, 200, schedule.CleanTemplateList(f.Templates))
 }
 
 func (s *Server) handlePutTemplate(w http.ResponseWriter, r *http.Request) {
@@ -232,10 +251,12 @@ func (s *Server) handlePutTemplate(w http.ResponseWriter, r *http.Request) {
 	if template.ID == "" {
 		template.ID = fmt.Sprintf("template-%d", time.Now().UnixNano())
 	}
+	template.Name = strings.TrimSpace(template.Name)
 	if template.Name == "" {
 		writeJSON(w, 400, map[string]string{"error": "template name is required"})
 		return
 	}
+	template = schedule.CleanTemplate(template)
 	f, err := s.scheduleMgr.Load()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
