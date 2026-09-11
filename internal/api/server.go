@@ -20,6 +20,7 @@ import (
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/hermes"
 	"github.com/pancake-lee/pflow/internal/project"
+	"github.com/pancake-lee/pflow/internal/schedule"
 	"github.com/pancake-lee/pflow/internal/session"
 	"github.com/pancake-lee/pflow/internal/settings"
 	"github.com/pancake-lee/pflow/internal/state"
@@ -88,6 +89,7 @@ type Server struct {
 	projectMgr  *project.Manager
 	stateMgr    *state.Manager
 	settingsMgr *settings.Manager
+	scheduleMgr *schedule.Manager
 }
 
 // NewServer creates a new API server with registered routes.
@@ -99,6 +101,7 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 		projectMgr:  project.NewManager(),
 		stateMgr:    state.NewManager(),
 		settingsMgr: settings.NewManager(),
+		scheduleMgr: schedule.NewManager(),
 	}
 	s.HandleFunc("/api/v1/dashboard", s.handleDashboard)
 
@@ -127,6 +130,9 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	s.HandleFunc("GET /api/v1/settings", s.handleGetSettings)
 	s.HandleFunc("PUT /api/v1/settings", s.handlePutSettings)
 	s.HandleFunc("POST /api/v1/settings/reset", s.handleResetSettings)
+	s.HandleFunc("GET /api/v1/schedules", s.handleGetSchedule)
+	s.HandleFunc("PUT /api/v1/schedules", s.handlePutSchedule)
+	s.HandleFunc("GET /api/v1/schedule-templates", s.handleGetTemplates)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -134,6 +140,56 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	}
 
 	return s
+}
+
+func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
+	f, err := s.scheduleMgr.Load()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+	day, ok := f.Days[date]
+	if !ok {
+		day = schedule.Day{Date: date, Items: []schedule.Item{}}
+	}
+	current, next := schedule.Current(day, time.Now())
+	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "templates": f.Templates})
+}
+
+func (s *Server) handlePutSchedule(w http.ResponseWriter, r *http.Request) {
+	var day schedule.Day
+	if err := json.NewDecoder(r.Body).Decode(&day); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := time.Parse("2006-01-02", day.Date); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid date"})
+		return
+	}
+	f, err := s.scheduleMgr.Load()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	f.Days[day.Date] = day
+	if err := s.scheduleMgr.Save(f); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, day)
+}
+
+func (s *Server) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
+	f, err := s.scheduleMgr.Load()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, f.Templates)
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
