@@ -21,6 +21,7 @@ const bootChecked = ref(false) // true once API check completes
 const todayGoal = ref('')
 const showSettings = ref(false)
 const showScheduleEditor = ref(false)
+const dashboardKey = ref(0) // bumped when settings are saved, so the dashboard re-reads them
 
 onMounted(async () => {
   try {
@@ -81,9 +82,18 @@ async function onBootSkip() {
         @skip="onBootSkip"
       />
       <!-- Dashboard: show after boot check completes and boot is not needed -->
-      <SettingsView v-else-if="showSettings" @close="showSettings = false" />
       <template v-else-if="bootChecked">
-        <DashboardView :initial-goal="todayGoal" @open-settings="showSettings = true" @open-schedule="showScheduleEditor = true" />
+        <DashboardView :key="dashboardKey" :initial-goal="todayGoal" @open-settings="showSettings = true" @open-schedule="showScheduleEditor = true" />
+        <NModal
+          v-model:show="showSettings"
+          preset="card"
+          title="设置"
+          :style="{ width: 'min(760px, calc(100vw - 32px))' }"
+          :mask-closable="false"
+          closable
+        >
+          <SettingsView @saved="dashboardKey++" />
+        </NModal>
         <NModal
           v-model:show="showScheduleEditor"
           preset="card"

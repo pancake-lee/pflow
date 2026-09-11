@@ -38,7 +38,7 @@ type File struct {
 }
 
 func Default() File {
-	return File{Version: Version, Dashboard: Dashboard{Window: "1d", MaxActive: 0, MaxInactive: 1, RefreshSeconds: 30, DailyBootEnabled: true}, Attention: Attention{ProtectMinutes: 5, FocusAddMinutes: 15, MaskStrength: 1}, TimeEstimate: TimeEstimate{MinutesPerMessage: 3, FallbackRatio: .3}}
+	return File{Version: Version, Dashboard: Dashboard{Window: "1d", MaxActive: 1, MaxInactive: 1, RefreshSeconds: 30, DailyBootEnabled: true}, Attention: Attention{ProtectMinutes: 5, FocusAddMinutes: 15, MaskStrength: 1}, TimeEstimate: TimeEstimate{MinutesPerMessage: 3, FallbackRatio: .3}}
 }
 
 type Manager struct {
@@ -76,10 +76,20 @@ func (m *Manager) loadLocked() (File, error) {
 		return File{}, fmt.Errorf("parse settings: %w", err)
 	}
 	merged := merge(defaults, stored)
+	normalizeMaxActive(&merged)
 	if err := validate(merged); err != nil {
 		return File{}, err
 	}
 	return merged, nil
+}
+
+// normalizeMaxActive coerces dashboard.max_active from 0 to 1. 0 used to mean
+// "no limit"; it now means "show none", which is not allowed for active
+// sessions, so legacy files and stale clients are normalized to the minimum.
+func normalizeMaxActive(value *File) {
+	if value.Dashboard.MaxActive == 0 {
+		value.Dashboard.MaxActive = 1
+	}
 }
 
 func merge(defaults, stored File) File {
@@ -125,8 +135,8 @@ func validate(value File) error {
 	if value.Dashboard.MaxInactive < 0 || value.Dashboard.MaxInactive > 10 {
 		return fmt.Errorf("dashboard.max_inactive must be between 0 and 10")
 	}
-	if value.Dashboard.MaxActive < 0 || value.Dashboard.MaxActive > 10 {
-		return fmt.Errorf("dashboard.max_active must be between 0 and 10")
+	if value.Dashboard.MaxActive < 1 || value.Dashboard.MaxActive > 10 {
+		return fmt.Errorf("dashboard.max_active must be between 1 and 10")
 	}
 	if value.Dashboard.RefreshSeconds != 0 && value.Dashboard.RefreshSeconds != 10 && value.Dashboard.RefreshSeconds != 30 && value.Dashboard.RefreshSeconds != 60 {
 		return fmt.Errorf("invalid dashboard.refresh_seconds")
@@ -153,6 +163,7 @@ func (m *Manager) Save(value File) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	value.Version = Version
+	normalizeMaxActive(&value)
 	if err := validate(value); err != nil {
 		return err
 	}

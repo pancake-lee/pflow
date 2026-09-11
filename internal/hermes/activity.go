@@ -802,15 +802,11 @@ func truncateRunes(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "..."
 }
 
-// applyHermesMaxInactive limits the number of inactive sessions per project.
-// Active sessions are always kept; inactive (completed, suspended) sessions are
-// limited to maxInactive per project (the most recent ones). If maxInactive is 0,
-// all sessions are kept.
+// applyHermesSessionLimits caps sessions per project: the active and inactive
+// lists are each truncated to their limit, keeping the most recent ones.
+// A limit of 0 hides that kind entirely; a negative limit
+// (config.NoSessionLimit) keeps all.
 func applyHermesSessionLimits(summaries []SessionSummary, maxActive, maxInactive int) []SessionSummary {
-	if maxActive <= 0 && maxInactive <= 0 {
-		return summaries
-	}
-
 	type group struct {
 		active   []SessionSummary
 		inactive []SessionSummary
@@ -838,7 +834,7 @@ func applyHermesSessionLimits(summaries []SessionSummary, maxActive, maxInactive
 	for _, proj := range projOrder {
 		g := groups[proj]
 		sort.Slice(g.active, func(i, j int) bool { return g.active[i].LastActive.After(g.active[j].LastActive) })
-		if maxActive > 0 && len(g.active) > maxActive {
+		if maxActive >= 0 && len(g.active) > maxActive {
 			g.active = g.active[:maxActive]
 		}
 		result = append(result, g.active...)
@@ -847,7 +843,7 @@ func applyHermesSessionLimits(summaries []SessionSummary, maxActive, maxInactive
 		sort.Slice(g.inactive, func(i, j int) bool {
 			return g.inactive[i].LastActive.After(g.inactive[j].LastActive)
 		})
-		if maxInactive > 0 && len(g.inactive) > maxInactive {
+		if maxInactive >= 0 && len(g.inactive) > maxInactive {
 			g.inactive = g.inactive[:maxInactive]
 		}
 		result = append(result, g.inactive...)

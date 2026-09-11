@@ -24,7 +24,7 @@ func TestScanDirAggregatesRollout(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(path, "rollout-test.jsonl"), []byte(data), 0644); err != nil {
 		t.Fatal(err)
 	}
-	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour}, time.Date(2026, 8, 27, 10, 30, 0, 0, time.UTC))
+	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit}, time.Date(2026, 8, 27, 10, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestScanDirIgnoresMalformedLineAndOldSession(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rollout-test.jsonl"), []byte(data), 0644); err != nil {
 		t.Fatal(err)
 	}
-	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour}, time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC))
+	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit}, time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestScanDirInfersBusyAndUnknown(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rollout-unknown.jsonl"), []byte(unknown), 0644); err != nil {
 		t.Fatal(err)
 	}
-	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour}, now)
+	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestScanDirUsesFirstRealUserMessageAsStableName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rollout-stable.jsonl"), []byte(data), 0644); err != nil {
 		t.Fatal(err)
 	}
-	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour}, time.Date(2026, 8, 27, 10, 30, 0, 0, time.UTC))
+	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit}, time.Date(2026, 8, 27, 10, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestScanDirFallsBackWhenUserInputIsOnlyInjectedContext(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rollout-fallback.jsonl"), []byte(data), 0644); err != nil {
 		t.Fatal(err)
 	}
-	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour}, time.Date(2026, 8, 27, 10, 30, 0, 0, time.UTC))
+	r, err := ScanDir(dir, config.ScanOptions{Window: time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit}, time.Date(2026, 8, 27, 10, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}

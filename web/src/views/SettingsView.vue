@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { NButton, NCard, NInput, NInputNumber, NSelect, NSwitch, NTabPane, NTabs, useMessage } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTabPane, NTabs, useMessage } from 'naive-ui'
 
 type Settings = {
   version: number
@@ -10,7 +10,7 @@ type Settings = {
 }
 type ProjectRoot = { path: string; priority: string; slot?: string }
 
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ saved: [] }>()
 const message = useMessage()
 const value = ref<Settings | null>(null)
 const roots = ref<ProjectRoot[]>([])
@@ -41,6 +41,7 @@ async function save() {
     if (!resp.ok) throw new Error(body.error || '保存失败')
     value.value = body as Settings
     message.success('已保存并立即生效')
+    emit('saved')
   } catch (error) { message.error(error instanceof Error ? error.message : '保存失败') } finally { saving.value = false }
 }
 
@@ -81,30 +82,29 @@ onMounted(load)
 </script>
 
 <template>
-  <main class="settings-page">
-    <header><NButton quaternary @click="emit('close')">← 返回 Dashboard</NButton><h1>设置</h1></header>
-    <NCard v-if="loading">正在加载设置…</NCard>
+  <main class="settings">
+    <p v-if="loading">正在加载设置…</p>
     <NTabs v-else-if="value" type="line" animated>
       <NTabPane name="dashboard" tab="通用与显示">
         <p>控制 Dashboard 的默认扫描范围、展示密度和自动刷新。</p>
         <label>扫描范围 <NSelect v-model:value="value.dashboard.window" :options="windowOptions" /></label>
-        <label>Active 会话上限（0 为不限）<NInputNumber v-model:value="value.dashboard.max_active" :min="0" :max="10" /></label>
-        <label>Inactive 会话上限（0 为不限）<NInputNumber v-model:value="value.dashboard.max_inactive" :min="0" :max="10" /></label>
+        <label>Active 会话上限<NInputNumber v-model:value="value.dashboard.max_active" :min="1" :max="10" /><small class="hint">每个项目最多展示的活跃会话数，至少保留 1 个。</small></label>
+        <label>Inactive 会话上限（0 为不展示）<NInputNumber v-model:value="value.dashboard.max_inactive" :min="0" :max="10" /></label>
         <label>自动刷新 <NSelect v-model:value="value.dashboard.refresh_seconds" :options="refreshOptions" /></label>
         <label class="switch">每日引导 <NSwitch v-model:value="value.dashboard.daily_boot_enabled" /></label>
         <NButton @click="reset('dashboard')">恢复本类默认值</NButton>
       </NTabPane>
       <NTabPane name="attention" tab="注意力与专注">
         <p>这些高级数值影响后续专注和提醒的感知方式。</p>
-        <label>保护时长（分钟）<NInputNumber v-model:value="value.attention.protect_minutes" :min="1" :max="120" /></label>
-        <label>每次专注增加（分钟）<NInputNumber v-model:value="value.attention.focus_add_minutes" :min="1" :max="120" /></label>
-        <label>遮罩强度 <NInputNumber v-model:value="value.attention.mask_strength" :min="0.25" :max="1.5" :step="0.05" /></label>
+        <label>保护时长（分钟）<NInputNumber v-model:value="value.attention.protect_minutes" :min="1" :max="120" /><small class="hint">未点击「专注」但仍在密集操作时，按该时长为当前项目提供保护，期间其他项目的提醒被压制。</small></label>
+        <label>每次专注增加（分钟）<NInputNumber v-model:value="value.attention.focus_add_minutes" :min="1" :max="120" /><small class="hint">在 Dashboard 每点一次「专注 +」，该项目的专注时长就延长这么多分钟。</small></label>
+        <label>遮罩强度 <NInputNumber v-model:value="value.attention.mask_strength" :min="0.25" :max="1.5" :step="0.05" /><small class="hint">迷雾遮罩的整体强度倍率，大于 1 更浓、小于 1 更淡，1 为算法的原始效果。</small></label>
         <NButton @click="reset('attention')">恢复本类默认值</NButton>
       </NTabPane>
       <NTabPane name="time" tab="时间估算">
-        <p>只影响估算展示与行动建议依据，不改写原始会话记录。</p>
-        <label>每条消息折算分钟 <NInputNumber v-model:value="value.time_estimate.minutes_per_message" :min="0.5" :max="30" :step="0.5" /></label>
-        <label>无消息保守估算比例 <NInputNumber v-model:value="value.time_estimate.fallback_ratio" :min="0.05" :max="1" :step="0.05" /></label>
+        <p>这两项是多层时间计算的兜底策略：优先使用 tmux 专注记录，取不到时才逐层降级到这里。只影响估算展示与行动建议依据，不改写原始会话记录。</p>
+        <label>每条消息折算分钟 <NInputNumber v-model:value="value.time_estimate.minutes_per_message" :min="0.5" :max="30" :step="0.5" /><small class="hint">第二层兜底：项目没有专注记录时，按消息条数 × 该值估算活跃时间。</small></label>
+        <label>无消息保守估算比例 <NInputNumber v-model:value="value.time_estimate.fallback_ratio" :min="0.05" :max="1" :step="0.05" /><small class="hint">最后一层兜底：连消息条数都取不到时，按会话在线时长 × 该比例估算，避免把整段挂机算成工作时间。</small></label>
         <NButton @click="reset('time_estimate')">恢复本类默认值</NButton>
       </NTabPane>
       <NTabPane name="projects" tab="项目管理">
@@ -118,8 +118,11 @@ onMounted(load)
 </template>
 
 <style scoped>
-.settings-page { max-width: 900px; margin: 0 auto; min-height: 100vh; padding: 28px; color: #e8e8ec; background: #1a1a1c; }
-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; } h1 { margin: 0; }
-label { display: grid; gap: 6px; max-width: 420px; margin: 18px 0; } .switch { display: flex; align-items: center; gap: 12px; }
-.project, .add-project { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #34343a; } .project code { flex: 1; } .add-project :deep(.n-input) { max-width: 460px; } footer { margin-top: 24px; }
+.settings { display: flex; flex-direction: column; gap: 16px; }
+.settings > p { margin: 0; }
+.settings :deep(.n-tab-pane) p { margin: 0 0 4px; opacity: 0.7; }
+label { display: grid; gap: 6px; max-width: 420px; margin: 18px 0 24px; } .switch { display: flex; align-items: center; gap: 12px; }
+.hint { font-size: 12px; line-height: 1.6; opacity: 0.65; }
+.project, .add-project { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--n-divider-color); } .project code { flex: 1; } .add-project :deep(.n-input) { max-width: 460px; }
+footer { display: flex; justify-content: flex-end; }
 </style>

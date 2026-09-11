@@ -420,15 +420,10 @@ func isProcessAlive(pid int) bool {
 	return err == nil
 }
 
-// applyMaxInactive limits the number of inactive sessions per project.
-// Active sessions are always kept; inactive (unknown) sessions are limited
-// to maxInactive per project (the most recent ones). If maxInactive is 0,
-// all sessions are kept.
+// applySessionLimits caps sessions per project: the active and inactive lists
+// are each truncated to their limit, keeping the most recent ones. A limit of
+// 0 hides that kind entirely; a negative limit (config.NoSessionLimit) keeps all.
 func applySessionLimits(summaries []SessionSummary, maxActive, maxInactive int) []SessionSummary {
-	if maxActive <= 0 && maxInactive <= 0 {
-		return summaries
-	}
-
 	// Group by project
 	type group struct {
 		active   []SessionSummary
@@ -454,7 +449,7 @@ func applySessionLimits(summaries []SessionSummary, maxActive, maxInactive int) 
 	for _, proj := range projOrder {
 		g := groups[proj]
 		sort.Slice(g.active, func(i, j int) bool { return g.active[i].LastActive.After(g.active[j].LastActive) })
-		if maxActive > 0 && len(g.active) > maxActive {
+		if maxActive >= 0 && len(g.active) > maxActive {
 			g.active = g.active[:maxActive]
 		}
 		result = append(result, g.active...)
@@ -463,7 +458,7 @@ func applySessionLimits(summaries []SessionSummary, maxActive, maxInactive int) 
 		sort.Slice(g.inactive, func(i, j int) bool {
 			return g.inactive[i].LastActive.After(g.inactive[j].LastActive)
 		})
-		if maxInactive > 0 && len(g.inactive) > maxInactive {
+		if maxInactive >= 0 && len(g.inactive) > maxInactive {
 			g.inactive = g.inactive[:maxInactive]
 		}
 		result = append(result, g.inactive...)

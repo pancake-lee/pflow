@@ -105,10 +105,10 @@ func ScanDir(root string, opts config.ScanOptions, now time.Time) (*ScanResult, 
 	return result, nil
 }
 
+// applySessionLimits caps sessions per project: the active and inactive lists
+// are each truncated to their limit. A limit of 0 hides that kind entirely;
+// a negative limit (config.NoSessionLimit) keeps all.
 func applySessionLimits(summaries []SessionSummary, maxActive, maxInactive int) []SessionSummary {
-	if maxActive <= 0 && maxInactive <= 0 {
-		return summaries
-	}
 	type group struct{ active, inactive []SessionSummary }
 	groups := map[string]*group{}
 	var order []string
@@ -126,10 +126,10 @@ func applySessionLimits(summaries []SessionSummary, maxActive, maxInactive int) 
 	var result []SessionSummary
 	for _, project := range order {
 		group := groups[project]
-		if maxActive > 0 && len(group.active) > maxActive {
+		if maxActive >= 0 && len(group.active) > maxActive {
 			group.active = group.active[:maxActive]
 		}
-		if maxInactive > 0 && len(group.inactive) > maxInactive {
+		if maxInactive >= 0 && len(group.inactive) > maxInactive {
 			group.inactive = group.inactive[:maxInactive]
 		}
 		result = append(result, group.active...)
@@ -255,7 +255,7 @@ func parseRollout(path string) (SessionSummary, []string) {
 // created or became active after start. Codex may persist session metadata
 // before the first request but delay the rollout file until that request.
 func FindSessionStartedAfter(workDir string, start time.Time) (string, error) {
-	result, err := Scan(config.ScanOptions{Window: 24 * time.Hour, MaxInactive: 0})
+	result, err := Scan(config.ScanOptions{Window: 24 * time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit})
 	if err != nil {
 		return "", err
 	}

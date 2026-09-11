@@ -237,7 +237,7 @@ const windowOptions = [
   { label: '7 days', value: '7d' },
 ]
 const selectedWindow = ref('1d')
-const maxActive = ref(0)
+const maxActive = ref(1)
 const maxInactive = ref(1)
 const agentFilter = ref<AgentFilter>('all')
 const refreshInterval = ref<RefreshInterval>(30)
@@ -259,7 +259,7 @@ function loadFilterPreferences(): FilterPreferences {
     const stored = JSON.parse(raw) as FilterPreferences
     return {
       window: windowOptions.some((option) => option.value === stored.window) ? stored.window : undefined,
-      maxActive: typeof stored.maxActive === 'number' && stored.maxActive >= 0 && stored.maxActive <= 10 ? stored.maxActive : undefined,
+      maxActive: typeof stored.maxActive === 'number' && stored.maxActive >= 1 && stored.maxActive <= 10 ? stored.maxActive : undefined,
       maxInactive: typeof stored.maxInactive === 'number' && stored.maxInactive >= 0 && stored.maxInactive <= 10 ? stored.maxInactive : undefined,
       agentFilter: agentFilterOptions.some((option) => option.value === stored.agentFilter) ? stored.agentFilter : undefined,
       refreshInterval: refreshOptions.some((option) => option.value === stored.refreshInterval) ? stored.refreshInterval : undefined,

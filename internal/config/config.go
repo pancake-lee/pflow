@@ -11,9 +11,14 @@ import (
 // DefaultWindow is the default time window for scanning agent activity.
 const DefaultWindow = 24 * time.Hour
 
-// DefaultMaxInactive is the default max number of inactive sessions to show per project.
-// 0 means no limit (show all).
-const DefaultMaxInactive = 0
+// NoSessionLimit disables per-project session limiting (show everything).
+// Use it for internal scans that must see all sessions (probe, suggest,
+// session lookup); 0 itself means "show none".
+const NoSessionLimit = -1
+
+// DefaultMaxInactive is the default max number of inactive sessions to show
+// per project. Mirrors the settings default; 0 would hide them all.
+const DefaultMaxInactive = 1
 
 // DefaultHermesSourceFilter is the default source filter for hermes sessions.
 // Excludes cron sessions by default; use empty string to show all.
@@ -26,11 +31,13 @@ type ScanOptions struct {
 	Window time.Duration
 
 	// MaxInactive limits how many inactive (unknown, completed, etc.) sessions
-	// are shown per project. Active sessions are always shown in full.
-	// 0 means no limit.
+	// are shown per project. 0 hides all inactive sessions;
+	// NoSessionLimit shows them all.
 	MaxInactive int
 
-	// MaxActive limits active sessions per project. 0 means no limit.
+	// MaxActive limits how many active sessions are shown per project.
+	// 0 hides all active sessions; NoSessionLimit shows them all.
+	// Persisted settings never use 0 for this field (see settings.normalizeMaxActive).
 	MaxActive int
 
 	// SourceFilter is a comma-separated list of source types to include.

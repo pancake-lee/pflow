@@ -111,7 +111,7 @@ Run 'pflow <command> -h' for detailed flags.`)
 func runStatusCmd(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	windowStr := fs.String("window", "1d", "Time window (e.g. 1h, 3h, 1d, 2d)")
-	maxInactive := fs.Int("max-inactive", 1, "Max inactive sessions per project (0=all)")
+	maxInactive := fs.Int("max-inactive", 1, "Max inactive sessions per project (0=hide inactive)")
 	source := fs.String("source", "", "Filter hermes sessions by source (comma-separated: cli,cron,weixin)")
 	fs.Parse(args)
 
@@ -128,7 +128,7 @@ func runStatus(window time.Duration, maxInactive int, source string) {
 	if source == "" {
 		source = config.DefaultHermesSourceFilter
 	}
-	opts := config.ScanOptions{Window: window, MaxInactive: maxInactive, SourceFilter: source}
+	opts := config.ScanOptions{Window: window, MaxActive: config.NoSessionLimit, MaxInactive: maxInactive, SourceFilter: source}
 
 	// Scan Claude Code sessions
 	claudeResult, claudeErr := claude.Scan(opts)
@@ -290,6 +290,8 @@ func runStatus(window time.Duration, maxInactive int, source string) {
 	fmt.Println("🟢 busy  🟡 waiting  ⚪ idle  ⚫ inactive")
 	if maxInactive > 0 {
 		fmt.Printf("(inactive limited to %d per project)\n", maxInactive)
+	} else if maxInactive == 0 {
+		fmt.Println("(inactive sessions hidden)")
 	}
 }
 
@@ -304,7 +306,7 @@ func runProbeCmd(args []string) {
 	sessionID := args[0]
 
 	// Scan both agents with a wide window to find the session
-	opts := config.ScanOptions{Window: 30 * 24 * time.Hour, MaxInactive: 0}
+	opts := config.ScanOptions{Window: 30 * 24 * time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit}
 
 	found := false
 
@@ -829,7 +831,7 @@ func runSuggestCmd(args []string) {
 	}
 
 	now := time.Now()
-	opts := config.ScanOptions{Window: window, MaxInactive: 0, SourceFilter: config.DefaultHermesSourceFilter}
+	opts := config.ScanOptions{Window: window, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit, SourceFilter: config.DefaultHermesSourceFilter}
 
 	// Scan both agent types
 	claudeResult, _ := claude.Scan(opts)
