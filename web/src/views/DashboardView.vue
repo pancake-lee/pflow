@@ -57,7 +57,7 @@ import { STAR_BONUS_MINUTES } from '../config/attention'
 const props = defineProps<{
   initialGoal?: string
 }>()
-const emit = defineEmits<{ openSettings: [] }>()
+const emit = defineEmits<{ openSettings: []; openSchedule: [] }>()
 
 // ── Daily goal ────────────────────────────────────────────────────
 
@@ -917,7 +917,7 @@ function rowProps(row: DashboardEntry) {
         />
 
         <!-- Filter bar -->
-        <SchedulePanel />
+        <SchedulePanel @edit="emit('openSchedule')" />
         <div class="filter-bar">
           <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
           <NSpace align="center" wrap>
