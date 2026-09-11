@@ -22,7 +22,7 @@ type FocusEvent struct {
 
 // FocusLog holds parsed focus events, grouped by project for fast lookup.
 type FocusLog struct {
-	Events   []FocusEvent
+	Events    []FocusEvent
 	ByProject map[string][]FocusEvent // project → events for that project
 }
 
@@ -31,6 +31,11 @@ const (
 	// focus segment to be counted. Shorter segments are treated as noise
 	// (e.g., accidental focus switches between terminals).
 	MinFocusSegmentSeconds = 10.0
+
+	// FocusResumeGrace is the largest unfocused interval that can be merged
+	// back into a project's active period. It avoids treating a brief switch to
+	// another application as a broken work session.
+	FocusResumeGrace = 5 * time.Minute
 )
 
 // ResolveProjects rebuilds the ByProject index using a mapping from tmux
@@ -164,6 +169,7 @@ func (fl *FocusLog) ProjectMinutes(projectPath string, todayStart, now time.Time
 
 	var totalSeconds float64
 	var segmentStart *time.Time
+	var lastOut *time.Time
 
 	for _, ev := range todayEvents {
 		switch ev.Action {
@@ -171,16 +177,33 @@ func (fl *FocusLog) ProjectMinutes(projectPath string, todayStart, now time.Time
 			if segmentStart == nil {
 				t := ev.Timestamp
 				segmentStart = &t
-			}
-		case "focus-out":
-			if segmentStart != nil {
-				dur := ev.Timestamp.Sub(*segmentStart).Seconds()
+				lastOut = nil
+			} else if lastOut != nil && ev.Timestamp.Sub(*lastOut) <= FocusResumeGrace {
+				// Keep the original segment start. The brief gap is part of the
+				// same project's continuous work period.
+				lastOut = nil
+			} else if lastOut != nil {
+				dur := lastOut.Sub(*segmentStart).Seconds()
 				if dur >= MinFocusSegmentSeconds {
 					totalSeconds += dur
 				}
-				segmentStart = nil
+				t := ev.Timestamp
+				segmentStart = &t
+				lastOut = nil
+			}
+		case "focus-out":
+			if segmentStart != nil && lastOut == nil {
+				t := ev.Timestamp
+				lastOut = &t
 			}
 		}
+	}
+	if segmentStart != nil && lastOut != nil {
+		dur := lastOut.Sub(*segmentStart).Seconds()
+		if dur >= MinFocusSegmentSeconds {
+			totalSeconds += dur
+		}
+		segmentStart = nil
 	}
 
 	// If last event was focus-in, close at now
