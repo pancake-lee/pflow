@@ -3,6 +3,7 @@ package codex
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,5 +144,73 @@ func TestProjectBaseName(t *testing.T) {
 	}
 	if got := projectBaseName(""); got != "Codex session" {
 		t.Fatalf("empty project name=%q", got)
+	}
+}
+
+// TestScanDirSkipsStaleRolloutByMtime verifies that rollouts whose last write
+// predates the window cutoff (with margin) are skipped without parsing: a
+// stale file with unparseable content must not produce diagnostics, while a
+// recently written one still must.
+func TestScanDirSkipsStaleRolloutByMtime(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "2026", "06", "16", "rollout-old.jsonl")
+	freshPath := filepath.Join(dir, "2026", "09", "10", "rollout-fresh.jsonl")
+	for _, path := range []string{oldPath, freshPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		// Unparseable content: parsing it would emit an "invalid JSONL" diagnostic.
+		if err := os.WriteFile(path, []byte("not json\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(oldPath, now.Add(-72*time.Hour), now.Add(-72*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(freshPath, now.Add(-30*time.Minute), now.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := ScanDir(dir, config.ScanOptions{Window: 24 * time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, diag := range r.Diagnostics {
+		if strings.Contains(diag, "rollout-old") {
+			t.Fatalf("stale rollout was parsed: %v", r.Diagnostics)
+		}
+	}
+	if len(r.Diagnostics) == 0 {
+		t.Fatal("fresh rollout was not parsed")
+	}
+}
+
+// TestScanDirCrossDaySessionStillScanned verifies that a long-running session
+// started days ago but written to recently is still scanned: the file lives
+// under an old date directory, so only its mtime keeps it eligible.
+func TestScanDirCrossDaySessionStillScanned(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "2026", "09", "09", "rollout-crossday.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{"timestamp":"2026-09-11T09:00:00Z","type":"session_meta","payload":{"session_id":"cross","cwd":"/work/pflow"}}
+{"timestamp":"2026-09-11T09:05:00Z","type":"event_msg","payload":{"type":"user_message","message":"still running"}}
+`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(path, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := ScanDir(dir, config.ScanOptions{Window: 24 * time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Sessions) != 1 || r.Sessions[0].SessionID != "cross" {
+		t.Fatalf("sessions=%+v", r.Sessions)
 	}
 }

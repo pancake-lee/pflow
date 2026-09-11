@@ -117,8 +117,12 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	return scanDir(cd, opts, time.Now())
+}
 
-	now := time.Now()
+// scanDir scans one Claude data root (the ~/.claude directory layout). It is
+// separate from Scan to make the aggregation flow testable against fixtures.
+func scanDir(cd string, opts config.ScanOptions, now time.Time) (*ScanResult, error) {
 	cutoff := now.Add(-opts.Window)
 
 	// Read session metadata files
@@ -133,8 +137,17 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 	// Aggregate by session ID
 	agg := aggregate(sessionMetas, historyEntries)
 
-	// Enrich with last request/response from transcript files
-	transcripts := readTranscripts(cd)
+	// Apply max-inactive filter per project
+	agg = applySessionLimits(agg, opts.MaxActive, opts.MaxInactive)
+
+	// Enrich kept sessions with last request/response from transcript files.
+	// Transcript files are named by session ID, so only files of sessions that
+	// survived aggregation and limits are parsed.
+	wantedIDMap := make(map[string]bool, len(agg))
+	for i := range agg {
+		wantedIDMap[agg[i].SessionID] = true
+	}
+	transcripts := readTranscripts(cd, wantedIDMap)
 	for i := range agg {
 		if t, ok := transcripts[agg[i].SessionID]; ok {
 			agg[i].LastReq = t.lastReq
@@ -143,9 +156,6 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 			agg[i].LastRespFull = t.lastRespFull
 		}
 	}
-
-	// Apply max-inactive filter per project
-	agg = applySessionLimits(agg, opts.MaxActive, opts.MaxInactive)
 
 	// Sort by last active time (most recent first)
 	sort.Slice(agg, func(i, j int) bool {
@@ -332,11 +342,14 @@ type transcriptInfo struct {
 	lastRespFull string // full text for detail view
 }
 
-// readTranscripts scans ~/.claude/projects/ for transcript files and extracts
-// the last user message and last assistant text response for each session.
-func readTranscripts(claudeDir string) map[string]*transcriptInfo {
+// readTranscripts scans ~/.claude/projects/ for transcript files of the wanted
+// sessions and extracts the last user message and last assistant text response
+// for each. Files whose name is not a wanted session ID are skipped without
+// reading; a wanted session without a transcript file is simply absent from
+// the result.
+func readTranscripts(claudeDir string, wantedIDMap map[string]bool) map[string]*transcriptInfo {
 	dir := filepath.Join(claudeDir, "projects")
-	result := make(map[string]*transcriptInfo)
+	result := make(map[string]*transcriptInfo, len(wantedIDMap))
 
 	// Walk ~/.claude/projects/ — structure is: projects/<project-name>/<session-id>.jsonl
 	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -348,7 +361,7 @@ func readTranscripts(claudeDir string) map[string]*transcriptInfo {
 		}
 		// Session ID is the filename without .jsonl
 		sessionID := strings.TrimSuffix(d.Name(), ".jsonl")
-		if sessionID == "" {
+		if sessionID == "" || !wantedIDMap[sessionID] {
 			return nil
 		}
 

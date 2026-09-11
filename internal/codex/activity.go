@@ -55,6 +55,12 @@ type ScanResult struct {
 	Diagnostics  []string
 }
 
+// rolloutMtimeMargin is the safety margin subtracted from the scan cutoff
+// when prefiltering rollout files by modification time. Events are appended
+// to a rollout within moments of occurring, so a file untouched since
+// cutoff - margin cannot hold in-window activity.
+const rolloutMtimeMargin = time.Hour
+
 // Scan reads ~/.codex/sessions. Missing directories are treated as no sessions.
 func Scan(opts config.ScanOptions) (*ScanResult, error) {
 	home, err := os.UserHomeDir()
@@ -75,6 +81,10 @@ func ScanDir(root string, opts config.ScanOptions, now time.Time) (*ScanResult, 
 		return nil, fmt.Errorf("read sessions directory: %w", err)
 	}
 	_ = entries // ReadDir verifies the root before WalkDir.
+	// Rollouts not written since the cutoff (minus a safety margin for skew
+	// between in-file event timestamps and disk write time) cannot contain
+	// in-window events, so they are skipped without line-by-line parsing.
+	skipBefore := result.Cutoff.Add(-rolloutMtimeMargin)
 	byID := make(map[string]SessionSummary)
 	err = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -82,6 +92,9 @@ func ScanDir(root string, opts config.ScanOptions, now time.Time) (*ScanResult, 
 			return nil
 		}
 		if d.IsDir() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		if info, infoErr := d.Info(); infoErr == nil && info.ModTime().Before(skipBefore) {
 			return nil
 		}
 		s, diags := parseRollout(path)
