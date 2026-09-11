@@ -46,6 +46,7 @@ import PrimaryCard from '../components/PrimaryCard.vue'
 import SecondaryCard from '../components/SecondaryCard.vue'
 import SuggestCard from '../components/SuggestCard.vue'
 import KnowledgeAnchor from '../components/KnowledgeAnchor.vue'
+import SchedulePanel from '../components/SchedulePanel.vue'
 import type { SessionGroup } from '../components/GroupCard.vue'
 import type { ReminderScoreInfo } from '../types/dashboard'
 import { FOCUS_CONFIG } from '../composables/useReminderScores'
@@ -916,6 +917,7 @@ function rowProps(row: DashboardEntry) {
         />
 
         <!-- Filter bar -->
+        <SchedulePanel />
         <div class="filter-bar">
           <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
           <NSpace align="center" wrap>
