@@ -1,4 +1,4 @@
-// Package suggest implements the "军情哨" analysis engine for pflow.
+// Package suggest implements the action-suggestion analysis engine for pflow.
 // It evaluates ~20 scenarios (core + long-tail) based on session states,
 // project priorities, activity metrics, and time-of-day heuristics to
 // produce actionable suggestions for the user.

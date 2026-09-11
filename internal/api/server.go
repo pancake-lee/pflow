@@ -506,7 +506,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Compute reminder scores per project.
 	resp.ReminderScores = computeReminderScores(resp.Sessions, rootsFile, resp.Now, focusLog, settingsValue.Attention.ProtectMinutes)
 
-	// Generate suggest analysis (军情哨)
+	// Generate action suggestions.
 	resp.Suggestions = generateSuggestions(claudeResult, hermesResult, codexResult, mappings, rootsFile, resp.Now, focusLog)
 
 	// Include focus state
