@@ -159,7 +159,11 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		day = schedule.Day{Date: date, Items: []schedule.Item{}}
 	}
-	current, next := schedule.Current(day, time.Now())
+	current, next := schedule.SetCurrent(&day, time.Now())
+	if ok && f.Days[date].CurrentID != day.CurrentID {
+		f.Days[date] = day
+		_ = s.scheduleMgr.Save(f)
+	}
 	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "templates": f.Templates})
 }
 
@@ -288,6 +292,10 @@ func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
 			day.Items[i].CompletedAt = time.Now()
 			found = true
 		}
+	}
+	if day.CurrentID == req.ID {
+		day.CurrentID = ""
+		_, _ = schedule.SetCurrent(&day, time.Now())
 	}
 	if !found {
 		writeJSON(w, 404, map[string]string{"error": "item not found"})

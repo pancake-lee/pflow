@@ -23,8 +23,9 @@ type Item struct {
 	CompletedAt  time.Time `json:"completed_at,omitempty"`
 }
 type Day struct {
-	Date  string `json:"date"`
-	Items []Item `json:"items"`
+	Date      string `json:"date"`
+	Items     []Item `json:"items"`
+	CurrentID string `json:"current_id,omitempty"`
 }
 type Template struct {
 	ID    string `json:"id"`
@@ -117,15 +118,56 @@ func Current(day Day, now time.Time) (Item, *Item) {
 	}
 	sort.Slice(day.Items, func(i, j int) bool { return day.Items[i].Start < day.Items[j].Start })
 	current := free
-	for i := range day.Items {
-		item := day.Items[i]
-		if item.Status == "" {
-			current = item
-			if i+1 < len(day.Items) {
-				return current, &day.Items[i+1]
+	if day.CurrentID != "" {
+		for _, item := range day.Items {
+			if item.ID == day.CurrentID && item.Status == "" {
+				current = item
+				break
 			}
-			return current, nil
+		}
+		if current.ID != "" {
+			return current, nextItem(day.Items, current.ID)
+		}
+	}
+	// First display is located by wall time, then the API persists CurrentID so
+	// future time passing never advances the schedule without user action.
+	minute := now.Hour()*60 + now.Minute()
+	for _, item := range day.Items {
+		var hour, min int
+		_, _ = fmt.Sscanf(item.Start, "%d:%d", &hour, &min)
+		if item.Status == "" && hour*60+min <= minute {
+			current = item
+		}
+	}
+	if current.ID != "" {
+		return current, nextItem(day.Items, current.ID)
+	}
+	for _, item := range day.Items {
+		if item.Status == "" {
+			return free, &item
 		}
 	}
 	return free, nil
+}
+
+func nextItem(items []Item, currentID string) *Item {
+	found := false
+	for _, item := range items {
+		if found && item.Status == "" {
+			candidate := item
+			return &candidate
+		}
+		if item.ID == currentID {
+			found = true
+		}
+	}
+	return nil
+}
+
+func SetCurrent(day *Day, now time.Time) (Item, *Item) {
+	current, next := Current(*day, now)
+	if day.CurrentID == "" && current.ID != "" {
+		day.CurrentID = current.ID
+	}
+	return current, next
 }
