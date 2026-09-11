@@ -21,6 +21,7 @@ import (
 	"github.com/pancake-lee/pflow/internal/hermes"
 	"github.com/pancake-lee/pflow/internal/project"
 	"github.com/pancake-lee/pflow/internal/session"
+	"github.com/pancake-lee/pflow/internal/settings"
 	"github.com/pancake-lee/pflow/internal/state"
 	"github.com/pancake-lee/pflow/internal/suggest"
 	"github.com/pancake-lee/pflow/internal/timetrack"
@@ -82,20 +83,22 @@ type DashboardResponse struct {
 // Server is the pflow HTTP API server.
 type Server struct {
 	http.ServeMux
-	staticFS   fs.FS // optional embedded static files (web/dist)
-	sessionMgr *session.Manager
-	projectMgr *project.Manager
-	stateMgr   *state.Manager
+	staticFS    fs.FS // optional embedded static files (web/dist)
+	sessionMgr  *session.Manager
+	projectMgr  *project.Manager
+	stateMgr    *state.Manager
+	settingsMgr *settings.Manager
 }
 
 // NewServer creates a new API server with registered routes.
 // If staticFS is non-nil, static files (the Vue SPA) are served from it.
 func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	s := &Server{
-		staticFS:   staticFS,
-		sessionMgr: sessionMgr,
-		projectMgr: project.NewManager(),
-		stateMgr:   state.NewManager(),
+		staticFS:    staticFS,
+		sessionMgr:  sessionMgr,
+		projectMgr:  project.NewManager(),
+		stateMgr:    state.NewManager(),
+		settingsMgr: settings.NewManager(),
 	}
 	s.HandleFunc("/api/v1/dashboard", s.handleDashboard)
 
@@ -121,6 +124,9 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	// Daily boot endpoints
 	s.HandleFunc("GET /api/v1/daily-boot", s.handleGetDailyBoot)
 	s.HandleFunc("POST /api/v1/daily-boot", s.handlePostDailyBoot)
+	s.HandleFunc("GET /api/v1/settings", s.handleGetSettings)
+	s.HandleFunc("PUT /api/v1/settings", s.handlePutSettings)
+	s.HandleFunc("POST /api/v1/settings/reset", s.handleResetSettings)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -128,6 +134,45 @@ func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
 	}
 
 	return s
+}
+
+func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	value, err := s.settingsMgr.Load()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
+	var value settings.File
+	if err := json.NewDecoder(r.Body).Decode(&value); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid settings: " + err.Error()})
+		return
+	}
+	updated, err := s.settingsMgr.Update(value)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleResetSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Section string `json:"section"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid reset request: " + err.Error()})
+		return
+	}
+	updated, err := s.settingsMgr.Reset(req.Section)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // spaHandler serves static files from an embedded filesystem with
@@ -170,7 +215,12 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := parseQueryParams(r)
+	settingsValue, settingsErr := s.settingsMgr.Load()
+	if settingsErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": settingsErr.Error()})
+		return
+	}
+	opts := parseQueryParams(r, settingsValue)
 
 	// Load project roots
 	rootsFile, rootsErr := s.projectMgr.Load()
@@ -472,13 +522,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseQueryParams extracts ScanOptions from query parameters.
-func parseQueryParams(r *http.Request) config.ScanOptions {
+func parseQueryParams(r *http.Request, settingsValue settings.File) config.ScanOptions {
 	q := r.URL.Query()
 
 	opts := config.ScanOptions{
 		Window:       config.DefaultWindow,
-		MaxInactive:  config.DefaultMaxInactive,
+		MaxInactive:  settingsValue.Dashboard.MaxInactive,
 		SourceFilter: config.DefaultHermesSourceFilter,
+	}
+	if duration, err := config.ParseWindow(settingsValue.Dashboard.Window); err == nil {
+		opts.Window = duration
 	}
 
 	if w := q.Get("window"); w != "" {

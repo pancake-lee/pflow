@@ -28,7 +28,6 @@ import {
   RefreshOutline,
   HardwareChipOutline,
   SettingsOutline,
-  TrashOutline,
 } from '@vicons/ionicons5'
 import type { DataTableColumns } from 'naive-ui'
 import type {
@@ -57,6 +56,7 @@ import { STAR_BONUS_MINUTES } from '../config/attention'
 const props = defineProps<{
   initialGoal?: string
 }>()
+const emit = defineEmits<{ openSettings: [] }>()
 
 // ── Daily goal ────────────────────────────────────────────────────
 
@@ -692,61 +692,6 @@ async function startTerminal() {
   }
 }
 
-// ── Project management modal ────────────────────────────────────
-
-const showProjectMgmt = ref(false)
-const forgetLoading = ref<Record<string, boolean>>({})
-
-function openProjectMgmt() {
-  showProjectMgmt.value = true
-}
-
-async function forgetProject(path: string) {
-  forgetLoading.value = { ...forgetLoading.value, [path]: true }
-  try {
-    const resp = await fetch(`/api/v1/project-roots?path=${encodeURIComponent(path)}`, {
-      method: 'DELETE',
-    })
-    const result = await resp.json()
-    if (!resp.ok) {
-      message.error(result.error || `Failed to forget project`)
-      return
-    }
-    message.success('Project forgotten')
-    refresh()
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : 'Failed to forget project')
-  } finally {
-    const { [path]: _, ...rest } = forgetLoading.value
-    forgetLoading.value = rest
-  }
-}
-
-/** Look up which slot (if any) a project path occupies. */
-function getSlotForPath(path: string): string | null {
-  const slots = slotsMap.value
-  for (const [slotId, slotPath] of Object.entries(slots)) {
-    if (slotPath === path) return slotId
-  }
-  return null
-}
-
-/** Get last activity time for a project root from sessions. */
-function getLastActiveForRoot(path: string): string {
-  const sessions = data.value?.sessions ?? []
-  let last = 0
-  for (const s of sessions) {
-    if (s.matched_root === path || s.project === path) {
-      const t = new Date(s.last_active).getTime()
-      if (t > last) last = t
-    }
-  }
-  if (last > 0) {
-    return new Date(last).toLocaleString()
-  }
-  return '从未活动'
-}
-
 // ── Lifecycle ────────────────────────────────────────────────────
 
 onMounted(() => { refresh() })
@@ -933,12 +878,12 @@ function rowProps(row: DashboardEntry) {
           <NButton
             size="small"
             quaternary
-            @click="openProjectMgmt"
+            @click="emit('openSettings')"
           >
             <template #icon>
               <NIcon><SettingsOutline /></NIcon>
             </template>
-            项目
+            设置
           </NButton>
         </div>
       </div>
@@ -1249,54 +1194,6 @@ function rowProps(row: DashboardEntry) {
       </div>
       <div v-else class="terminal-modal-loading">
         <p>Terminal not available. Click "Open Terminal" to start.</p>
-      </div>
-    </NModal>
-
-    <!-- 📋 项目管理 — Project management modal -->
-    <NModal
-      v-model:show="showProjectMgmt"
-      preset="card"
-      :style="{ width: '620px', maxWidth: '90vw' }"
-      title="📋 项目管理"
-      closable
-    >
-      <div class="project-mgmt-list">
-        <div v-if="!data || data.project_roots.length === 0" class="project-mgmt-empty">
-          没有标记的项目。在下方"未归类"区域勾选 ☐ 识别为项目，或通过下拉框将项目分配到主线/支线 slot 即可自动标记。
-        </div>
-        <div
-          v-for="root in data?.project_roots ?? []"
-          :key="root.path"
-          class="project-mgmt-item"
-        >
-          <div class="project-mgmt-info">
-            <div class="project-mgmt-name">{{ projectBasename(root.path) }}</div>
-            <div class="project-mgmt-path">{{ root.path }}</div>
-            <div class="project-mgmt-meta">
-              <NTag :type="root.priority === 'primary' ? 'success' : root.priority === 'secondary' ? 'warning' : 'default'" size="tiny" :bordered="false">
-                {{ root.priority === 'primary' ? '⭐ 主线' : root.priority === 'secondary' ? '🚩 支线' : '📁 普通' }}
-              </NTag>
-              <span v-if="getSlotForPath(root.path)" class="project-mgmt-slot">
-                slot: {{ getSlotForPath(root.path) }}
-              </span>
-              <span class="project-mgmt-last">
-                最后活跃: {{ getLastActiveForRoot(root.path) }}
-              </span>
-            </div>
-          </div>
-          <NButton
-            size="tiny"
-            type="error"
-            quaternary
-            :loading="forgetLoading[root.path]"
-            @click="forgetProject(root.path)"
-          >
-            <template #icon>
-              <NIcon><TrashOutline /></NIcon>
-            </template>
-            忘记
-          </NButton>
-        </div>
       </div>
     </NModal>
 

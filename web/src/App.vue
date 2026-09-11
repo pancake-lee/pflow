@@ -9,6 +9,7 @@ import {
 } from 'naive-ui'
 import DashboardView from './views/DashboardView.vue'
 import DailyBootView from './views/DailyBootView.vue'
+import SettingsView from './views/SettingsView.vue'
 import type { DailyBootResponse } from './types/dashboard'
 
 // ── Daily Boot routing ──────────────────────────────────────────
@@ -16,6 +17,7 @@ import type { DailyBootResponse } from './types/dashboard'
 const showBoot = ref(false)
 const bootChecked = ref(false) // true once API check completes
 const todayGoal = ref('')
+const showSettings = ref(false)
 
 onMounted(async () => {
   try {
@@ -71,7 +73,8 @@ async function onBootSkip() {
         @skip="onBootSkip"
       />
       <!-- Dashboard: show after boot check completes and boot is not needed -->
-      <DashboardView v-else-if="bootChecked" :initial-goal="todayGoal" />
+      <SettingsView v-else-if="showSettings" @close="showSettings = false" />
+      <DashboardView v-else-if="bootChecked" :initial-goal="todayGoal" @open-settings="showSettings = true" />
       <!-- Loading state while checking boot status -->
       <div v-else class="boot-loading" />
     </NMessageProvider>
