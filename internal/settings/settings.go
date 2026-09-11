@@ -13,6 +13,7 @@ const Version = 1
 
 type Dashboard struct {
 	Window           string `json:"window"`
+	MaxActive        int    `json:"max_active"`
 	MaxInactive      int    `json:"max_inactive"`
 	RefreshSeconds   int    `json:"refresh_seconds"`
 	DailyBootEnabled bool   `json:"daily_boot_enabled"`
@@ -37,7 +38,7 @@ type File struct {
 }
 
 func Default() File {
-	return File{Version: Version, Dashboard: Dashboard{Window: "1d", MaxInactive: 1, RefreshSeconds: 30, DailyBootEnabled: true}, Attention: Attention{ProtectMinutes: 5, FocusAddMinutes: 15, MaskStrength: 1}, TimeEstimate: TimeEstimate{MinutesPerMessage: 3, FallbackRatio: .3}}
+	return File{Version: Version, Dashboard: Dashboard{Window: "1d", MaxActive: 0, MaxInactive: 1, RefreshSeconds: 30, DailyBootEnabled: true}, Attention: Attention{ProtectMinutes: 5, FocusAddMinutes: 15, MaskStrength: 1}, TimeEstimate: TimeEstimate{MinutesPerMessage: 3, FallbackRatio: .3}}
 }
 
 type Manager struct {
@@ -91,6 +92,9 @@ func merge(defaults, stored File) File {
 	if stored.Dashboard.MaxInactive >= 0 {
 		defaults.Dashboard.MaxInactive = stored.Dashboard.MaxInactive
 	}
+	if stored.Dashboard.MaxActive >= 0 {
+		defaults.Dashboard.MaxActive = stored.Dashboard.MaxActive
+	}
 	if stored.Dashboard.RefreshSeconds >= 0 {
 		defaults.Dashboard.RefreshSeconds = stored.Dashboard.RefreshSeconds
 	}
@@ -120,6 +124,9 @@ func validate(value File) error {
 	}
 	if value.Dashboard.MaxInactive < 0 || value.Dashboard.MaxInactive > 10 {
 		return fmt.Errorf("dashboard.max_inactive must be between 0 and 10")
+	}
+	if value.Dashboard.MaxActive < 0 || value.Dashboard.MaxActive > 10 {
+		return fmt.Errorf("dashboard.max_active must be between 0 and 10")
 	}
 	if value.Dashboard.RefreshSeconds != 0 && value.Dashboard.RefreshSeconds != 10 && value.Dashboard.RefreshSeconds != 30 && value.Dashboard.RefreshSeconds != 60 {
 		return fmt.Errorf("invalid dashboard.refresh_seconds")

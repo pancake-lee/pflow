@@ -4,7 +4,7 @@ import { NButton, NCard, NInput, NInputNumber, NSelect, NSwitch, NTabPane, NTabs
 
 type Settings = {
   version: number
-  dashboard: { window: string; max_inactive: number; refresh_seconds: number; daily_boot_enabled: boolean }
+  dashboard: { window: string; max_active: number; max_inactive: number; refresh_seconds: number; daily_boot_enabled: boolean }
   attention: { protect_minutes: number; focus_add_minutes: number; mask_strength: number }
   time_estimate: { minutes_per_message: number; fallback_ratio: number }
 }
@@ -88,6 +88,7 @@ onMounted(load)
       <NTabPane name="dashboard" tab="通用与显示">
         <p>控制 Dashboard 的默认扫描范围、展示密度和自动刷新。</p>
         <label>扫描范围 <NSelect v-model:value="value.dashboard.window" :options="windowOptions" /></label>
+        <label>Active 会话上限（0 为不限）<NInputNumber v-model:value="value.dashboard.max_active" :min="0" :max="10" /></label>
         <label>Inactive 会话上限（0 为不限）<NInputNumber v-model:value="value.dashboard.max_inactive" :min="0" :max="10" /></label>
         <label>自动刷新 <NSelect v-model:value="value.dashboard.refresh_seconds" :options="refreshOptions" /></label>
         <label class="switch">每日引导 <NSwitch v-model:value="value.dashboard.daily_boot_enabled" /></label>

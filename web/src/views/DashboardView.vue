@@ -701,8 +701,9 @@ onMounted(async () => {
   try {
     const response = await fetch('/api/v1/settings')
     if (response.ok) {
-      const settings = await response.json() as { dashboard?: { window?: string; max_inactive?: number; refresh_seconds?: number } }
+      const settings = await response.json() as { dashboard?: { window?: string; max_active?: number; max_inactive?: number; refresh_seconds?: number } }
       if (settings.dashboard?.window) selectedWindow.value = settings.dashboard.window
+      if (settings.dashboard?.max_active !== undefined) maxActive.value = settings.dashboard.max_active
       if (settings.dashboard?.max_inactive !== undefined) maxInactive.value = settings.dashboard.max_inactive
       if (settings.dashboard?.refresh_seconds !== undefined) refreshInterval.value = settings.dashboard.refresh_seconds as RefreshInterval
     }

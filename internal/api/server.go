@@ -529,6 +529,7 @@ func parseQueryParams(r *http.Request, settingsValue settings.File) config.ScanO
 	opts := config.ScanOptions{
 		Window:       config.DefaultWindow,
 		MaxInactive:  settingsValue.Dashboard.MaxInactive,
+		MaxActive:    settingsValue.Dashboard.MaxActive,
 		SourceFilter: config.DefaultHermesSourceFilter,
 	}
 	if duration, err := config.ParseWindow(settingsValue.Dashboard.Window); err == nil {
