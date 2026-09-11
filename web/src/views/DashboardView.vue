@@ -999,9 +999,10 @@ function rowProps(row: DashboardEntry) {
               </div>
             </div>
 
-            <!-- 🔔 军情哨 — suggest analysis, full width between primary and secondary -->
-            <div class="zone-section">
+            <!-- 🔔 行动建议与知识库 -->
+            <div class="zone-section suggestion-knowledge-row">
               <SuggestCard :suggestions="suggestions" />
+              <KnowledgeAnchor :suggestions="suggestions" />
             </div>
 
             <!-- 🚩 支线项目 — 2 cards side by side, each with own title -->
@@ -1207,9 +1208,6 @@ function rowProps(row: DashboardEntry) {
       </div>
     </NModal>
 
-    <!-- 🧠 知识锚点 — Knowledge Anchor, fixed bottom-right corner -->
-    <KnowledgeAnchor :suggestions="suggestions" />
-
     </NLayout>
   </div>
 </template>
@@ -1218,6 +1216,9 @@ function rowProps(row: DashboardEntry) {
 .layout {
   min-height: 100vh;
 }
+
+.suggestion-knowledge-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; gap: 16px; }
+@media (max-width: 760px) { .suggestion-knowledge-row { grid-template-columns: 1fr; } }
 
 /* ── Header ─────────────────────────────────── */
 

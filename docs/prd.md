@@ -91,7 +91,7 @@ pflow 不引入独立的"项目"实体。**路径即项目**——session 元数
 - **兵种**：Claude Code CLI / Hermes / Cline（VSCode）/ API 直接调用 / 其他第三方 Agent
 - **三态**：🟢 交战（busy/running） / 🟡 待命（waiting） / ⚪ 休整（idle） / ⚫ 静默（inactive）
 
-### 4.3 军情哨（Attention Manager）
+### 4.3 行动建议（Attention Manager）
 
 系统的核心调度逻辑——不是另一个 Agent，而是**规则引擎 + LLM 分析调用**：
 
@@ -208,7 +208,7 @@ pflow 不引入独立的"项目"实体。**路径即项目**——session 元数
 
 在 Dashboard 项目卡片上叠加 CSS 伪元素遮罩层，透明度随提醒分数动态变化。遮罩层独立于内容层，`pointer-events: none` 确保交互不受影响。为后续双层换肤系统预留 CSS 变量接口。
 
-#### 4.3 军情哨（Suggest） ✅ 已完成
+#### 4.3 行动建议（Suggest） ✅ 已完成
 
 详见 [`docs/design/08-suggest.md`](./design/08-suggest.md)。
 

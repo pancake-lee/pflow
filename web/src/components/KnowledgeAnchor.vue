@@ -55,7 +55,7 @@ const visibleTip = computed(() => {
 
 // Display mode label
 const modeLabel = computed(() => {
-  if (associatedTip.value) return '📡 关联军情'
+  if (associatedTip.value) return '📡 关联行动建议'
   return '📖 知识库'
 })
 
@@ -192,13 +192,9 @@ watch(
 
 <style scoped>
 .knowledge-anchor {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  z-index: 100;
-  width: 320px;
-  min-height: 80px;
-  max-height: 160px;
+  min-width: 0;
+  min-height: 180px;
+  max-height: 260px;
   overflow-y: auto;
   background: rgba(15, 23, 42, 0.75);
   backdrop-filter: blur(8px);

@@ -10,7 +10,7 @@ defineProps<{
   <div class="suggest-card">
     <div class="suggest-header">
       <span class="suggest-icon">🔔</span>
-      <span class="suggest-title">军情哨</span>
+      <span class="suggest-title">行动建议</span>
     </div>
     <div class="suggest-body">
       <template v-if="suggestions.length > 0">
@@ -38,6 +38,7 @@ defineProps<{
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 180px;
 }
 
 .suggest-header {
@@ -57,6 +58,7 @@ defineProps<{
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overflow-y: auto;
 }
 
 .suggest-item {
