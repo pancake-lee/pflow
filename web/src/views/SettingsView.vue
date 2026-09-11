@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { NButton, NCard, NInputNumber, NSelect, NSwitch, NTabPane, NTabs, useMessage } from 'naive-ui'
+import { NButton, NCard, NInput, NInputNumber, NSelect, NSwitch, NTabPane, NTabs, useMessage } from 'naive-ui'
 
 type Settings = {
   version: number
@@ -18,6 +18,7 @@ const loading = ref(true)
 const saving = ref(false)
 const windowOptions = ['1h', '3h', '6h', '1d', '3d', '7d'].map(value => ({ label: value, value }))
 const refreshOptions = [0, 10, 30, 60].map(value => ({ label: value === 0 ? '关闭' : `${value}s`, value }))
+const newPath = ref('')
 
 async function load() {
   loading.value = true
@@ -60,6 +61,22 @@ async function removeRoot(path: string) {
   message.success('已移除项目')
 }
 
+async function addRoot() {
+  const path = newPath.value.trim()
+  if (!path) return
+  const resp = await fetch('/api/v1/project-roots', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, priority: 'normal' }) })
+  if (!resp.ok) { message.error('添加项目失败'); return }
+  newPath.value = ''
+  await load()
+}
+
+async function setSlot(path: string, slot: string) {
+  const resp = await fetch('/api/v1/project-roots/slot', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, slot }) })
+  if (!resp.ok) { message.error('调整项目策略失败'); return }
+  await load()
+  message.success('项目策略已更新')
+}
+
 onMounted(load)
 </script>
 
@@ -91,7 +108,8 @@ onMounted(load)
       </NTabPane>
       <NTabPane name="projects" tab="项目管理">
         <p v-if="roots.length === 0">尚未标记项目，可在 Dashboard 卡片中标记后在此管理。</p>
-        <div v-for="root in roots" :key="root.path" class="project"><code>{{ root.path }}</code><span>{{ root.priority }}{{ root.slot ? ` · ${root.slot}` : '' }}</span><NButton size="small" type="error" secondary @click="removeRoot(root.path)">移除</NButton></div>
+        <div class="add-project"><NInput v-model:value="newPath" placeholder="/path/to/project" /><NButton @click="addRoot">添加项目</NButton></div>
+        <div v-for="root in roots" :key="root.path" class="project"><code>{{ root.path }}</code><span>{{ root.priority }}{{ root.slot ? ` · ${root.slot}` : '' }}</span><NButton size="tiny" @click="setSlot(root.path, 'primary')">主线</NButton><NButton size="tiny" @click="setSlot(root.path, 'secondary_1')">支线 1</NButton><NButton size="tiny" @click="setSlot(root.path, 'secondary_2')">支线 2</NButton><NButton size="small" type="error" secondary @click="removeRoot(root.path)">移除</NButton></div>
       </NTabPane>
     </NTabs>
     <footer v-if="value"><NButton type="primary" :loading="saving" @click="save">保存设置</NButton></footer>
@@ -102,5 +120,5 @@ onMounted(load)
 .settings-page { max-width: 900px; margin: 0 auto; min-height: 100vh; padding: 28px; color: #e8e8ec; background: #1a1a1c; }
 header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; } h1 { margin: 0; }
 label { display: grid; gap: 6px; max-width: 420px; margin: 18px 0; } .switch { display: flex; align-items: center; gap: 12px; }
-.project { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #34343a; } .project code { flex: 1; } footer { margin-top: 24px; }
+.project, .add-project { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #34343a; } .project code { flex: 1; } .add-project :deep(.n-input) { max-width: 460px; } footer { margin-top: 24px; }
 </style>
