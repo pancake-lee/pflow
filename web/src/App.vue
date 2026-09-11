@@ -21,6 +21,11 @@ const showSettings = ref(false)
 
 onMounted(async () => {
   try {
+    const settingsResp = await fetch('/api/v1/settings')
+    const settings = settingsResp.ok ? await settingsResp.json() as { dashboard?: { daily_boot_enabled?: boolean } } : null
+    if (settings?.dashboard?.daily_boot_enabled === false) {
+      return
+    }
     const resp = await fetch('/api/v1/daily-boot')
     if (resp.ok) {
       const data: DailyBootResponse = await resp.json()

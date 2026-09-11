@@ -35,15 +35,20 @@ func GetFocus() *FocusState {
 // on a different project, it switches to the new project and resets the timer.
 // Returns the new state.
 func (f *FocusState) Extend(projectPath string) (active bool, minutes float64) {
+	return f.ExtendBy(projectPath, 15)
+}
+
+// ExtendBy activates focus mode and adds the configured protection duration.
+func (f *FocusState) ExtendBy(projectPath string, addMinutes float64) (active bool, minutes float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.Active || f.ProjectPath != projectPath {
 		f.Active = true
 		f.ProjectPath = projectPath
 		f.Since = time.Now()
-		f.Minutes = 15
+		f.Minutes = addMinutes
 	} else {
-		f.Minutes += 15
+		f.Minutes += addMinutes
 	}
 	return f.Active, f.Minutes
 }

@@ -14,18 +14,18 @@ import (
 //
 // The dual-dimension algorithm follows docs/design/02-reminder_score_algorithm.md:
 //
-//	1. Determine current active project (cur) — the one with the most
-//	   recent session activity within CurWindow (1 hour). If all sessions
-//	   are older than CurWindow, there is no current project.
-//	2. base_i = waiting_i * W_WAIT
-//	3. Focus interference factor:
-//	   - When focusActive: if streak_cur < focusMinutes → factor_i = 0
-//	   - Otherwise: factor_i = min((streak_cur / PROTECT_MIN) * W_STREAK, 2.0)
-//	   - cur=secondary ∧ target=primary → factor_i *= PRIMARY_BONUS
-//	4. No active task → only primary gets adjusted = base, rest = 0
-//	5. Today correction for primary (fairness vs secondary)
-//	6. final = raw ^ EXP_POWER (power function to widen gaps)
-//	7. Compute fog_score per §5.2 (MVP concise version)
+//  1. Determine current active project (cur) — the one with the most
+//     recent session activity within CurWindow (1 hour). If all sessions
+//     are older than CurWindow, there is no current project.
+//  2. base_i = waiting_i * W_WAIT
+//  3. Focus interference factor:
+//     - When focusActive: if streak_cur < focusMinutes → factor_i = 0
+//     - Otherwise: factor_i = min((streak_cur / PROTECT_MIN) * W_STREAK, 2.0)
+//     - cur=secondary ∧ target=primary → factor_i *= PRIMARY_BONUS
+//  4. No active task → only primary gets adjusted = base, rest = 0
+//  5. Today correction for primary (fairness vs secondary)
+//  6. final = raw ^ EXP_POWER (power function to widen gaps)
+//  7. Compute fog_score per §5.2 (MVP concise version)
 //
 // focusedProject is the project path the user explicitly clicked "专注" on.
 // When non-empty, this project is always kept clear (fog=0) and other projects
@@ -36,6 +36,12 @@ import (
 // accumulated focus time exceeds focusMinutes. When focus is not active,
 // no protection period is applied.
 func CalculateScores(inputs map[string]ReminderInput, now time.Time, focusActive bool, focusedProject string, focusMinutes float64) map[string]ReminderOutput {
+	return CalculateScoresWithProtect(inputs, now, focusActive, focusedProject, focusMinutes, ProtectMin)
+}
+
+// CalculateScoresWithProtect calculates scores using a user-selected
+// protection duration while preserving the package default API.
+func CalculateScoresWithProtect(inputs map[string]ReminderInput, now time.Time, focusActive bool, focusedProject string, focusMinutes, protectMinutes float64) map[string]ReminderOutput {
 	if len(inputs) == 0 {
 		return nil
 	}
@@ -94,7 +100,7 @@ func CalculateScores(inputs map[string]ReminderInput, now time.Time, focusActive
 	}
 
 	if !focusActive && streakCur < 1.0 && curProject != "" && sinceRecent < 5.0 {
-		streakCur = ProtectMin
+		streakCur = protectMinutes
 		plogger.Infof("[attention]     streak floor=%.0f applied (measured=%.1f, last=%.0fm ago)", streakCur, measuredStreak, sinceRecent)
 	}
 	if curProject != "" {
@@ -159,7 +165,7 @@ func CalculateScores(inputs map[string]ReminderInput, now time.Time, focusActive
 					factorReason += fmt.Sprintf(" * primary_bonus=%.2f", factor)
 				}
 			} else {
-				streakRatio := (streakCur / ProtectMin) * WStreak
+				streakRatio := (streakCur / protectMinutes) * WStreak
 				factor = math.Min(streakRatio, 2.0)
 				factorReason = fmt.Sprintf("streak_ratio=%.2f", factor)
 

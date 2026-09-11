@@ -39,10 +39,15 @@ type SessionData struct {
 // firstActive and lastActive are the session's activity timestamps.
 // todayStart is midnight of the target day; now is the current time.
 func SessionTodayMinutes(msgCount int, firstActive, lastActive, todayStart, now time.Time) float64 {
+	return SessionTodayMinutesWithFactors(msgCount, firstActive, lastActive, todayStart, now, MinutesPerMessage, FallbackRatio)
+}
+
+// SessionTodayMinutesWithFactors estimates time with user-configured factors.
+func SessionTodayMinutesWithFactors(msgCount int, firstActive, lastActive, todayStart, now time.Time, minutesPerMessage, fallbackRatio float64) float64 {
 	if msgCount > 0 {
-		return float64(msgCount) * MinutesPerMessage
+		return float64(msgCount) * minutesPerMessage
 	}
-	return wallClockToday(firstActive, lastActive, todayStart, now) * FallbackRatio
+	return wallClockToday(firstActive, lastActive, todayStart, now) * fallbackRatio
 }
 
 // ProjectTodayMinutes computes today's active minutes for a project using

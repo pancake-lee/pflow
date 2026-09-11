@@ -452,8 +452,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	for i := range resp.Sessions {
 		e := &resp.Sessions[i]
-		e.TodayMinutes = timetrack.SessionTodayMinutes(
-			e.MessageCount, e.FirstActive, e.LastActive, todayStart, now)
+		e.TodayMinutes = timetrack.SessionTodayMinutesWithFactors(
+			e.MessageCount, e.FirstActive, e.LastActive, todayStart, now,
+			settingsValue.TimeEstimate.MinutesPerMessage, settingsValue.TimeEstimate.FallbackRatio)
 	}
 	// Apply project-level focus log override (Tier 1: tmux focus events).
 	if focusLog != nil {
@@ -503,7 +504,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Compute reminder scores per project.
-	resp.ReminderScores = computeReminderScores(resp.Sessions, rootsFile, resp.Now, focusLog)
+	resp.ReminderScores = computeReminderScores(resp.Sessions, rootsFile, resp.Now, focusLog, settingsValue.Attention.ProtectMinutes)
 
 	// Generate suggest analysis (军情哨)
 	resp.Suggestions = generateSuggestions(claudeResult, hermesResult, codexResult, mappings, rootsFile, resp.Now, focusLog)
@@ -936,7 +937,7 @@ func truncateText(text string, maxLen int) string {
 // computeReminderScores groups sessions by matched_root (or project dir),
 // extracts per-project metrics (waiting, streak, total), and calls the
 // attention score algorithm. Returns a map of project key → ReminderOutput.
-func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFile, now time.Time, focusLog *timetrack.FocusLog) map[string]attention.ReminderOutput {
+func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFile, now time.Time, focusLog *timetrack.FocusLog, protectMinutes float64) map[string]attention.ReminderOutput {
 	if len(sessions) == 0 {
 		return nil
 	}
@@ -1081,7 +1082,7 @@ func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFi
 	}
 
 	focusActive, focusedProject, focusMinutes, _ := attention.GetFocus().Snapshot()
-	return attention.CalculateScores(inputs, now, focusActive, focusedProject, focusMinutes)
+	return attention.CalculateScoresWithProtect(inputs, now, focusActive, focusedProject, focusMinutes, protectMinutes)
 }
 
 // generateSuggestions builds suggest.SessionInfo from raw scan results,
@@ -1284,7 +1285,12 @@ func (s *Server) handleFocusExtend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project is required"})
 		return
 	}
-	active, minutes := attention.GetFocus().Extend(req.Project)
+	settingsValue, err := s.settingsMgr.Load()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	active, minutes := attention.GetFocus().ExtendBy(req.Project, settingsValue.Attention.FocusAddMinutes)
 	plogger.Infof("api: focus extend project=%s → active=%v minutes=%.0f", req.Project, active, minutes)
 	writeJSON(w, http.StatusOK, focusResponse{OK: true, Active: active, Minutes: minutes})
 }

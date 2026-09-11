@@ -14,7 +14,7 @@ func TestComputeReminderScoresIncludesCodexSession(t *testing.T) {
 		Status:      "waiting",
 		FirstActive: now.Add(-20 * time.Minute),
 		LastActive:  now.Add(-8 * time.Minute),
-	}}, nil, now, nil)
+	}}, nil, now, nil, 5)
 	score, ok := scores["/work/pflow"]
 	if !ok {
 		t.Fatal("Codex project missing from reminder scores")
