@@ -335,6 +335,7 @@ const scanOpts = computed<ScanOptions>(() => ({
   max_active: maxActive.value,
   max_inactive: maxInactive.value,
 }))
+const compactSessions = computed(() => maxActive.value === 1 && maxInactive.value === 0)
 
 const filteredSessions = computed(() => {
   if (!data.value?.sessions) return []
@@ -981,6 +982,7 @@ function rowProps(row: DashboardEntry) {
                 :focus-focused-project="focusFocusedProject"
                 :focus-loading="focusLoading"
                 :focus-countdown="focusCountdown"
+                :compact-sessions="compactSessions"
                 @star-session="(sid: string) => primaryGroup && handleStarSession(primaryGroup.key, sid)"
                 @row-click="openDetail"
                 @open-terminal="handleOpenTerminalFromCard"
@@ -1035,6 +1037,7 @@ function rowProps(row: DashboardEntry) {
                   :focus-minutes="focusMinutes"
                   :focus-loading="focusLoading"
                   :focus-countdown="focusCountdown"
+                  :compact-sessions="compactSessions"
                   @select-project="(path: string) => handleSelectSecondary(path, idx === 0 ? 'secondary_1' : 'secondary_2')"
                   @star-session="(sid: string) => group && handleStarSession(group.key, sid)"
                   @row-click="openDetail"

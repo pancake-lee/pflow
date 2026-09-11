@@ -47,6 +47,7 @@ const props = defineProps<{
   focusMinutes?: number
   focusLoading?: boolean
   focusCountdown?: string
+  compactSessions?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -311,7 +312,7 @@ function rowProps(row: DashboardEntry) {
       </div>
 
       <!-- Other sessions table -->
-      <div class="other-sessions">
+      <div v-if="!compactSessions" class="other-sessions">
         <div class="other-header">{{ otherSessions.length > 0 ? `${otherSessions.length} more` : 'Other sessions' }}</div>
         <NDataTable
           :columns="tableColumns"
@@ -338,7 +339,7 @@ function rowProps(row: DashboardEntry) {
         <div class="ms-req-label">Last Request</div>
         <div class="ms-req-text">—</div>
       </div>
-      <div class="other-sessions">
+      <div v-if="!compactSessions" class="other-sessions">
         <div class="other-header">Other sessions (0)</div>
         <NDataTable
           :columns="tableColumns"
