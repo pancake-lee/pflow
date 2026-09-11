@@ -546,6 +546,11 @@ func parseQueryParams(r *http.Request, settingsValue settings.File) config.ScanO
 			opts.MaxInactive = n
 		}
 	}
+	if m := q.Get("max_active"); m != "" {
+		if n, err := strconv.Atoi(m); err == nil && n >= 0 {
+			opts.MaxActive = n
+		}
+	}
 
 	if s := q.Get("source"); s != "" {
 		opts.SourceFilter = s

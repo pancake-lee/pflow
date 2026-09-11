@@ -30,6 +30,9 @@ type ScanOptions struct {
 	// 0 means no limit.
 	MaxInactive int
 
+	// MaxActive limits active sessions per project. 0 means no limit.
+	MaxActive int
+
 	// SourceFilter is a comma-separated list of source types to include.
 	// Empty means all sources. Example: "cli,weixin" excludes cron.
 	// Known hermes sources: cli, cron, weixin.

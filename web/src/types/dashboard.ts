@@ -75,6 +75,7 @@ export interface FocusState {
 
 export interface ScanOptions {
   window: string // e.g. "1h", "3h", "1d"
+  max_active: number
   max_inactive: number
 }
 

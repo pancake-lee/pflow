@@ -13,6 +13,7 @@ export function useDashboard() {
     try {
       const params = new URLSearchParams({
         window: opts.window,
+        max_active: String(opts.max_active),
         max_inactive: String(opts.max_inactive),
       })
       const resp = await fetch(`/api/v1/dashboard?${params}`)

@@ -29,9 +29,9 @@ type ActiveSession struct {
 	TotalTokens  int     `json:"total_tokens"`
 	Suspended    bool    `json:"suspended"`
 	Origin       *struct {
-		Platform string `json:"platform"`
+		Platform string  `json:"platform"`
 		ChatName *string `json:"chat_name"`
-		ChatType string `json:"chat_type"`
+		ChatType string  `json:"chat_type"`
 		UserName *string `json:"user_name"`
 	} `json:"origin,omitempty"`
 }
@@ -50,18 +50,18 @@ func parseTime(s string) (time.Time, error) {
 
 // GatewayState mirrors ~/.hermes/gateway_state.json.
 type GatewayState struct {
-	PID          int                       `json:"pid"`
-	GatewayState string                   `json:"gateway_state"`
-	ActiveAgents int                      `json:"active_agents"`
-	Platforms    map[string]PlatformInfo  `json:"platforms"`
-	UpdatedAt    string                   `json:"updated_at"`
+	PID          int                     `json:"pid"`
+	GatewayState string                  `json:"gateway_state"`
+	ActiveAgents int                     `json:"active_agents"`
+	Platforms    map[string]PlatformInfo `json:"platforms"`
+	UpdatedAt    string                  `json:"updated_at"`
 }
 
 // PlatformInfo describes one messaging platform's connection state.
 type PlatformInfo struct {
-	State        string `json:"state"`
+	State        string  `json:"state"`
 	ErrorMessage *string `json:"error_message"`
-	UpdatedAt    string `json:"updated_at"`
+	UpdatedAt    string  `json:"updated_at"`
 }
 
 // SessionSummary is the aggregated view of one Hermes session.
@@ -240,18 +240,18 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 			}
 
 			summary := SessionSummary{
-				SessionID:   es.ID,
-				Project:     project,
-				Platform:    platformFromSource(es.Source),
-				ChatType:    "dm",
-				DisplayName: es.Title,
+				SessionID:    es.ID,
+				Project:      project,
+				Platform:     platformFromSource(es.Source),
+				ChatType:     "dm",
+				DisplayName:  es.Title,
 				MessageCount: es.MessageCount,
-				FirstActive: startedAt,
-				LastActive:  lastActive,
-				Name:        name,
-				LastReq:     truncateRunes(lastUser, 15),
-				LastReqFull: lastUser,
-				LastResp:    truncateRunes(lastAssistant, 15),
+				FirstActive:  startedAt,
+				LastActive:   lastActive,
+				Name:         name,
+				LastReq:      truncateRunes(lastUser, 15),
+				LastReqFull:  lastUser,
+				LastResp:     truncateRunes(lastAssistant, 15),
 				LastRespFull: lastAssistant,
 			}
 
@@ -365,7 +365,7 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 	}
 
 	// Apply max-inactive filter per project
-	summaries = applyHermesMaxInactive(summaries, opts.MaxInactive)
+	summaries = applyHermesSessionLimits(summaries, opts.MaxActive, opts.MaxInactive)
 
 	// Sort by last active (most recent first)
 	sort.Slice(summaries, func(i, j int) bool {
@@ -516,7 +516,7 @@ func scanDumpFiles(hd string, cutoff time.Time) []dumpFileInfo {
 		meta := readDumpMeta(filepath.Join(dir, e.Name()))
 		if meta != nil {
 			di.LastReq = truncateRunes(meta.userMsg, 15)
-				di.LastReqFull = meta.userMsg
+			di.LastReqFull = meta.userMsg
 			if meta.cwd != "" && meta.cwd != "/" {
 				di.Project = meta.cwd
 			}
@@ -806,8 +806,8 @@ func truncateRunes(s string, maxLen int) string {
 // Active sessions are always kept; inactive (completed, suspended) sessions are
 // limited to maxInactive per project (the most recent ones). If maxInactive is 0,
 // all sessions are kept.
-func applyHermesMaxInactive(summaries []SessionSummary, maxInactive int) []SessionSummary {
-	if maxInactive <= 0 {
+func applyHermesSessionLimits(summaries []SessionSummary, maxActive, maxInactive int) []SessionSummary {
+	if maxActive <= 0 && maxInactive <= 0 {
 		return summaries
 	}
 
@@ -837,13 +837,17 @@ func applyHermesMaxInactive(summaries []SessionSummary, maxInactive int) []Sessi
 	var result []SessionSummary
 	for _, proj := range projOrder {
 		g := groups[proj]
+		sort.Slice(g.active, func(i, j int) bool { return g.active[i].LastActive.After(g.active[j].LastActive) })
+		if maxActive > 0 && len(g.active) > maxActive {
+			g.active = g.active[:maxActive]
+		}
 		result = append(result, g.active...)
 		// Sort inactive by LastActive descending, then keep only maxInactive most recent.
 		// Without sorting, map iteration order makes the truncated result non-deterministic.
 		sort.Slice(g.inactive, func(i, j int) bool {
 			return g.inactive[i].LastActive.After(g.inactive[j].LastActive)
 		})
-		if len(g.inactive) > maxInactive {
+		if maxInactive > 0 && len(g.inactive) > maxInactive {
 			g.inactive = g.inactive[:maxInactive]
 		}
 		result = append(result, g.inactive...)

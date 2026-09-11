@@ -101,7 +101,41 @@ func ScanDir(root string, opts config.ScanOptions, now time.Time) (*ScanResult, 
 		result.Sessions = append(result.Sessions, s)
 	}
 	sort.Slice(result.Sessions, func(i, j int) bool { return result.Sessions[i].LastActive.After(result.Sessions[j].LastActive) })
+	result.Sessions = applySessionLimits(result.Sessions, opts.MaxActive, opts.MaxInactive)
 	return result, nil
+}
+
+func applySessionLimits(summaries []SessionSummary, maxActive, maxInactive int) []SessionSummary {
+	if maxActive <= 0 && maxInactive <= 0 {
+		return summaries
+	}
+	type group struct{ active, inactive []SessionSummary }
+	groups := map[string]*group{}
+	var order []string
+	for _, summary := range summaries {
+		if groups[summary.Project] == nil {
+			groups[summary.Project] = &group{}
+			order = append(order, summary.Project)
+		}
+		if summary.IsActive() {
+			groups[summary.Project].active = append(groups[summary.Project].active, summary)
+		} else {
+			groups[summary.Project].inactive = append(groups[summary.Project].inactive, summary)
+		}
+	}
+	var result []SessionSummary
+	for _, project := range order {
+		group := groups[project]
+		if maxActive > 0 && len(group.active) > maxActive {
+			group.active = group.active[:maxActive]
+		}
+		if maxInactive > 0 && len(group.inactive) > maxInactive {
+			group.inactive = group.inactive[:maxInactive]
+		}
+		result = append(result, group.active...)
+		result = append(result, group.inactive...)
+	}
+	return result
 }
 
 type rolloutLine struct {

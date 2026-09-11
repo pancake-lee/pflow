@@ -145,7 +145,7 @@ func Scan(opts config.ScanOptions) (*ScanResult, error) {
 	}
 
 	// Apply max-inactive filter per project
-	agg = applyMaxInactive(agg, opts.MaxInactive)
+	agg = applySessionLimits(agg, opts.MaxActive, opts.MaxInactive)
 
 	// Sort by last active time (most recent first)
 	sort.Slice(agg, func(i, j int) bool {
@@ -424,8 +424,8 @@ func isProcessAlive(pid int) bool {
 // Active sessions are always kept; inactive (unknown) sessions are limited
 // to maxInactive per project (the most recent ones). If maxInactive is 0,
 // all sessions are kept.
-func applyMaxInactive(summaries []SessionSummary, maxInactive int) []SessionSummary {
-	if maxInactive <= 0 {
+func applySessionLimits(summaries []SessionSummary, maxActive, maxInactive int) []SessionSummary {
+	if maxActive <= 0 && maxInactive <= 0 {
 		return summaries
 	}
 
@@ -453,14 +453,17 @@ func applyMaxInactive(summaries []SessionSummary, maxInactive int) []SessionSumm
 	var result []SessionSummary
 	for _, proj := range projOrder {
 		g := groups[proj]
-		// Keep all active sessions
+		sort.Slice(g.active, func(i, j int) bool { return g.active[i].LastActive.After(g.active[j].LastActive) })
+		if maxActive > 0 && len(g.active) > maxActive {
+			g.active = g.active[:maxActive]
+		}
 		result = append(result, g.active...)
 		// Sort inactive by LastActive descending, then keep only maxInactive most recent.
 		// Without sorting, map iteration order makes the truncated result non-deterministic.
 		sort.Slice(g.inactive, func(i, j int) bool {
 			return g.inactive[i].LastActive.After(g.inactive[j].LastActive)
 		})
-		if len(g.inactive) > maxInactive {
+		if maxInactive > 0 && len(g.inactive) > maxInactive {
 			g.inactive = g.inactive[:maxInactive]
 		}
 		result = append(result, g.inactive...)

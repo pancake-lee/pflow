@@ -236,6 +236,7 @@ const windowOptions = [
   { label: '7 days', value: '7d' },
 ]
 const selectedWindow = ref('1d')
+const maxActive = ref(0)
 const maxInactive = ref(1)
 const agentFilter = ref<AgentFilter>('all')
 const refreshInterval = ref<RefreshInterval>(30)
@@ -331,6 +332,7 @@ async function openTerminalFromTable(row: DashboardEntry) {
 
 const scanOpts = computed<ScanOptions>(() => ({
   window: selectedWindow.value,
+  max_active: maxActive.value,
   max_inactive: maxInactive.value,
 }))
 
@@ -921,6 +923,15 @@ function rowProps(row: DashboardEntry) {
               :options="windowOptions"
               size="small"
               style="width: 120px"
+              @update:value="refresh"
+            />
+            <span class="filter-label">Active:</span>
+            <NInputNumber
+              v-model:value="maxActive"
+              size="small"
+              :min="0"
+              :max="10"
+              style="width: 80px"
               @update:value="refresh"
             />
             <span class="filter-label">Inactive:</span>
