@@ -2,11 +2,11 @@
 import { onMounted, ref } from 'vue'
 import { NButton } from 'naive-ui'
 type Item={id:string;start:string;title:string;focus_minutes:number;break_minutes:number;status?:string}
-const day=ref(''); const current=ref<Item|null>(null); const next=ref<Item|null>(null); const phase=ref('free')
+const day=ref(''); const current=ref<Item|null>(null); const next=ref<Item|null>(null); const phase=ref('free'); const fog=ref(1)
 const emit=defineEmits<{ edit: [] }>()
-async function load(){const r=await fetch('/api/v1/schedules');if(!r.ok)return;const b=await r.json();day.value=b.day.date;current.value=b.current;next.value=b.next;phase.value=b.phase}
+async function load(){const r=await fetch('/api/v1/schedules');if(!r.ok)return;const b=await r.json();day.value=b.day.date;current.value=b.current;next.value=b.next;phase.value=b.phase;fog.value=b.fog}
 async function act(action:string){if(!current.value||!current.value.id)return;await fetch('/api/v1/schedules/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:day.value,id:current.value.id,action})});load()}
 onMounted(load)
 </script>
-<template><section v-if="current" class="schedule" :class="{ 'schedule-break': phase === 'break' }"><div><strong>今日日程</strong><span class="current">{{ phase === 'break' ? '☕ 休息中：' : '' }}{{ current.title }}</span><small>{{ current.id ? current.start + ' · ' + current.focus_minutes + ' 分钟' : '自由安排时间' }}</small></div><div v-if="next" class="next">下一项：{{ next.start }} {{ next.title }}</div><div><NButton size="small" @click="emit('edit')">编辑</NButton><template v-if="current.id"><NButton size="small" @click="act('completed')">完成</NButton><NButton size="small" @click="act('skipped')">跳过</NButton></template></div></section></template>
+<template><section v-if="current" class="schedule" :class="{ 'schedule-break': phase === 'break' }"><div><strong>今日日程</strong><span class="current">{{ phase === 'break' ? '☕ 休息中：' : '' }}{{ current.title }}</span><small>{{ current.id ? current.start + ' · ' + current.focus_minutes + ' 分钟' : '自由安排时间' }}</small></div><div v-if="next" class="next" :style="{ opacity: 0.25 + (1-fog)*0.75 }">下一项：{{ next.start }} {{ next.title }}</div><div><NButton size="small" @click="emit('edit')">编辑</NButton><template v-if="current.id"><NButton size="small" @click="act('completed')">完成</NButton><NButton size="small" @click="act('skipped')">跳过</NButton></template></div></section></template>
 <style scoped>.schedule{display:flex;gap:16px;align-items:center;margin:16px 0;padding:12px 16px;border:1px solid rgba(94,163,240,.35);border-radius:10px;background:rgba(32,128,240,.08)}.schedule-break{animation:glow 2s linear infinite;border-color:#f0a020}.schedule>div{display:flex;gap:8px;align-items:center}.current{color:#8bbdff}.next,small{color:#aaa}@keyframes glow{50%{box-shadow:0 0 18px rgba(240,160,32,.65)}}@media(max-width:760px){.schedule{align-items:flex-start;flex-direction:column}}</style>

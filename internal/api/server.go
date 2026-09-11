@@ -174,7 +174,21 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 			phase = "break"
 		}
 	}
-	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "templates": f.Templates})
+	reminder, fog := 0.0, 1.0
+	if next != nil {
+		var hour, minute int
+		_, _ = fmt.Sscanf(next.Start, "%d:%d", &hour, &minute)
+		start := time.Date(time.Now().Year(), time.Now().Month(), time.Now().Day(), hour, minute, 0, 0, time.Now().Location())
+		minutes := start.Sub(time.Now()).Minutes()
+		switch {
+		case minutes <= 0:
+			reminder = 100
+		case minutes <= 60:
+			reminder = (60 - minutes) * 100 / 60
+		}
+		fog = 1 - reminder/100
+	}
+	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "reminder_score": reminder, "fog": fog, "templates": f.Templates})
 }
 
 func (s *Server) handlePutSchedule(w http.ResponseWriter, r *http.Request) {
