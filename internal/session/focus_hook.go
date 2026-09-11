@@ -71,10 +71,10 @@ func SetupFocusHooks() error {
 	// client-focus-* describes actual terminal-window focus. Older tmux
 	// releases simply reject these hooks, which leaves time estimation on its
 	// existing message-based fallback path.
-	if err := setTmuxHook("client-focus-in", focusHookCommand(inPath)); err != nil {
+	if err := setTmuxHook("client-focus-in", inPath); err != nil {
 		return fmt.Errorf("focus hooks: set client-focus-in (tmux 3.3+ required): %w", err)
 	}
-	if err := setTmuxHook("client-focus-out", focusHookCommand(outPath)); err != nil {
+	if err := setTmuxHook("client-focus-out", outPath); err != nil {
 		return fmt.Errorf("focus hooks: set client-focus-out (tmux 3.3+ required): %w", err)
 	}
 
@@ -126,13 +126,20 @@ func enableTmuxFocusEvents() error {
 // TeardownFocusHooks removes the tmux focus hooks registered by SetupFocusHooks.
 // The log file and scripts are left in place (harmless, may be re-used).
 func TeardownFocusHooks() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		plogger.Debugf("focus hooks: cannot find home during teardown: %v", err)
+		return
+	}
 	for _, hook := range []string{"client-focus-in", "client-focus-out"} {
-		// Remove the first matching hook entry. tmux set-hook -gu removes
-		// the hook at index 0; we set ours at index 0 so this works.
-		cmd := exec.Command("tmux", "set-hook", "-gu", hook)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			// Hook might not exist — not an error
-			plogger.Debugf("focus hooks: teardown %s: %v (output: %s)", hook, err, strings.TrimSpace(string(out)))
+		scriptPath := filepath.Join(home, ".pflow", focusScriptForHook(hook))
+		entries := findHookEntries(hook, scriptPath, readTmuxHooks())
+		for index := len(entries) - 1; index >= 0; index-- {
+			entry := entries[index]
+			cmd := exec.Command("tmux", "set-hook", "-gu", entry)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				plogger.Debugf("focus hooks: teardown %s: %v (output: %s)", entry, err, strings.TrimSpace(string(out)))
+			}
 		}
 	}
 	plogger.Infof("focus hooks: removed tmux hooks")
@@ -142,15 +149,44 @@ func focusHookCommand(scriptPath string) string {
 	return fmt.Sprintf("run-shell \"case '#{session_name}' in pflow-*) %s '#{session_name}' ;; esac\"", scriptPath)
 }
 
-// setTmuxHook registers a single tmux hook via `tmux set-hook -g`.
-// The -g flag makes it global (applies to all sessions).
-func setTmuxHook(hookName, command string) error {
-	cmd := exec.Command("tmux", "set-hook", "-g", hookName, command)
+func focusScriptForHook(hookName string) string {
+	if hookName == "client-focus-out" {
+		return focusOutScript
+	}
+	return focusInScript
+}
+
+// setTmuxHook appends a pflow hook without replacing user hook entries.
+func setTmuxHook(hookName, scriptPath string) error {
+	if len(findHookEntries(hookName, scriptPath, readTmuxHooks())) > 0 {
+		return nil
+	}
+	cmd := exec.Command("tmux", "set-hook", "-ag", hookName, focusHookCommand(scriptPath))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func readTmuxHooks() string {
+	out, err := exec.Command("tmux", "show-hooks", "-g").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+func findHookEntries(hookName, scriptPath, hooks string) []string {
+	var entries []string
+	for _, line := range strings.Split(hooks, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.HasPrefix(fields[0], hookName+"[") || !strings.Contains(line, scriptPath) {
+			continue
+		}
+		entries = append(entries, fields[0])
+	}
+	return entries
 }
 
 // FocusLogPath returns the path to the focus history log file.

@@ -48,3 +48,14 @@ func TestEnsureFocusEventsConfigCreatesMissingFile(t *testing.T) {
 		t.Fatalf("unexpected config: %q", got)
 	}
 }
+
+func TestFindHookEntriesOnlySelectsPflowHook(t *testing.T) {
+	hooks := `client-focus-in[0] run-shell "echo user"
+client-focus-in[1] run-shell "case '#{session_name}' in pflow-*) /tmp/focus-log.sh '#{session_name}' ;; esac"
+client-focus-out[0] run-shell "case '#{session_name}' in pflow-*) /tmp/focus-log-out.sh '#{session_name}' ;; esac"
+`
+	got := findHookEntries("client-focus-in", "/tmp/focus-log.sh", hooks)
+	if len(got) != 1 || got[0] != "client-focus-in[1]" {
+		t.Fatalf("entries=%v", got)
+	}
+}

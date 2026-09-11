@@ -31,3 +31,17 @@ func TestProjectMinutesDoesNotMergeLongGapOrInvalidSequence(t *testing.T) {
 		t.Fatalf("minutes=%v, want 20", got)
 	}
 }
+
+func TestProjectMinutesSeparatesProjectsAndClosesOpenSegment(t *testing.T) {
+	base := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
+	log := &FocusLog{ByProject: map[string][]FocusEvent{
+		"/work/a": {{Timestamp: base, Action: "focus-in"}, {Timestamp: base.Add(20 * time.Minute), Action: "focus-out"}},
+		"/work/b": {{Timestamp: base.Add(20 * time.Minute), Action: "focus-in"}},
+	}}
+	if got := log.ProjectMinutes("/work/a", base, base.Add(40*time.Minute)); got != 20 {
+		t.Fatalf("project a minutes=%v, want 20", got)
+	}
+	if got := log.ProjectMinutes("/work/b", base, base.Add(40*time.Minute)); got != 20 {
+		t.Fatalf("project b minutes=%v, want 20", got)
+	}
+}
