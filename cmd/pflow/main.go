@@ -394,6 +394,7 @@ func runServeCmd(args []string) {
 	flagSet := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := flagSet.Int("port", 10002, "HTTP server port")
 	ttydBasePort := flagSet.Int("ttyd-base-port", 10000, "Base port for ttyd terminal processes")
+	debugAttention := flagSet.Bool("debug-attention", false, "Log per-project attention score calculation details")
 	flagSet.Parse(args)
 
 	// Clean up orphan tmux sessions (pflow-* without mappings)
@@ -415,7 +416,9 @@ func runServeCmd(args []string) {
 	// Pass the embedded Vue SPA filesystem. If the web/dist directory
 	// is not embedded (e.g. during development), pass nil to serve API only.
 	var staticFS fs.FS = pflow.WebDist
-	server := api.NewServer(staticFS, sessionMgr)
+	server := api.NewServerWithOptions(staticFS, sessionMgr, api.ServerOptions{
+		AttentionDiagnostics: *debugAttention,
+	})
 
 	addr := fmt.Sprintf(":%d", *port)
 	fmt.Printf("pflow server listening on http://localhost%s\n", addr)

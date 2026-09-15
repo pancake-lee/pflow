@@ -86,24 +86,38 @@ type DashboardResponse struct {
 // Server is the pflow HTTP API server.
 type Server struct {
 	http.ServeMux
-	staticFS    fs.FS // optional embedded static files (web/dist)
-	sessionMgr  *session.Manager
-	projectMgr  *project.Manager
-	stateMgr    *state.Manager
-	settingsMgr *settings.Manager
-	scheduleMgr *schedule.Manager
+	staticFS             fs.FS // optional embedded static files (web/dist)
+	sessionMgr           *session.Manager
+	projectMgr           *project.Manager
+	stateMgr             *state.Manager
+	settingsMgr          *settings.Manager
+	scheduleMgr          *schedule.Manager
+	attentionDiagnostics bool
+}
+
+// ServerOptions controls optional HTTP server behavior.
+type ServerOptions struct {
+	// AttentionDiagnostics emits per-project and per-session score inputs.
+	// It is intended only for temporary score investigations.
+	AttentionDiagnostics bool
 }
 
 // NewServer creates a new API server with registered routes.
 // If staticFS is non-nil, static files (the Vue SPA) are served from it.
 func NewServer(staticFS fs.FS, sessionMgr *session.Manager) *Server {
+	return NewServerWithOptions(staticFS, sessionMgr, ServerOptions{})
+}
+
+// NewServerWithOptions creates an API server with optional diagnostics.
+func NewServerWithOptions(staticFS fs.FS, sessionMgr *session.Manager, options ServerOptions) *Server {
 	s := &Server{
-		staticFS:    staticFS,
-		sessionMgr:  sessionMgr,
-		projectMgr:  project.NewManager(),
-		stateMgr:    state.NewManager(),
-		settingsMgr: settings.NewManager(),
-		scheduleMgr: schedule.NewManager(),
+		staticFS:             staticFS,
+		sessionMgr:           sessionMgr,
+		projectMgr:           project.NewManager(),
+		stateMgr:             state.NewManager(),
+		settingsMgr:          settings.NewManager(),
+		scheduleMgr:          schedule.NewManager(),
+		attentionDiagnostics: options.AttentionDiagnostics,
 	}
 	s.HandleFunc("/api/v1/dashboard", s.handleDashboard)
 
@@ -721,7 +735,13 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Compute reminder scores per project.
-	resp.ReminderScores = computeReminderScores(resp.Sessions, rootsFile, resp.Now, focusLog, settingsValue.Attention.ProtectMinutes)
+	var attentionTrace attentionTraceFunc
+	if s.attentionDiagnostics {
+		attentionTrace = func(format string, args ...any) {
+			plogger.Infof(format, args...)
+		}
+	}
+	resp.ReminderScores = computeReminderScoresWithTrace(resp.Sessions, rootsFile, resp.Now, focusLog, settingsValue.Attention.ProtectMinutes, attentionTrace)
 
 	// Generate action suggestions.
 	resp.Suggestions = generateSuggestions(claudeResult, hermesResult, codexResult, mappings, rootsFile, resp.Now, focusLog)
@@ -1161,6 +1181,12 @@ func truncateText(text string, maxLen int) string {
 // extracts per-project metrics (waiting, streak, total), and calls the
 // attention score algorithm. Returns a map of project key → ReminderOutput.
 func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFile, now time.Time, focusLog *timetrack.FocusLog, protectMinutes float64) map[string]attention.ReminderOutput {
+	return computeReminderScoresWithTrace(sessions, rootsFile, now, focusLog, protectMinutes, nil)
+}
+
+type attentionTraceFunc func(format string, args ...any)
+
+func computeReminderScoresWithTrace(sessions []DashboardEntry, rootsFile *project.RootsFile, now time.Time, focusLog *timetrack.FocusLog, protectMinutes float64, trace attentionTraceFunc) map[string]attention.ReminderOutput {
 	if len(sessions) == 0 {
 		return nil
 	}
@@ -1200,12 +1226,16 @@ func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFi
 	}
 
 	// Compute per-project metrics
-	plogger.Infof("[api] ======== Extracting per-project metrics ========")
+	if trace != nil {
+		trace("[api] ======== Extracting per-project metrics ========")
+	}
 	inputs := make(map[string]attention.ReminderInput, len(groups))
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
 	for key, gm := range groups {
-		plogger.Infof("[api] project: %s (primary=%v, %d sessions)", key, gm.isPrimary, len(gm.sessions))
+		if trace != nil {
+			trace("[api] project: %s (primary=%v, %d sessions)", key, gm.isPrimary, len(gm.sessions))
+		}
 		var waitingMax float64
 		var streakEstimate float64
 		var totalToday float64
@@ -1231,8 +1261,10 @@ func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFi
 			sessionContribution := timetrack.SessionTodayMinutes(
 				s.MessageCount, s.FirstActive, s.LastActive, todayStart, now)
 			totalToday += sessionContribution
-			plogger.Infof("[api]   session %s: status=%s waiting=%.0fm contrib=%.0fm",
-				truncate8(s.SessionID), s.Status, waitingMin, sessionContribution)
+			if trace != nil {
+				trace("[api]   session %s: status=%s waiting=%.0fm contrib=%.0fm",
+					truncate8(s.SessionID), s.Status, waitingMin, sessionContribution)
+			}
 		}
 
 		// Cap waiting at 120 minutes (2 hours) — beyond that the
@@ -1299,9 +1331,11 @@ func computeReminderScores(sessions []DashboardEntry, rootsFile *project.RootsFi
 				totalToday = fm
 			}
 		}
-		plogger.Infof("[api]   => input: waiting=%.0fm(capped from %.0fm) streak=%.0fm total=%.0fm last=%s",
-			waitingMax, uncappedWaiting, streakEstimate, totalToday,
-			lastActiveTime.Format("15:04:05"))
+		if trace != nil {
+			trace("[api]   => input: waiting=%.0fm(capped from %.0fm) streak=%.0fm total=%.0fm last=%s",
+				waitingMax, uncappedWaiting, streakEstimate, totalToday,
+				lastActiveTime.Format("15:04:05"))
+		}
 	}
 
 	focusActive, focusedProject, focusMinutes, _ := attention.GetFocus().Snapshot()

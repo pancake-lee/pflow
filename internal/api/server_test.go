@@ -3,9 +3,11 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -28,6 +30,30 @@ func TestComputeReminderScoresIncludesCodexSession(t *testing.T) {
 	}
 	if score.Waiting != 8 {
 		t.Fatalf("waiting=%v, want 8", score.Waiting)
+	}
+}
+
+func TestComputeReminderScoresAttentionTraceIsOptional(t *testing.T) {
+	now := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+	sessionList := []DashboardEntry{{
+		SessionID:   "session-1",
+		Project:     "/work/pflow",
+		Status:      "waiting",
+		FirstActive: now.Add(-20 * time.Minute),
+		LastActive:  now.Add(-8 * time.Minute),
+	}}
+	withoutTrace := computeReminderScoresWithTrace(sessionList, nil, now, nil, 5, nil)
+
+	var traceLineList []string
+	withTrace := computeReminderScoresWithTrace(sessionList, nil, now, nil, 5, func(format string, args ...any) {
+		traceLineList = append(traceLineList, fmt.Sprintf(format, args...))
+	})
+
+	if !reflect.DeepEqual(withoutTrace, withTrace) {
+		t.Fatalf("scores differ when attention trace is enabled: without=%+v with=%+v", withoutTrace, withTrace)
+	}
+	if len(traceLineList) != 4 {
+		t.Fatalf("trace lines=%d, want 4: %v", len(traceLineList), traceLineList)
 	}
 }
 
