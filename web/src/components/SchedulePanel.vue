@@ -3,7 +3,7 @@ import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { NAlert, NButton, useMessage } from 'naive-ui'
 import { highlightToMarquee } from '../composables/useReminderScores'
 
-type Item = { id: string; start: string; title: string; focus_minutes: number; break_minutes: number; status?: string }
+type Item = { id: string; start: string; day_offset?: number; title: string; focus_minutes: number; break_minutes: number; status?: string }
 
 const day = ref('')
 const current = ref<Item | null>(null)
@@ -76,6 +76,8 @@ const nextStyle = computed(() => {
   return style
 })
 
+function itemTime(item: Item) { return `${item.day_offset === 1 ? '次日 ' : ''}${item.start}` }
+
 onMounted(() => {
   void load()
   refreshTimer = setInterval(() => void load(), 30_000)
@@ -107,7 +109,7 @@ onUnmounted(() => {
       </div>
       <div class="s-body">
         <span class="s-title">{{ phase === 'break' ? `☕ 休息中（约 ${breakRemainingMinutes} 分钟）：` : '' }}{{ current.title }}</span>
-        <small class="s-meta">{{ current.id ? `${current.start} · ${current.focus_minutes} 分钟` : '自由安排时间' }}</small>
+        <small class="s-meta">{{ current.id ? `${itemTime(current)} · ${current.focus_minutes} 分钟` : '自由安排时间' }}</small>
       </div>
     </div>
     <div v-if="next" class="s-card s-card--next" :style="nextStyle">
@@ -116,7 +118,7 @@ onUnmounted(() => {
       </div>
       <div class="s-body">
         <span class="s-title">{{ next.title }}</span>
-        <small class="s-meta">{{ next.start }} · {{ next.focus_minutes }} 分钟</small>
+        <small class="s-meta">{{ itemTime(next) }} · {{ next.focus_minutes }} 分钟</small>
       </div>
     </div>
   </section>

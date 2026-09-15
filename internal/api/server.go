@@ -168,14 +168,19 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	date := r.URL.Query().Get("date")
+	now := time.Now()
 	if date == "" {
-		date = time.Now().Format("2006-01-02")
+		date = now.Format("2006-01-02")
+		previousDate := now.AddDate(0, 0, -1).Format("2006-01-02")
+		if previousDay, exists := f.Days[previousDate]; exists && schedule.HasNextDayPending(previousDay, date) {
+			date = previousDate
+		}
 	}
 	day, ok := f.Days[date]
 	if !ok {
 		day = schedule.Day{Date: date, Items: []schedule.Item{}}
 	}
-	current, next := schedule.SetCurrent(&day, time.Now())
+	current, next := schedule.SetCurrent(&day, now)
 	if ok && f.Days[date].CurrentID != day.CurrentID {
 		f.Days[date] = day
 		_ = s.scheduleMgr.Save(f)
@@ -184,21 +189,20 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 	breakRemainingMinutes := 0
 	if current.ID != "" {
 		phase = "focus"
-		var hour, minute int
-		_, _ = fmt.Sscanf(current.Start, "%d:%d", &hour, &minute)
-		started := time.Date(time.Now().Year(), time.Now().Month(), time.Now().Day(), hour, minute, 0, 0, time.Now().Location())
-		if time.Now().After(started.Add(time.Duration(current.FocusMinutes)*time.Minute)) && time.Now().Before(started.Add(time.Duration(current.FocusMinutes+current.BreakMinutes)*time.Minute)) {
+		started, startErr := schedule.ItemStart(day.Date, current, now.Location())
+		if startErr == nil && now.After(started.Add(time.Duration(current.FocusMinutes)*time.Minute)) && now.Before(started.Add(time.Duration(current.FocusMinutes+current.BreakMinutes)*time.Minute)) {
 			phase = "break"
 			breakEnds := started.Add(time.Duration(current.FocusMinutes+current.BreakMinutes) * time.Minute)
-			breakRemainingMinutes = int(math.Ceil(time.Until(breakEnds).Minutes()))
+			breakRemainingMinutes = int(math.Ceil(breakEnds.Sub(now).Minutes()))
 		}
 	}
 	reminder, fog := 0.0, 1.0
 	if next != nil {
-		var hour, minute int
-		_, _ = fmt.Sscanf(next.Start, "%d:%d", &hour, &minute)
-		start := time.Date(time.Now().Year(), time.Now().Month(), time.Now().Day(), hour, minute, 0, 0, time.Now().Location())
-		minutes := start.Sub(time.Now()).Minutes()
+		start, startErr := schedule.ItemStart(day.Date, *next, now.Location())
+		minutes := 0.0
+		if startErr == nil {
+			minutes = start.Sub(now).Minutes()
+		}
 		switch {
 		case minutes <= 0:
 			reminder = 100

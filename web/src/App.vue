@@ -98,7 +98,7 @@ async function onBootSkip() {
           v-model:show="showScheduleEditor"
           preset="card"
           title="今日日程编辑"
-          :style="{ width: 'min(960px, calc(100vw - 32px))' }"
+          :style="{ width: 'min(960px, calc(100vw - 32px))', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto' }"
           :mask-closable="false"
           closable
         >

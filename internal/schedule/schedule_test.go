@@ -165,3 +165,40 @@ func TestSaveSanitizesTemplateAndRejectsInvalidTimeline(t *testing.T) {
 		t.Fatalf("template retained execution data: %+v", loaded.Templates[0].Items[0])
 	}
 }
+
+func TestSaveAllowsItemsAcrossMidnight(t *testing.T) {
+	manager := NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	file := File{Days: map[string]Day{"2026-09-15": {
+		Date: "2026-09-15",
+		Items: []Item{
+			{ID: "late", Start: "23:30", Title: "late work", FocusMinutes: 30, BreakMinutes: 10},
+			{ID: "next", Start: "00:15", DayOffset: 1, Title: "after midnight", FocusMinutes: 50},
+		},
+	}}}
+	if err := manager.Save(file); err != nil {
+		t.Fatalf("cross-midnight schedule rejected: %v", err)
+	}
+
+	loaded, err := manager.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Days["2026-09-15"].Items[1].DayOffset != 1 {
+		t.Fatalf("day offset=%d, want 1", loaded.Days["2026-09-15"].Items[1].DayOffset)
+	}
+}
+
+func TestCurrentSelectsNextDayItem(t *testing.T) {
+	day := Day{Date: "2026-09-15", Items: []Item{
+		{ID: "late", Start: "23:30", Title: "late work", FocusMinutes: 20},
+		{ID: "next", Start: "00:15", DayOffset: 1, Title: "after midnight", FocusMinutes: 50},
+	}}
+	now := time.Date(2026, 9, 16, 0, 20, 0, 0, time.Local)
+	current, next := SetCurrent(&day, now)
+	if current.ID != "next" || next != nil {
+		t.Fatalf("current=%+v next=%+v, want next-day item only", current, next)
+	}
+	if !HasNextDayPending(day, "2026-09-16") {
+		t.Fatal("next-day pending item was not detected")
+	}
+}
