@@ -1,0 +1,18 @@
+{
+  "report_id": "2026-09-15-49-51-template-save-and-attention-logs",
+  "backlog_id": "49, 51",
+  "created_at": "2026-09-15T12:55:00+08:00",
+  "target": "模板另存为可靠性与注意力计算日志收敛",
+  "overall": 8.4,
+  "per_task": { "49": 8.3, "51": 8.5 },
+  "dimension_scores": { "正确性": 8.5, "健壮性": 8.5, "可维护性": 8.5, "交互体验": 8.0 },
+  "findings_for_backlog": [],
+  "verification_runtime": [
+    "pnpm build PASS",
+    "GOTOOLCHAIN=local make vet PASS",
+    "GOTOOLCHAIN=local make test PASS",
+    "默认 Dashboard 请求的注意力计算明细日志计数 3743 → 3743",
+    "GET /api/v1/schedule-templates 返回数组"
+  ],
+  "verification_commits": { "51": "4a175af" }
+}
