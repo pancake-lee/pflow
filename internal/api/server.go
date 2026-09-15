@@ -257,11 +257,15 @@ func (s *Server) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutTemplate(w http.ResponseWriter, r *http.Request) {
-	var template schedule.Template
-	if err := json.NewDecoder(r.Body).Decode(&template); err != nil {
+	var request struct {
+		schedule.Template
+		ReplaceExisting bool `json:"replace_existing"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
+	template := request.Template
 	if template.ID == "" {
 		template.ID = fmt.Sprintf("template-%d", time.Now().UnixNano())
 	}
@@ -277,6 +281,20 @@ func (s *Server) handlePutTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for index := range f.Templates {
+		if f.Templates[index].Name == template.Name && f.Templates[index].ID != template.ID {
+			if !request.ReplaceExisting {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "template name already exists", "code": "template_name_conflict"})
+				return
+			}
+			template.ID = f.Templates[index].ID
+			f.Templates[index] = template
+			if err := s.scheduleMgr.Save(f); err != nil {
+				writeJSON(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, 200, template)
+			return
+		}
 		if f.Templates[index].ID == template.ID {
 			f.Templates[index] = template
 			if err := s.scheduleMgr.Save(f); err != nil {

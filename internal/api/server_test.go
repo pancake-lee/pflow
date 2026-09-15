@@ -119,3 +119,48 @@ func TestPutTemplateReturnsSnapshotWithoutExecutionRecord(t *testing.T) {
 		t.Fatalf("template response retained execution data: %+v", response.Items[0])
 	}
 }
+
+func TestPutTemplateRequiresConfirmationBeforeReplacingSameName(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	if err := server.scheduleMgr.Save(schedule.File{Templates: []schedule.Template{{
+		ID: "existing", Name: "weekday", Items: []schedule.Item{{
+			ID: "old-item", Start: "09:00", Title: "old plan", FocusMinutes: 50, BreakMinutes: 10,
+		}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	newItems := []map[string]any{{
+		"id": "new-item", "start": "10:00", "title": "new plan", "focus_minutes": 60, "break_minutes": 0,
+	}}
+	requestBody, err := json.Marshal(map[string]any{"name": "weekday", "items": newItems})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/schedule-templates", bytes.NewReader(requestBody))
+	recorder := httptest.NewRecorder()
+	server.handlePutTemplate(recorder, request)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want %d", recorder.Code, recorder.Body.String(), http.StatusConflict)
+	}
+
+	requestBody, err = json.Marshal(map[string]any{"name": "weekday", "items": newItems, "replace_existing": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPut, "/api/v1/schedule-templates", bytes.NewReader(requestBody))
+	recorder = httptest.NewRecorder()
+	server.handlePutTemplate(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	file, err := server.scheduleMgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Templates) != 1 || file.Templates[0].ID != "existing" || file.Templates[0].Items[0].Title != "new plan" {
+		t.Fatalf("templates=%+v, want one replaced template", file.Templates)
+	}
+}
