@@ -86,11 +86,6 @@ function drop(event: DragEvent, mode: SortMode) {
   items.value = moveItems(items.value, from, dropTarget.value.index + Number(dropTarget.value.after), mode)
   endDrag()
 }
-function moveWithKeyboard(event: KeyboardEvent, index: number, mode: SortMode) {
-  if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key) || busy.value) return
-  event.preventDefault()
-  items.value = moveItems(items.value, index, event.key === 'ArrowUp' ? index - 1 : index + 2, mode)
-}
 function dropClass(index: number, mode: SortMode) {
   if (drag.value?.mode !== mode || dropTarget.value?.index !== index) return ''
   return dropTarget.value.after ? 'drop-after' : 'drop-before'
@@ -220,11 +215,11 @@ onMounted(() => void load())
     <NAlert v-if="recordedChanges" type="warning">修改涉及已完成或跳过的日程；保存时需确认替换，变更项的执行记录将被清除。</NAlert>
     <NAlert v-if="saveConflict" type="warning">此次修改会替换或删除已完成/跳过的日程及其记录。<NButton size="small" type="warning" :loading="saving" @click="save(true)">确认替换记录并保存</NButton></NAlert>
 
-    <section class="timeline" aria-label="日程时间轴"><div class="section-head"><div><h3>时间轴</h3><p>左侧拖整项，内容标题前拖内容。整项拖到目标行，内容拖到目标内容框；上半部插到前面，下半部插到后面。手柄聚焦后按 Alt + ↑ / ↓ 移动。</p></div><div class="timeline-actions"><NButton @click="sortItems">按时间排序</NButton><NButton @click="newItem">添加日程项</NButton></div></div>
-      <NTag v-if="drag" type="info" size="small" aria-live="polite">{{ drag.mode === 'content' ? '正在拖内容，时间和时长保持固定' : '正在拖整项，全部字段随项移动' }}</NTag>
+    <section class="timeline" aria-label="日程时间轴"><div class="section-head"><div><h3>时间轴</h3><p>左侧拖整项，内容标题前拖内容。整项拖到目标行，内容拖到目标内容框；上半部插到前面，下半部插到后面。</p></div><div class="timeline-actions"><NButton @click="sortItems">按时间排序</NButton><NButton @click="newItem">添加日程项</NButton></div></div>
+      <div class="drag-status" aria-live="polite"><NTag v-if="drag" type="info" size="small">{{ drag.mode === 'content' ? '正在拖内容，时间和时长保持固定' : '正在拖整项，全部字段随项移动' }}</NTag></div>
       <div v-if="items.length === 0" class="empty-state">还没有日程项。可添加一项，或选择模板后应用。</div>
-      <article v-for="(item, index) in items" :key="item.id" class="item-card" :class="dropClass(index, 'item')" @dragover="dragOver($event, index, 'item')" @drop="drop($event, 'item')"><div class="item-order"><button type="button" class="drag-handle item-handle" :draggable="!busy" :aria-label="`拖整项，第 ${index + 1} 项`" title="拖整项，包含时间、内容和时长；Alt + ↑ / ↓ 移动" @dragstart.stop="startDrag($event, item, 'item')" @dragend="endDrag" @keydown="moveWithKeyboard($event, index, 'item')">⠿</button><strong>{{ index + 1 }}</strong></div>
-        <div class="item-fields"><label>开始时间<input v-model="item.start" type="time" /></label><label class="item-title" :class="dropClass(index, 'content')" @dragover="dragOver($event, index, 'content')" @drop="drop($event, 'content')"><span class="content-label"><button type="button" class="drag-handle content-handle" :draggable="!busy" :aria-label="`拖内容，第 ${index + 1} 项`" title="只拖内容，时间和时长固定；Alt + ↑ / ↓ 移动" @dragstart.stop="startDrag($event, item, 'content')" @dragend="endDrag" @keydown="moveWithKeyboard($event, index, 'content')">⠿</button>内容</span><NInput v-model:value="item.title" placeholder="例如：撰写方案" /></label><label>专注分钟<NInputNumber v-model:value="item.focus_minutes" :min="1" /></label><label>休息分钟<NInputNumber v-model:value="item.break_minutes" :min="0" /></label></div>
+      <article v-for="(item, index) in items" :key="item.id" class="item-card" :class="dropClass(index, 'item')" @dragover="dragOver($event, index, 'item')" @drop="drop($event, 'item')"><div class="item-order"><button type="button" class="drag-handle item-handle" :draggable="!busy" :aria-label="`拖整项，第 ${index + 1} 项`" title="拖整项，包含时间、内容和时长" @dragstart.stop="startDrag($event, item, 'item')" @dragend="endDrag">⠿</button><strong>{{ index + 1 }}</strong></div>
+        <div class="item-fields"><label>开始时间<input v-model="item.start" type="time" /></label><label class="item-title" :class="dropClass(index, 'content')" @dragover="dragOver($event, index, 'content')" @drop="drop($event, 'content')"><span class="content-label"><button type="button" class="drag-handle content-handle" :draggable="!busy" :aria-label="`拖内容，第 ${index + 1} 项`" title="只拖内容，时间和时长固定" @dragstart.stop="startDrag($event, item, 'content')" @dragend="endDrag">⠿</button>内容</span><NInput v-model:value="item.title" placeholder="例如：撰写方案" /></label><label>专注分钟<NInputNumber v-model:value="item.focus_minutes" :min="1" /></label><label>休息分钟<NInputNumber v-model:value="item.break_minutes" :min="0" /></label></div>
         <div class="item-actions"><NTag v-if="item.status" :type="item.status === 'completed' ? 'success' : 'warning'" size="small">{{ item.status === 'completed' ? '已完成记录' : '已跳过记录' }}</NTag><NButton v-if="item.day_offset === 1 || isNextDayCandidate(index)" size="small" tertiary class="date-adjust" :class="{ 'date-adjust--active': item.day_offset === 1 }" @click="toggleDayOffset(item)">次日</NButton><NButton size="small" tertiary type="error" @click="items.splice(index, 1)">删除</NButton></div></article>
     </section>
 
@@ -235,6 +230,8 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
+/* Keep rows stationary when native dragging starts. */
+.drag-status { display: flex; align-items: center; height: 24px; flex: none; }
 .editor-controls { display: flex; flex-direction: column; gap: 20px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .drag-handle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 28px; padding: 0; border: 1px solid var(--n-border-color); border-radius: 4px; background: transparent; color: var(--n-text-color-2); cursor: grab; font-size: 20px; }
 .drag-handle:active { cursor: grabbing; }

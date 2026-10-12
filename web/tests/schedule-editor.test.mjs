@@ -86,7 +86,7 @@ test('content move detects affected execution records without moving statuses', 
   assert.equal(api.run('items.value[0].status'), 'completed')
   assert.equal(api.run('timelineError.value'), '')
 })
-test('drag uses matching region and upper/lower insertion gaps; keyboard shares movement', () => {
+test('drag uses matching region and upper/lower insertion gaps', () => {
   const api = setup()
   api.run(`drag.value = { id: 'a', mode: 'content' };
     var event = { clientY: 75, currentTarget: { getBoundingClientRect: () => ({ top: 0, height: 100 }) }, dataTransfer: {}, preventDefault() {}, stopPropagation() {} };
@@ -95,10 +95,7 @@ test('drag uses matching region and upper/lower insertion gaps; keyboard shares 
   api.run("dragOver(event, 2, 'content'); drop(event, 'content')")
   assert.equal(api.run("items.value.map(item => item.title).join('')"), 'BCA')
   assert.equal(api.run('drag.value'), null)
-  api.run("moveWithKeyboard({ altKey: true, key: 'ArrowUp', preventDefault() {} }, 2, 'content')")
-  assert.equal(api.run("items.value.map(item => item.title).join('')"), 'BAC')
-  api.run("loading.value = true; moveWithKeyboard({ altKey: true, key: 'ArrowUp' }, 1, 'item')")
-  assert.equal(api.run("items.value.map(item => item.id).join('')"), 'abc')
+
 })
 test('cancelled drag clears insertion feedback', () => {
   const api = setup()
@@ -113,4 +110,15 @@ test('editing after a conflict invalidates the old replacement confirmation', as
   api.run("saveConflict.value = true; items.value[0].title = 'changed'")
   await nextTick()
   assert.equal(api.run('saveConflict.value'), false)
+})
+
+test('native drag startup sets the payload and mode, and rejects busy startup', () => {
+  const api = setup()
+  api.run(`var event = { dataTransfer: { setData(type, value) { this.payload = [type, value] } }, preventDefault() { this.prevented = true } };
+    startDrag(event, items.value[0], 'item')`)
+  assert.deepEqual(plain(api.run('drag.value')), { id: 'a', mode: 'item' })
+  assert.deepEqual(plain(api.run('event.dataTransfer.payload')), ['text/plain', 'a'])
+  api.run("endDrag(); loading.value = true; startDrag(event, items.value[0], 'content')")
+  assert.equal(api.run('drag.value'), null)
+  assert.equal(api.run('event.prevented'), true)
 })
