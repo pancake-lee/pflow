@@ -9,6 +9,7 @@
 - 首轮评估：[46 round 1](../eval/reports/2026-09-11-46-daily-schedule-round-1.md)
 - 第二轮评估：[46 round 2](../eval/reports/2026-09-11-46-daily-schedule-round-2.md)
 - UX 审计：[50 audit](../eval/reports/2026-09-11-50-schedule-editing-ux-audit.md)
+- 双层排序复评：[53 dual sort](../eval/reports/2026-10-13-53-schedule-dual-sort.md)，8.2/10，提交后阶段复评
 - 交接任务：[backlog #50](../backlog.md)
 
 ## 时间线与完成度
@@ -29,3 +30,7 @@
 ## 下一轮建议
 
 #52 已由用户确认验收。#53 已完成双手柄排序和自动回归，等待用户确认实际鼠标拖拽及视觉反馈；确认后直接关单。后续如引入浏览器端组件测试或统一项目内确认弹框，再建立独立体验优化任务。
+
+## Git 提交记录
+
+- `3b746a4`：#53 双层拖拽排序、记录保护提示、即时校验及回归。
