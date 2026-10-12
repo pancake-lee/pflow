@@ -22,7 +22,7 @@ const saveConflict = ref(false)
 const error = ref('')
 type SortMode = 'item' | 'content'
 const drag = ref<{ id: string; mode: SortMode } | null>(null)
-const dropTarget = ref<{ index: number; after: boolean } | null>(null)
+const dropTarget = ref<number | null>(null)
 const busy = computed(() => loading.value || saving.value || savingTemplate.value || !!deletingTemplateID.value)
 const timelineError = computed(() => validateTimeline(items.value))
 const recordedChanges = computed(() => loadedItems.value.some((previous) => {
@@ -70,25 +70,29 @@ function startDrag(event: DragEvent, item: Item, mode: SortMode) {
   event.dataTransfer.effectAllowed = 'move'
   event.dataTransfer.setData('text/plain', item.id)
 }
-function dragOver(event: DragEvent, index: number, mode: SortMode) {
-  if (busy.value || drag.value?.mode !== mode) return
+function dragOver(event: DragEvent, index: number) {
+  if (busy.value || !drag.value) return
   event.preventDefault()
   event.stopPropagation()
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  dropTarget.value = { index, after: event.clientY >= rect.top + rect.height / 2 }
+  dropTarget.value = index + Number(event.clientY >= rect.top + rect.height / 2)
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
 }
-function drop(event: DragEvent, mode: SortMode) {
-  if (busy.value || drag.value?.mode !== mode || !dropTarget.value) return
+function dragOverGap(event: DragEvent, boundary: number) {
+  if (busy.value || !drag.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  dropTarget.value = boundary
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+function drop(event: DragEvent) {
+  if (busy.value || !drag.value || dropTarget.value === null) return
+  const mode = drag.value.mode
   event.preventDefault()
   event.stopPropagation()
   const from = items.value.findIndex((item) => item.id === drag.value!.id)
-  items.value = moveItems(items.value, from, dropTarget.value.index + Number(dropTarget.value.after), mode)
+  items.value = moveItems(items.value, from, dropTarget.value, mode)
   endDrag()
-}
-function dropClass(index: number, mode: SortMode) {
-  if (drag.value?.mode !== mode || dropTarget.value?.index !== index) return ''
-  return dropTarget.value.after ? 'drop-after' : 'drop-before'
 }
 
 function today() {
@@ -215,12 +219,18 @@ onMounted(() => void load())
     <NAlert v-if="recordedChanges" type="warning">修改涉及已完成或跳过的日程；保存时需确认替换，变更项的执行记录将被清除。</NAlert>
     <NAlert v-if="saveConflict" type="warning">此次修改会替换或删除已完成/跳过的日程及其记录。<NButton size="small" type="warning" :loading="saving" @click="save(true)">确认替换记录并保存</NButton></NAlert>
 
-    <section class="timeline" aria-label="日程时间轴"><div class="section-head"><div><h3>时间轴</h3><p>左侧拖整项，内容标题前拖内容。整项拖到目标行，内容拖到目标内容框；上半部插到前面，下半部插到后面。</p></div><div class="timeline-actions"><NButton @click="sortItems">按时间排序</NButton><NButton @click="newItem">添加日程项</NButton></div></div>
+    <section class="timeline" aria-label="日程时间轴"><div class="section-head"><div><h3>时间轴</h3><p>左侧拖整项，内容标题前拖内容。拖到任意一行的上半部插在该行前，下半部插在该行后；行间高亮线表示插入位置。</p></div><div class="timeline-actions"><NButton @click="sortItems">按时间排序</NButton><NButton @click="newItem">添加日程项</NButton></div></div>
       <div class="drag-status" aria-live="polite"><NTag v-if="drag" type="info" size="small">{{ drag.mode === 'content' ? '正在拖内容，时间和时长保持固定' : '正在拖整项，全部字段随项移动' }}</NTag></div>
       <div v-if="items.length === 0" class="empty-state">还没有日程项。可添加一项，或选择模板后应用。</div>
-      <article v-for="(item, index) in items" :key="item.id" class="item-card" :class="dropClass(index, 'item')" @dragover="dragOver($event, index, 'item')" @drop="drop($event, 'item')"><div class="item-order"><button type="button" class="drag-handle item-handle" :draggable="!busy" :aria-label="`拖整项，第 ${index + 1} 项`" title="拖整项，包含时间、内容和时长" @dragstart.stop="startDrag($event, item, 'item')" @dragend="endDrag">⠿</button><strong>{{ index + 1 }}</strong></div>
-        <div class="item-fields"><label>开始时间<input v-model="item.start" type="time" /></label><label class="item-title" :class="dropClass(index, 'content')" @dragover="dragOver($event, index, 'content')" @drop="drop($event, 'content')"><span class="content-label"><button type="button" class="drag-handle content-handle" :draggable="!busy" :aria-label="`拖内容，第 ${index + 1} 项`" title="只拖内容，时间和时长固定" @dragstart.stop="startDrag($event, item, 'content')" @dragend="endDrag">⠿</button>内容</span><NInput v-model:value="item.title" placeholder="例如：撰写方案" /></label><label>专注分钟<NInputNumber v-model:value="item.focus_minutes" :min="1" /></label><label>休息分钟<NInputNumber v-model:value="item.break_minutes" :min="0" /></label></div>
+      <div v-if="items.length" class="timeline-items">
+      <template v-for="(item, index) in items" :key="item.id">
+        <div class="insert-gap" :class="{ 'insert-gap--active': drag && dropTarget === index }" :data-boundary="index" @dragover="dragOverGap($event, index)" @drop="drop($event)" aria-hidden="true"></div>
+      <article class="item-card" @dragover.capture="dragOver($event, index)" @drop.capture="drop($event)"><div class="item-order"><button type="button" class="drag-handle item-handle" :draggable="!busy" :aria-label="`拖整项，第 ${index + 1} 项`" title="拖整项，包含时间、内容和时长" @dragstart.stop="startDrag($event, item, 'item')" @dragend="endDrag">⠿</button><strong>{{ index + 1 }}</strong></div>
+        <div class="item-fields"><label>开始时间<input v-model="item.start" type="time" /></label><label class="item-title"><span class="content-label"><button type="button" class="drag-handle content-handle" :draggable="!busy" :aria-label="`拖内容，第 ${index + 1} 项`" title="只拖内容，时间和时长固定" @dragstart.stop="startDrag($event, item, 'content')" @dragend="endDrag">⠿</button>内容</span><NInput v-model:value="item.title" placeholder="例如：撰写方案" /></label><label>专注分钟<NInputNumber v-model:value="item.focus_minutes" :min="1" /></label><label>休息分钟<NInputNumber v-model:value="item.break_minutes" :min="0" /></label></div>
         <div class="item-actions"><NTag v-if="item.status" :type="item.status === 'completed' ? 'success' : 'warning'" size="small">{{ item.status === 'completed' ? '已完成记录' : '已跳过记录' }}</NTag><NButton v-if="item.day_offset === 1 || isNextDayCandidate(index)" size="small" tertiary class="date-adjust" :class="{ 'date-adjust--active': item.day_offset === 1 }" @click="toggleDayOffset(item)">次日</NButton><NButton size="small" tertiary type="error" @click="items.splice(index, 1)">删除</NButton></div></article>
+      </template>
+      <div class="insert-gap" :class="{ 'insert-gap--active': drag && dropTarget === items.length }" :data-boundary="items.length" @dragover="dragOverGap($event, items.length)" @drop="drop($event)" aria-hidden="true"></div>
+      </div>
     </section>
 
     <section class="templates"><div class="section-head"><div><h3>模板</h3><p>模板只保存日程内容，不保存完成或跳过记录。</p></div></div><div class="template-save"><NInput v-model:value="templateName" placeholder="将当前编辑另存为新模板" @keyup.enter="saveTemplate()" /><NButton :loading="savingTemplate" :disabled="!!timelineError" @click="saveTemplate()">另存为模板</NButton></div><div v-if="templates.length" class="template-list"><div v-for="template in templates" :key="template.id" class="template-row"><span>{{ template.name }} · {{ template.items.length }} 项</span><div class="template-actions"><NButton size="tiny" tertiary @click="applyTemplate(template)">应用</NButton><NButton size="tiny" tertiary type="error" :loading="deletingTemplateID === template.id" @click="delTemplate(template)">删除</NButton></div></div></div></section>
@@ -238,8 +248,10 @@ onMounted(() => void load())
 .drag-handle:focus-visible { outline: 2px solid var(--n-color-target, #63e2b7); outline-offset: 2px; }
 .content-label { display: flex; align-items: center; gap: 5px; }
 .content-handle { width: 22px; height: 22px; color: var(--n-color-target, #63e2b7); }
-.drop-before { box-shadow: 0 -3px 0 var(--n-color-target, #63e2b7); }
-.drop-after { box-shadow: 0 3px 0 var(--n-color-target, #63e2b7); }
+.timeline-items { display: flex; flex-direction: column; }
+.insert-gap { position: relative; height: 12px; flex: none; }
+.insert-gap::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 3px; transform: translateY(-50%); background: var(--n-color-target, #63e2b7); border-radius: 2px; opacity: 0; pointer-events: none; }
+.insert-gap--active::after { opacity: 1; }
 
 .editor { display: flex; flex-direction: column; gap: 20px; padding-bottom: 4px; }.editor-toolbar,.date-row,.section-head,.item-card,.item-fields,.item-actions,.template-save,.template-actions,.editor-footer,.timeline-actions { display: flex; gap: 12px; align-items: center; }.editor-toolbar,.section-head,.editor-footer { justify-content: space-between; }.eyebrow { color: var(--n-text-color-3); font-size: 12px; }.editor-toolbar h2,.section-head h3 { margin: 2px 0 0; }.date-row { flex-wrap: wrap; }.date-row input,.item-fields input { color-scheme: dark; }.item-fields input { box-sizing: border-box; width: 100%; min-height: 34px; padding: 0 10px; color: var(--n-text-color-base); border: 1px solid var(--n-border-color); border-radius: var(--n-border-radius); background: var(--n-input-color); }.date-row small,.section-head p { margin: 0; color: var(--n-text-color-3); font-size: 12px; }.timeline,.templates { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--n-divider-color); }.item-card { align-items: stretch; padding: 12px; border: 1px solid var(--n-border-color); border-radius: 8px; }.item-order { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 26px; color: var(--n-text-color-3); }.item-fields { flex: 1; align-items: end; flex-wrap: wrap; }.item-fields label { display: flex; flex: 0 1 112px; flex-direction: column; gap: 5px; color: var(--n-text-color-3); font-size: 12px; }.item-fields .item-title { flex: 1 1 190px; }.item-actions { flex-direction: column; justify-content: center; align-items: flex-end; }.date-adjust { opacity: 0; transition: opacity .15s ease; }.item-card:hover .date-adjust,.item-card:focus-within .date-adjust { opacity: .45; }.date-adjust--active,.item-card:hover .date-adjust--active,.item-card:focus-within .date-adjust--active { opacity: 1; }.empty-state { padding: 18px; border: 1px dashed var(--n-border-color); border-radius: 8px; color: var(--n-text-color-3); text-align: center; }.template-save > :deep(.n-input) { flex: 1; min-width: 0; }.template-list { display: flex; flex-direction: column; border-top: 1px solid var(--n-divider-color); }.template-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--n-divider-color); }.template-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.editor-footer { position: sticky; bottom: 0; padding-top: 4px; background: var(--n-color-modal); }
 @media (max-width: 760px) { .item-card { flex-direction: column; }.item-order { flex-direction: row; justify-content: space-between; }.reorder-actions { flex-direction: row; }.item-fields { display: grid; grid-template-columns: 1fr 1fr; align-items: end; }.item-fields label,.item-fields .item-title { min-width: 0; }.item-title,.item-fields :deep(.n-checkbox) { grid-column: 1 / -1; }.item-actions { flex-direction: row; justify-content: space-between; align-items: center; }.template-apply,.template-save { align-items: stretch; flex-direction: column; } }

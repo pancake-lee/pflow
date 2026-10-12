@@ -86,20 +86,20 @@ test('content move detects affected execution records without moving statuses', 
   assert.equal(api.run('items.value[0].status'), 'completed')
   assert.equal(api.run('timelineError.value'), '')
 })
-test('drag uses matching region and upper/lower insertion gaps', () => {
+test('content drag accepts the full row and uses its height for insertion', () => {
   const api = setup()
   api.run(`drag.value = { id: 'a', mode: 'content' };
     var event = { clientY: 75, currentTarget: { getBoundingClientRect: () => ({ top: 0, height: 100 }) }, dataTransfer: {}, preventDefault() {}, stopPropagation() {} };
-    dragOver(event, 2, 'item')`)
-  assert.equal(api.run('dropTarget.value'), null)
-  api.run("dragOver(event, 2, 'content'); drop(event, 'content')")
+    dragOver(event, 2)`)
+  assert.equal(api.run('dropTarget.value'), 3)
+  api.run("drop(event)")
   assert.equal(api.run("items.value.map(item => item.title).join('')"), 'BCA')
   assert.equal(api.run('drag.value'), null)
 
 })
 test('cancelled drag clears insertion feedback', () => {
   const api = setup()
-  api.run("drag.value = { id: 'a', mode: 'item' }; dropTarget.value = { index: 1, after: false }; endDrag()")
+  api.run("drag.value = { id: 'a', mode: 'item' }; dropTarget.value = 1; endDrag()")
   assert.equal(api.run('drag.value'), null)
   assert.equal(api.run('dropTarget.value'), null)
 })
@@ -122,3 +122,36 @@ test('native drag startup sets the payload and mode, and rejects busy startup', 
   assert.equal(api.run('drag.value'), null)
   assert.equal(api.run('event.prevented'), true)
 })
+
+test('adjacent row edges resolve to the same insertion gap', () => {
+  const api = setup()
+  api.run(`drag.value = { id: 'c', mode: 'item' };
+    var event = { clientY: 75, currentTarget: { getBoundingClientRect: () => ({ top: 0, height: 100 }) }, dataTransfer: {}, preventDefault() {}, stopPropagation() {} };
+    dragOver(event, 0)`)
+  assert.equal(api.run('dropTarget.value'), 1)
+  api.run("event.clientY = 25; dragOver(event, 1)")
+  assert.equal(api.run('dropTarget.value'), 1)
+})
+for (const mode of ['item', 'content']) {
+  test(`${mode}: drop directly into the first gap`, () => {
+    const api = setup()
+    api.run(`drag.value = { id: 'c', mode: '${mode}' };
+      var event = { dataTransfer: {}, preventDefault() {}, stopPropagation() {} };
+      dragOverGap(event, 0); drop(event)`)
+    assert.equal(api.run("items.value.map(item => item.title).join('')"), 'CAB')
+    if (mode === 'content') assert.equal(api.run("items.value.map(item => item.id).join('')"), 'abc')
+  })
+}
+
+for (const mode of ['item', 'content']) {
+  for (const [clientY, boundary] of [[125, 1], [175, 2]]) {
+    test(`${mode}: full row ${clientY} maps to gap ${boundary}`, () => {
+      const api = setup()
+      api.run(`drag.value = { id: 'c', mode: '${mode}' };
+        var event = { clientY: ${clientY}, currentTarget: { getBoundingClientRect: () => ({ top: 100, height: 100 }) }, dataTransfer: {}, preventDefault() { this.prevented = true }, stopPropagation() {} };
+        dragOver(event, 1)`)
+      assert.equal(api.run('dropTarget.value'), boundary)
+      assert.equal(api.run('event.prevented'), true)
+    })
+  }
+}
