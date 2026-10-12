@@ -20,10 +20,10 @@ var ErrRecordedItemsNeedConfirmation = errors.New("recorded schedule items requi
 type Item struct {
 	ID           string    `json:"id"`
 	Start        string    `json:"start"`
+	DayOffset    int       `json:"day_offset,omitempty"`
 	Title        string    `json:"title"`
 	FocusMinutes int       `json:"focus_minutes"`
 	BreakMinutes int       `json:"break_minutes"`
-	UntilEnd     bool      `json:"until_end,omitempty"`
 	Status       string    `json:"status,omitempty"`
 	CompletedAt  time.Time `json:"completed_at,omitempty"`
 }
@@ -88,26 +88,24 @@ func validate(items []Item) error {
 		if err != nil {
 			return fmt.Errorf("invalid start time")
 		}
-		now := parsed.Hour()*60 + parsed.Minute()
-		if now <= last {
+		if item.DayOffset < 0 || item.DayOffset > 1 {
+			return fmt.Errorf("invalid schedule day offset")
+		}
+		startMinute := item.DayOffset*24*60 + parsed.Hour()*60 + parsed.Minute()
+		if startMinute <= last {
 			return fmt.Errorf("items must be ordered")
 		}
-		if item.UntilEnd {
-			if i != len(items)-1 || item.FocusMinutes != 0 || item.BreakMinutes != 0 {
-				return fmt.Errorf("until-end item must be last and cannot have focus or break duration")
-			}
-			return nil
-		}
-		if item.FocusMinutes < 1 || now+item.FocusMinutes+item.BreakMinutes > 24*60 {
+		if item.FocusMinutes < 1 || startMinute+item.FocusMinutes+item.BreakMinutes > 2*24*60 {
 			return fmt.Errorf("invalid schedule duration")
 		}
 		if i+1 < len(items) {
 			nextParsed, err := time.Parse("15:04", items[i+1].Start)
-			if err == nil && nextParsed.Hour()*60+nextParsed.Minute() < now+item.FocusMinutes+item.BreakMinutes {
+			nextMinute := items[i+1].DayOffset*24*60 + nextParsed.Hour()*60 + nextParsed.Minute()
+			if err == nil && nextMinute < startMinute+item.FocusMinutes+item.BreakMinutes {
 				return fmt.Errorf("schedule items overlap")
 			}
 		}
-		last = now
+		last = startMinute
 	}
 	return nil
 }
@@ -171,7 +169,7 @@ func PrepareDaySave(previous Day, next Day, replaceRecorded bool) (Day, error) {
 
 func samePlan(left, right Item) bool {
 	return left.ID == right.ID && left.Start == right.Start && left.Title == right.Title &&
-		left.FocusMinutes == right.FocusMinutes && left.BreakMinutes == right.BreakMinutes && left.UntilEnd == right.UntilEnd
+		left.DayOffset == right.DayOffset && left.FocusMinutes == right.FocusMinutes && left.BreakMinutes == right.BreakMinutes
 }
 
 func containsItem(itemList []Item, id string) bool {
@@ -218,7 +216,7 @@ func Current(day Day, now time.Time) (Item, *Item) {
 	if len(day.Items) == 0 {
 		return free, nil
 	}
-	sort.Slice(day.Items, func(i, j int) bool { return day.Items[i].Start < day.Items[j].Start })
+	sortItems(day.Items)
 	current := free
 	if day.CurrentID != "" {
 		for _, item := range day.Items {
@@ -233,11 +231,13 @@ func Current(day Day, now time.Time) (Item, *Item) {
 	}
 	// First display is located by wall time, then the API persists CurrentID so
 	// future time passing never advances the schedule without user action.
-	minute := now.Hour()*60 + now.Minute()
+	date := day.Date
+	if date == "" {
+		date = now.Format("2006-01-02")
+	}
 	for _, item := range day.Items {
-		var hour, min int
-		_, _ = fmt.Sscanf(item.Start, "%d:%d", &hour, &min)
-		if item.Status == "" && hour*60+min <= minute {
+		start, err := ItemStart(date, item, now.Location())
+		if err == nil && item.Status == "" && !start.After(now) {
 			current = item
 		}
 	}
@@ -250,6 +250,53 @@ func Current(day Day, now time.Time) (Item, *Item) {
 		}
 	}
 	return free, nil
+}
+
+// ItemStart returns the real local start time for an item in a dated plan.
+func ItemStart(date string, item Item, location *time.Location) (time.Time, error) {
+	if date == "" {
+		date = time.Now().In(location).Format("2006-01-02")
+	}
+	dayStart, err := time.ParseInLocation("2006-01-02", date, location)
+	if err != nil {
+		return time.Time{}, err
+	}
+	parsed, err := time.Parse("15:04", item.Start)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return dayStart.AddDate(0, 0, item.DayOffset).Add(time.Duration(parsed.Hour()*60+parsed.Minute()) * time.Minute), nil
+}
+
+// HasNextDayPending reports whether a plan still owns work on date.
+func HasNextDayPending(day Day, date string) bool {
+	if day.Date == "" {
+		return false
+	}
+	planDate, err := time.Parse("2006-01-02", day.Date)
+	if err != nil || planDate.AddDate(0, 0, 1).Format("2006-01-02") != date {
+		return false
+	}
+	for _, item := range day.Items {
+		if item.DayOffset == 1 && item.Status == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func sortItems(itemList []Item) {
+	sort.Slice(itemList, func(i, j int) bool {
+		return timelineMinute(itemList[i]) < timelineMinute(itemList[j])
+	})
+}
+
+func timelineMinute(item Item) int {
+	parsed, err := time.Parse("15:04", item.Start)
+	if err != nil {
+		return item.DayOffset * 24 * 60
+	}
+	return item.DayOffset*24*60 + parsed.Hour()*60 + parsed.Minute()
 }
 
 func nextItem(items []Item, currentID string) *Item {
