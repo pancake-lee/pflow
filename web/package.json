@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test:schedule": "node --test tests/schedule-editor.test.mjs",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview"
   },

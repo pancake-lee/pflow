@@ -202,3 +202,69 @@ func TestCurrentSelectsNextDayItem(t *testing.T) {
 		t.Fatal("next-day pending item was not detected")
 	}
 }
+
+func TestContentInsertionRequiresConfirmationOnlyForChangedRecords(t *testing.T) {
+	completedAt := time.Date(2026, 10, 13, 9, 50, 0, 0, time.UTC)
+	previous := Day{Date: "2026-10-13", Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 50,
+			Status: "completed", CompletedAt: completedAt},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 50},
+		{ID: "c", Start: "11:00", Title: "C", FocusMinutes: 50,
+			Status: "skipped", CompletedAt: completedAt},
+	}}
+	next := previous
+	next.Items = append([]Item(nil), previous.Items...)
+	// Insert B before A, keeping the time slots and row identities fixed.
+	next.Items[0].Title = "B"
+	next.Items[1].Title = "A"
+	_, err := PrepareDaySave(previous, next, false)
+	if !errors.Is(err, ErrRecordedItemsNeedConfirmation) {
+		t.Fatalf("unconfirmed content change accepted: %v", err)
+	}
+	prepared, err := PrepareDaySave(previous, next, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Items[0].Status != "" ||
+		!prepared.Items[0].CompletedAt.IsZero() {
+		t.Fatal("changed content retained its old execution record")
+	}
+	if prepared.Items[2].Status != "skipped" ||
+		!prepared.Items[2].CompletedAt.Equal(completedAt) {
+		t.Fatal("unaffected execution record was lost")
+	}
+}
+
+func TestWholeItemReorderMustBeCorrectedBeforePersistence(t *testing.T) {
+	manager := NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	day := Day{Date: "2026-10-13", Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 50},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 50},
+	}}
+	file := File{Version: 1, Days: map[string]Day{day.Date: day}}
+	err := manager.Save(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day.Items[0], day.Items[1] = day.Items[1], day.Items[0]
+	file.Days[day.Date] = day
+	if manager.Save(file) == nil {
+		t.Fatal("unordered whole items were persisted")
+	}
+	loaded, err := manager.Load()
+	if err != nil || loaded.Days[day.Date].Items[0].ID != "a" {
+		t.Fatalf("rejected save changed persisted order: %+v, %v", loaded, err)
+	}
+	// Keep the new item order and assign chronological start times.
+	day.Items[0].Start = "09:00"
+	day.Items[1].Start = "10:00"
+	file.Days[day.Date] = day
+	err = manager.Save(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = manager.Load()
+	if err != nil || loaded.Days[day.Date].Items[0].ID != "b" {
+		t.Fatalf("corrected order was not persisted: %+v, %v", loaded, err)
+	}
+}

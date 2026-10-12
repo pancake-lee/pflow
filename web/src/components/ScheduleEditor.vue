@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NInput, NInputNumber, NTag, useMessage } from 'naive-ui'
 
 type Item = { id: string; start: string; day_offset?: 0 | 1; title: string; focus_minutes: number; break_minutes: number; status?: 'completed' | 'skipped'; completed_at?: string }
@@ -20,7 +20,81 @@ const savingTemplate = ref(false)
 const deletingTemplateID = ref('')
 const saveConflict = ref(false)
 const error = ref('')
+type SortMode = 'item' | 'content'
+const drag = ref<{ id: string; mode: SortMode } | null>(null)
+const dropTarget = ref<{ index: number; after: boolean } | null>(null)
+const busy = computed(() => loading.value || saving.value || savingTemplate.value || !!deletingTemplateID.value)
+const timelineError = computed(() => validateTimeline(items.value))
+const recordedChanges = computed(() => loadedItems.value.some((previous) => {
+  if (!previous.status) return false
+  const current = items.value.find((item) => item.id === previous.id)
+  return !current || previous.title !== current.title || previous.start !== current.start ||
+    (previous.day_offset ?? 0) !== (current.day_offset ?? 0) ||
+    previous.focus_minutes !== current.focus_minutes || previous.break_minutes !== current.break_minutes
+}))
+watch(items, () => { saveConflict.value = false }, { deep: true })
 let uidSeq = 0
+
+function validateTimeline(itemList: Item[]): string {
+  let previousEnd = -1
+  for (const [index, item] of itemList.entries()) {
+    const prefix = `第 ${index + 1} 项：`
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(item.start)) return prefix + '请输入有效开始时间'
+    if (![0, 1].includes(item.day_offset ?? 0)) return prefix + '只支持当天或次日'
+    if (!Number.isInteger(item.focus_minutes) || item.focus_minutes < 1 ||
+      !Number.isInteger(item.break_minutes) || item.break_minutes < 0) return prefix + '请填写有效的专注和休息分钟'
+    const start = minuteOf(item)
+    if (index > 0 && start <= minuteOf(itemList[index - 1]!)) return prefix + '时间轴乱序，请按新顺序修改开始时间，或按时间排序'
+    if (start < previousEnd) return prefix + '与上一项重叠，请修改开始时间或时长'
+    previousEnd = start + item.focus_minutes + item.break_minutes
+    if (previousEnd > 2880) return prefix + '结束时间不能超过次日午夜'
+    if (!item.title.trim()) return prefix + '请输入内容'
+  }
+  return ''
+}
+
+// boundary is an insertion gap in the original list (0 through length).
+function moveItems(itemList: Item[], from: number, boundary: number, mode: SortMode): Item[] {
+  if (from < 0 || from >= itemList.length || boundary < 0 || boundary > itemList.length) return itemList
+  const to = boundary > from ? boundary - 1 : boundary
+  if (to === from) return itemList
+  const reordered = [...itemList]
+  const [moved] = reordered.splice(from, 1)
+  reordered.splice(to, 0, moved!)
+  return mode === 'item' ? reordered : itemList.map((item, index) => ({ ...item, title: reordered[index]!.title }))
+}
+function endDrag() { drag.value = null; dropTarget.value = null }
+function startDrag(event: DragEvent, item: Item, mode: SortMode) {
+  if (busy.value || !event.dataTransfer) { event.preventDefault(); return }
+  drag.value = { id: item.id, mode }
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', item.id)
+}
+function dragOver(event: DragEvent, index: number, mode: SortMode) {
+  if (busy.value || drag.value?.mode !== mode) return
+  event.preventDefault()
+  event.stopPropagation()
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  dropTarget.value = { index, after: event.clientY >= rect.top + rect.height / 2 }
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+function drop(event: DragEvent, mode: SortMode) {
+  if (busy.value || drag.value?.mode !== mode || !dropTarget.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  const from = items.value.findIndex((item) => item.id === drag.value!.id)
+  items.value = moveItems(items.value, from, dropTarget.value.index + Number(dropTarget.value.after), mode)
+  endDrag()
+}
+function moveWithKeyboard(event: KeyboardEvent, index: number, mode: SortMode) {
+  if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key) || busy.value) return
+  event.preventDefault()
+  items.value = moveItems(items.value, index, event.key === 'ArrowUp' ? index - 1 : index + 2, mode)
+}
+function dropClass(index: number, mode: SortMode) {
+  if (drag.value?.mode !== mode || dropTarget.value?.index !== index) return ''
+  return dropTarget.value.after ? 'drop-after' : 'drop-before'
+}
 
 function today() {
   const now = new Date()
@@ -77,6 +151,7 @@ async function changeDate() {
   await load(targetDate)
 }
 async function save(replaceRecorded = false) {
+  if (busy.value || timelineError.value) return
   saving.value = true
   error.value = ''
   try {
@@ -97,6 +172,7 @@ function applyTemplate(template: Template) {
   message.success(`已将“${template.name}”填入编辑器，保存后才会写入 ${date.value}`)
 }
 async function saveTemplate(replaceExisting = false) {
+  if (timelineError.value || loading.value || saving.value) return
   const name = templateName.value.trim()
   if (!name) { error.value = '请输入模板名称'; return }
   savingTemplate.value = true
@@ -137,23 +213,37 @@ onMounted(() => void load())
 <template>
   <main class="editor" :aria-busy="loading || saving">
     <div class="editor-toolbar"><div><span class="eyebrow">日程编辑</span><h2>{{ date }}</h2></div><NTag v-if="dirty" type="warning" size="small">有未保存编辑</NTag><NTag v-else type="success" size="small">已保存</NTag></div>
+    <fieldset class="editor-controls" :disabled="busy">
     <div class="date-row"><label for="schedule-date">编辑日期</label><input id="schedule-date" v-model="date" type="date" @change="changeDate" /><small>切换日期前会保护未保存编辑</small></div>
     <NAlert v-if="error" type="error" closable @close="error = ''">{{ error }}</NAlert>
+    <NAlert v-if="timelineError" type="warning" aria-live="polite">时间轴未通过校验，修正后才能保存。{{ timelineError }}</NAlert>
+    <NAlert v-if="recordedChanges" type="warning">修改涉及已完成或跳过的日程；保存时需确认替换，变更项的执行记录将被清除。</NAlert>
     <NAlert v-if="saveConflict" type="warning">此次修改会替换或删除已完成/跳过的日程及其记录。<NButton size="small" type="warning" :loading="saving" @click="save(true)">确认替换记录并保存</NButton></NAlert>
 
-    <section class="timeline" aria-label="日程时间轴"><div class="section-head"><div><h3>时间轴</h3><p>按开始时间排序。每项的休息时间属于该项，不能与下一项重叠。</p></div><div class="timeline-actions"><NButton @click="sortItems">按时间排序</NButton><NButton @click="newItem">添加日程项</NButton></div></div>
+    <section class="timeline" aria-label="日程时间轴"><div class="section-head"><div><h3>时间轴</h3><p>左侧拖整项，内容标题前拖内容。整项拖到目标行，内容拖到目标内容框；上半部插到前面，下半部插到后面。手柄聚焦后按 Alt + ↑ / ↓ 移动。</p></div><div class="timeline-actions"><NButton @click="sortItems">按时间排序</NButton><NButton @click="newItem">添加日程项</NButton></div></div>
+      <NTag v-if="drag" type="info" size="small" aria-live="polite">{{ drag.mode === 'content' ? '正在拖内容，时间和时长保持固定' : '正在拖整项，全部字段随项移动' }}</NTag>
       <div v-if="items.length === 0" class="empty-state">还没有日程项。可添加一项，或选择模板后应用。</div>
-      <article v-for="(item, index) in items" :key="item.id" class="item-card"><div class="item-order"><strong>{{ index + 1 }}</strong></div>
-        <div class="item-fields"><label>开始时间<input v-model="item.start" type="time" /></label><label class="item-title">内容<NInput v-model:value="item.title" placeholder="例如：撰写方案" /></label><label>专注分钟<NInputNumber v-model:value="item.focus_minutes" :min="1" /></label><label>休息分钟<NInputNumber v-model:value="item.break_minutes" :min="0" /></label></div>
+      <article v-for="(item, index) in items" :key="item.id" class="item-card" :class="dropClass(index, 'item')" @dragover="dragOver($event, index, 'item')" @drop="drop($event, 'item')"><div class="item-order"><button type="button" class="drag-handle item-handle" :draggable="!busy" :aria-label="`拖整项，第 ${index + 1} 项`" title="拖整项，包含时间、内容和时长；Alt + ↑ / ↓ 移动" @dragstart.stop="startDrag($event, item, 'item')" @dragend="endDrag" @keydown="moveWithKeyboard($event, index, 'item')">⠿</button><strong>{{ index + 1 }}</strong></div>
+        <div class="item-fields"><label>开始时间<input v-model="item.start" type="time" /></label><label class="item-title" :class="dropClass(index, 'content')" @dragover="dragOver($event, index, 'content')" @drop="drop($event, 'content')"><span class="content-label"><button type="button" class="drag-handle content-handle" :draggable="!busy" :aria-label="`拖内容，第 ${index + 1} 项`" title="只拖内容，时间和时长固定；Alt + ↑ / ↓ 移动" @dragstart.stop="startDrag($event, item, 'content')" @dragend="endDrag" @keydown="moveWithKeyboard($event, index, 'content')">⠿</button>内容</span><NInput v-model:value="item.title" placeholder="例如：撰写方案" /></label><label>专注分钟<NInputNumber v-model:value="item.focus_minutes" :min="1" /></label><label>休息分钟<NInputNumber v-model:value="item.break_minutes" :min="0" /></label></div>
         <div class="item-actions"><NTag v-if="item.status" :type="item.status === 'completed' ? 'success' : 'warning'" size="small">{{ item.status === 'completed' ? '已完成记录' : '已跳过记录' }}</NTag><NButton v-if="item.day_offset === 1 || isNextDayCandidate(index)" size="small" tertiary class="date-adjust" :class="{ 'date-adjust--active': item.day_offset === 1 }" @click="toggleDayOffset(item)">次日</NButton><NButton size="small" tertiary type="error" @click="items.splice(index, 1)">删除</NButton></div></article>
     </section>
 
-    <section class="templates"><div class="section-head"><div><h3>模板</h3><p>模板只保存日程内容，不保存完成或跳过记录。</p></div></div><div class="template-save"><NInput v-model:value="templateName" placeholder="将当前编辑另存为新模板" @keyup.enter="saveTemplate()" /><NButton :loading="savingTemplate" @click="saveTemplate()">另存为模板</NButton></div><div v-if="templates.length" class="template-list"><div v-for="template in templates" :key="template.id" class="template-row"><span>{{ template.name }} · {{ template.items.length }} 项</span><div class="template-actions"><NButton size="tiny" tertiary @click="applyTemplate(template)">应用</NButton><NButton size="tiny" tertiary type="error" :loading="deletingTemplateID === template.id" @click="delTemplate(template)">删除</NButton></div></div></div></section>
-    <footer class="editor-footer"><NButton @click="close">关闭</NButton><NButton type="primary" :loading="saving" @click="save()">保存 {{ date }} 日程</NButton></footer>
+    <section class="templates"><div class="section-head"><div><h3>模板</h3><p>模板只保存日程内容，不保存完成或跳过记录。</p></div></div><div class="template-save"><NInput v-model:value="templateName" placeholder="将当前编辑另存为新模板" @keyup.enter="saveTemplate()" /><NButton :loading="savingTemplate" :disabled="!!timelineError" @click="saveTemplate()">另存为模板</NButton></div><div v-if="templates.length" class="template-list"><div v-for="template in templates" :key="template.id" class="template-row"><span>{{ template.name }} · {{ template.items.length }} 项</span><div class="template-actions"><NButton size="tiny" tertiary @click="applyTemplate(template)">应用</NButton><NButton size="tiny" tertiary type="error" :loading="deletingTemplateID === template.id" @click="delTemplate(template)">删除</NButton></div></div></div></section>
+    <footer class="editor-footer"><NButton @click="close">关闭</NButton><NButton type="primary" :loading="saving" :disabled="!!timelineError || loading" @click="save()">保存 {{ date }} 日程</NButton></footer>
+    </fieldset>
   </main>
 </template>
 
 <style scoped>
+.editor-controls { display: flex; flex-direction: column; gap: 20px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.drag-handle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 28px; padding: 0; border: 1px solid var(--n-border-color); border-radius: 4px; background: transparent; color: var(--n-text-color-2); cursor: grab; font-size: 20px; }
+.drag-handle:active { cursor: grabbing; }
+.drag-handle:focus-visible { outline: 2px solid var(--n-color-target, #63e2b7); outline-offset: 2px; }
+.content-label { display: flex; align-items: center; gap: 5px; }
+.content-handle { width: 22px; height: 22px; color: var(--n-color-target, #63e2b7); }
+.drop-before { box-shadow: 0 -3px 0 var(--n-color-target, #63e2b7); }
+.drop-after { box-shadow: 0 3px 0 var(--n-color-target, #63e2b7); }
+
 .editor { display: flex; flex-direction: column; gap: 20px; padding-bottom: 4px; }.editor-toolbar,.date-row,.section-head,.item-card,.item-fields,.item-actions,.template-save,.template-actions,.editor-footer,.timeline-actions { display: flex; gap: 12px; align-items: center; }.editor-toolbar,.section-head,.editor-footer { justify-content: space-between; }.eyebrow { color: var(--n-text-color-3); font-size: 12px; }.editor-toolbar h2,.section-head h3 { margin: 2px 0 0; }.date-row { flex-wrap: wrap; }.date-row input,.item-fields input { color-scheme: dark; }.item-fields input { box-sizing: border-box; width: 100%; min-height: 34px; padding: 0 10px; color: var(--n-text-color-base); border: 1px solid var(--n-border-color); border-radius: var(--n-border-radius); background: var(--n-input-color); }.date-row small,.section-head p { margin: 0; color: var(--n-text-color-3); font-size: 12px; }.timeline,.templates { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--n-divider-color); }.item-card { align-items: stretch; padding: 12px; border: 1px solid var(--n-border-color); border-radius: 8px; }.item-order { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 26px; color: var(--n-text-color-3); }.item-fields { flex: 1; align-items: end; flex-wrap: wrap; }.item-fields label { display: flex; flex: 0 1 112px; flex-direction: column; gap: 5px; color: var(--n-text-color-3); font-size: 12px; }.item-fields .item-title { flex: 1 1 190px; }.item-actions { flex-direction: column; justify-content: center; align-items: flex-end; }.date-adjust { opacity: 0; transition: opacity .15s ease; }.item-card:hover .date-adjust,.item-card:focus-within .date-adjust { opacity: .45; }.date-adjust--active,.item-card:hover .date-adjust--active,.item-card:focus-within .date-adjust--active { opacity: 1; }.empty-state { padding: 18px; border: 1px dashed var(--n-border-color); border-radius: 8px; color: var(--n-text-color-3); text-align: center; }.template-save > :deep(.n-input) { flex: 1; min-width: 0; }.template-list { display: flex; flex-direction: column; border-top: 1px solid var(--n-divider-color); }.template-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--n-divider-color); }.template-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.editor-footer { position: sticky; bottom: 0; padding-top: 4px; background: var(--n-color-modal); }
 @media (max-width: 760px) { .item-card { flex-direction: column; }.item-order { flex-direction: row; justify-content: space-between; }.reorder-actions { flex-direction: row; }.item-fields { display: grid; grid-template-columns: 1fr 1fr; align-items: end; }.item-fields label,.item-fields .item-title { min-width: 0; }.item-title,.item-fields :deep(.n-checkbox) { grid-column: 1 / -1; }.item-actions { flex-direction: row; justify-content: space-between; align-items: center; }.template-apply,.template-save { align-items: stretch; flex-direction: column; } }
 </style>
