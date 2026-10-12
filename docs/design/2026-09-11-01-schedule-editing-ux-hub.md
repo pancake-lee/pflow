@@ -9,6 +9,7 @@
 - 首轮评估：[46 round 1](../eval/reports/2026-09-11-46-daily-schedule-round-1.md)
 - 第二轮评估：[46 round 2](../eval/reports/2026-09-11-46-daily-schedule-round-2.md)
 - UX 审计：[50 audit](../eval/reports/2026-09-11-50-schedule-editing-ux-audit.md)
+- 鼠标拖拽修复复评：[53 drag fix](../eval/reports/2026-10-13-53-schedule-drag-fix.md)，8.4/10，真实鼠标路径通过
 - 双层排序复评：[53 dual sort](../eval/reports/2026-10-13-53-schedule-dual-sort.md)，8.2/10，提交后阶段复评
 - 交接任务：[backlog #50](../backlog.md)
 
@@ -36,3 +37,4 @@
 ## Git 提交记录
 
 - `3b746a4`：#53 双层拖拽排序、记录保护提示、即时校验及回归。
+- `e3fe7ef`：修复提示位移取消原生拖拽，移除 Alt 入口；浏览器两种拖拽回放通过。

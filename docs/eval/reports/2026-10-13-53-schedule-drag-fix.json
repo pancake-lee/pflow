@@ -1,0 +1,26 @@
+{
+  "report_id": "2026-10-13-53-schedule-drag-fix",
+  "backlog_id": "53",
+  "created_at": "2026-10-13T00:50:00Z",
+  "target": "e3fe7ef 鼠标拖拽取消修复及移除键盘入口",
+  "overall": 8.4,
+  "dimension_scores": {
+    "正确性": 9.0,
+    "健壮性": 8.0,
+    "可维护性": 7.5,
+    "一致性": 8.5,
+    "惊喜度": 8.0,
+    "可用性": 9.0,
+    "交互体验": 9.0
+  },
+  "findings_for_backlog": [],
+  "verification_runtime": [
+    "前端脚本 34 PASS",
+    "make build PASS",
+    "Chromium 1440x1800 与 720x1800：真实鼠标两种拖拽、乱序拦截、修正保存重开、无 Alt 提示均 PASS"
+  ],
+  "verification_commits": {
+    "53": "e3fe7ef"
+  },
+  "review_scope": "同一 agent 提交后阶段复评；模拟 API 与本轮构建资源，不修改真实日程数据"
+}
