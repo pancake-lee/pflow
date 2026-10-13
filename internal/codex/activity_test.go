@@ -46,6 +46,40 @@ func TestAssistantPhaseDoesNotFinishRunningTask(t *testing.T) {
 	}
 }
 
+func TestFirstEffectiveMessageEstablishesMapping(t *testing.T) {
+	base := time.Date(2026, 10, 13, 10, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "rollout-test.jsonl")
+	data := `{"timestamp":"2026-10-13T10:00:00Z","type":"session_meta","payload":{"id":"new","cwd":"/work"}}` + "\n"
+	messageList := []string{"<environment_context>injected", " /help", "", "Implement the task", "follow-up"}
+	for i, message := range messageList {
+		data += fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"user_message","message":%q}}`, base.Add(time.Duration(i+1)*time.Minute).Format(time.RFC3339), message) + "\n"
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		summary, _ := parseRollout(path)
+		if i < 3 && !summary.FirstUserMessageAt.IsZero() {
+			t.Fatalf("mapped %q", message)
+		}
+		if i >= 3 && !summary.FirstUserMessageAt.Equal(base.Add(4*time.Minute)) {
+			t.Fatalf("first message time=%v", summary.FirstUserMessageAt)
+		}
+	}
+	summary, _ := parseRollout(path)
+	old := summary
+	old.SessionID = "old"
+	old.FirstUserMessageAt = base.Add(-time.Hour)
+	old.LastActive = base.Add(time.Hour)
+	if got := MatchSessionAfterMessage([]SessionSummary{old}, "/work", base); got != "" {
+		t.Fatal("old activity established mapping")
+	}
+	if got := MatchSessionAfterMessage([]SessionSummary{old, summary}, "/work", base); got != "new" {
+		t.Fatalf("got %q", got)
+	}
+	if got := MatchSessionAfterMessage([]SessionSummary{summary}, "/different", base); got != "" {
+		t.Fatal("wrong work directory matched")
+	}
+}
+
 func TestScanDirAggregatesRollout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "2026", "08", "27")

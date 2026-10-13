@@ -16,15 +16,16 @@ import (
 
 // SessionSummary is the privacy-preserving dashboard view of one Codex session.
 type SessionSummary struct {
-	SessionID    string
-	Project      string
-	Status       string
-	FirstActive  time.Time
-	LastActive   time.Time
-	Name         string
-	LastReq      string
-	LastResp     string
-	MessageCount int
+	SessionID          string
+	Project            string
+	Status             string
+	FirstActive        time.Time
+	LastActive         time.Time
+	Name               string
+	LastReq            string
+	LastResp           string
+	MessageCount       int
+	FirstUserMessageAt time.Time
 }
 
 func (s SessionSummary) IsActive() bool {
@@ -222,6 +223,7 @@ func parseRollout(path string) (SessionSummary, []string) {
 			switch p.Type {
 			case "user_message":
 				setSessionName(&s, p.Message)
+				setFirstUserMessage(&s, p.Message, at)
 			case "task_started":
 				s.Status = "busy"
 			case "task_complete", "turn_aborted":
@@ -241,6 +243,7 @@ func parseRollout(path string) (SessionSummary, []string) {
 			text := lastUserMessage(p.Content)
 			switch {
 			case p.Type == "message" && p.Role == "user":
+				setFirstUserMessage(&s, text, at)
 				s.MessageCount++
 				s.LastReq = truncate(text, 160)
 				setSessionName(&s, text)
@@ -269,20 +272,40 @@ func parseRollout(path string) (SessionSummary, []string) {
 	return s, diags
 }
 
-// FindSessionStartedAfter finds the newest session for workDir that was
-// created or became active after start. Codex may persist session metadata
-// before the first request but delay the rollout file until that request.
+// FindSessionStartedAfter waits for a first effective user message after start.
+// Metadata, injected context and slash commands cannot establish a mapping.
 func FindSessionStartedAfter(workDir string, start time.Time) (string, error) {
 	result, err := Scan(config.ScanOptions{Window: 24 * time.Hour, MaxActive: config.NoSessionLimit, MaxInactive: config.NoSessionLimit})
 	if err != nil {
 		return "", err
 	}
-	for _, s := range result.Sessions {
-		if s.Project == workDir && (!s.FirstActive.Before(start) || !s.LastActive.Before(start)) {
-			return s.SessionID, nil
+	return MatchSessionAfterMessage(result.Sessions, workDir, start), nil
+}
+
+// MatchSessionAfterMessage selects an already discovered session using its
+// first real message, rather than subsequent activity in an old session.
+func MatchSessionAfterMessage(sessionList []SessionSummary, workDir string,
+	start time.Time,
+) string {
+	var selected SessionSummary
+	for _, summary := range sessionList {
+		if summary.Project != workDir || summary.FirstUserMessageAt.IsZero() ||
+			summary.FirstUserMessageAt.Before(start) {
+			continue
+		}
+		if selected.SessionID == "" || summary.FirstUserMessageAt.Before(selected.FirstUserMessageAt) {
+			selected = summary
 		}
 	}
-	return "", nil
+	return selected.SessionID
+}
+
+func setFirstUserMessage(summary *SessionSummary, message string, at time.Time) {
+	message = cleanUserMessage(message)
+	if summary.FirstUserMessageAt.IsZero() && message != "" &&
+		!strings.HasPrefix(message, "/") {
+		summary.FirstUserMessageAt = at
+	}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -296,7 +319,7 @@ func firstNonEmpty(values ...string) string {
 
 func sessionName(message string) string {
 	message = cleanUserMessage(message)
-	if message == "" {
+	if message == "" || strings.HasPrefix(message, "/") {
 		return ""
 	}
 	return truncate(strings.Join(strings.Fields(message), " "), 48)

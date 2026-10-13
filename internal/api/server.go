@@ -586,7 +586,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		for _, diagnostic := range codexResult.Diagnostics {
 			errors = append(errors, "codex: "+diagnostic)
 		}
+		_, mappingErr := session.SyncPendingCodexMappings(codexResult.Sessions)
+		if mappingErr != nil {
+			errors = append(errors, "codex mapping: "+mappingErr.Error())
+		}
 		for _, s := range codexResult.Sessions {
+			if s.FirstUserMessageAt.IsZero() {
+				continue
+			}
 			entry := DashboardEntry{SessionID: truncate8(s.SessionID), AgentType: "codex", Project: s.Project, Status: s.Status, IsActive: s.IsActive(), TrafficLight: s.TrafficLight(), Name: s.Name, FirstActive: s.FirstActive, LastActive: s.LastActive, LastReq: s.LastReq, LastResp: s.LastResp, MessageCount: s.MessageCount}
 			if rootsFile != nil {
 				if matched := project.MatchRootFromList(rootsFile.Roots, s.Project); matched != nil {
