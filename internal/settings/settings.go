@@ -71,16 +71,19 @@ func (m *Manager) loadLocked() (File, error) {
 	if err != nil {
 		return File{}, fmt.Errorf("read settings: %w", err)
 	}
-	var stored File
+	stored := defaults
 	if err := json.Unmarshal(data, &stored); err != nil {
 		return File{}, fmt.Errorf("parse settings: %w", err)
 	}
-	merged := merge(defaults, stored)
-	normalizeMaxActive(&merged)
-	if err := validate(merged); err != nil {
+	if stored.Version == 0 {
+		return defaults, nil
+	}
+	stored.Version = Version
+	normalizeMaxActive(&stored)
+	if err := validate(stored); err != nil {
 		return File{}, err
 	}
-	return merged, nil
+	return stored, nil
 }
 
 // normalizeMaxActive coerces dashboard.max_active from 0 to 1. 0 used to mean
@@ -90,42 +93,6 @@ func normalizeMaxActive(value *File) {
 	if value.Dashboard.MaxActive == 0 {
 		value.Dashboard.MaxActive = 1
 	}
-}
-
-func merge(defaults, stored File) File {
-	if stored.Version == 0 {
-		return defaults
-	}
-	if stored.Dashboard.Window != "" {
-		defaults.Dashboard.Window = stored.Dashboard.Window
-	}
-	if stored.Dashboard.MaxInactive >= 0 {
-		defaults.Dashboard.MaxInactive = stored.Dashboard.MaxInactive
-	}
-	if stored.Dashboard.MaxActive >= 0 {
-		defaults.Dashboard.MaxActive = stored.Dashboard.MaxActive
-	}
-	if stored.Dashboard.RefreshSeconds >= 0 {
-		defaults.Dashboard.RefreshSeconds = stored.Dashboard.RefreshSeconds
-	}
-	defaults.Dashboard.DailyBootEnabled = stored.Dashboard.DailyBootEnabled
-	if stored.Attention.ProtectMinutes > 0 {
-		defaults.Attention.ProtectMinutes = stored.Attention.ProtectMinutes
-	}
-	if stored.Attention.FocusAddMinutes > 0 {
-		defaults.Attention.FocusAddMinutes = stored.Attention.FocusAddMinutes
-	}
-	if stored.Attention.MaskStrength > 0 {
-		defaults.Attention.MaskStrength = stored.Attention.MaskStrength
-	}
-	if stored.TimeEstimate.MinutesPerMessage > 0 {
-		defaults.TimeEstimate.MinutesPerMessage = stored.TimeEstimate.MinutesPerMessage
-	}
-	if stored.TimeEstimate.FallbackRatio > 0 {
-		defaults.TimeEstimate.FallbackRatio = stored.TimeEstimate.FallbackRatio
-	}
-	defaults.Version = Version
-	return defaults
 }
 
 func validate(value File) error {

@@ -3,8 +3,69 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+func TestLoadMergesOnlyPresentFields(t *testing.T) {
+	testList := []struct {
+		name string
+		json string
+		edit func(*File)
+	}{
+		{"missing dashboard fields", `{"version":1,"dashboard":{"window":"7d"}}`, func(f *File) { f.Dashboard.Window = "7d" }},
+		{"explicit zero and false", `{"version":1,"dashboard":{"max_inactive":0,"refresh_seconds":0,"daily_boot_enabled":false}}`, func(f *File) {
+			f.Dashboard.MaxInactive = 0
+			f.Dashboard.RefreshSeconds = 0
+			f.Dashboard.DailyBootEnabled = false
+		}},
+		{"partial attention", `{"version":1,"attention":{"mask_strength":0.5}}`, func(f *File) { f.Attention.MaskStrength = 0.5 }},
+		{"missing sections", `{"version":1,"future":true}`, func(*File) {}},
+	}
+	for _, tc := range testList {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			err := os.WriteFile(path, []byte(tc.json), 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := NewManagerAt(path)
+			actual, err := manager.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := Default()
+			tc.edit(&expected)
+			if !reflect.DeepEqual(actual, expected) {
+				t.Fatalf("got %+v want %+v", actual, expected)
+			}
+			if err := manager.Save(actual); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := NewManagerAt(path).Load()
+			if err != nil || !reflect.DeepEqual(reloaded, expected) {
+				t.Fatalf("reload=%+v err=%v", reloaded, err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsPresentInvalidValues(t *testing.T) {
+	for _, data := range []string{
+		`{"version":1,"dashboard":{"max_inactive":-1}}`,
+		`{"version":1,"dashboard":{"refresh_seconds":-1}}`,
+		`{"version":1,"attention":{"mask_strength":0}}`,
+		`{"version":1,"time_estimate":{"fallback_ratio":-1}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewManagerAt(path).Load(); err == nil {
+			t.Fatalf("accepted %s", data)
+		}
+	}
+}
 
 func TestManagerDefaultsAndRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
