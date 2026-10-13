@@ -52,6 +52,8 @@ import type { ReminderScoreInfo } from '../types/dashboard'
 import { FOCUS_CONFIG } from '../composables/useReminderScores'
 import { STAR_BONUS_MINUTES } from '../config/attention'
 
+const isDesktop = import.meta.env.VITE_PFLOW_DESKTOP === '1'
+
 // ── Props ─────────────────────────────────────────────────────────
 
 const props = defineProps<{
@@ -367,7 +369,7 @@ async function openTerminalFromTable(row: DashboardEntry) {
     await startTerminal()
     return
   }
-  if ((row.agent_type === 'claude' || row.agent_type === 'codex') && row.session_id) {
+  if (!isDesktop && (row.agent_type === 'claude' || row.agent_type === 'codex') && row.session_id) {
     await lookupTerminal(row.session_id, row.agent_type)
     if (terminalFound.value) {
       await startTerminal()
@@ -662,7 +664,7 @@ function openDetail(row: DashboardEntry) {
   }
   selectedSession.value = row
   showDetail.value = true
-  if ((row.agent_type === 'claude' || row.agent_type === 'codex') && row.session_id) {
+  if (!isDesktop && (row.agent_type === 'claude' || row.agent_type === 'codex') && row.session_id) {
     lookupTerminal(row.session_id, row.agent_type)
   } else {
     terminalLookupDone.value = true
@@ -877,7 +879,7 @@ const groupColumns: DataTableColumns<DashboardEntry> = [
     key: 'terminal',
     width: 50,
     render(row) {
-      if ((row.agent_type !== 'claude' && row.agent_type !== 'codex') || !row.has_terminal) return null
+      if (isDesktop || (row.agent_type !== 'claude' && row.agent_type !== 'codex') || !row.has_terminal) return null
       return h(
         NButton,
         {
@@ -1233,7 +1235,7 @@ function rowProps(row: DashboardEntry) {
         </NDescriptions>
 
         <!-- Terminal Section -->
-        <div class="terminal-section" v-if="selectedSession?.agent_type === 'claude' || selectedSession?.agent_type === 'codex'">
+        <div class="terminal-section" v-if="!isDesktop && (selectedSession?.agent_type === 'claude' || selectedSession?.agent_type === 'codex')">
           <NSpace>
             <NButton
               size="small"

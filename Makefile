@@ -1,4 +1,4 @@
-.PHONY: build env clean vet test go dev run install start stop status
+.PHONY: build build-windows env clean vet test go dev run install start stop status
 
 # Default target
 .DEFAULT_GOAL := build
@@ -22,6 +22,14 @@ build:
 # --------------------------------------------------
 # 以下都只处理go的
 # --------------------------------------------------
+
+## build-win: bundle frontend and Windows desktop app
+build-win:
+	cd $(WEB_DIR) && VITE_PFLOW_DESKTOP=1 pnpm run build
+	mkdir -p $(BIN_DIR)
+	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+		go build -tags desktop,production -ldflags "-H windowsgui" \
+		-o $(BIN_DIR)/pflow.exe ./cmd/pflow-desktop/
 
 ## env: install all dependencies (Go + Node.js)
 env:

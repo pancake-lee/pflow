@@ -12,6 +12,7 @@ import DashboardView from './views/DashboardView.vue'
 import DailyBootView from './views/DailyBootView.vue'
 import SettingsView from './views/SettingsView.vue'
 import ScheduleEditor from './components/ScheduleEditor.vue'
+import DesktopConnection from './components/DesktopConnection.vue'
 import type { DailyBootResponse } from './types/dashboard'
 
 // ── Daily Boot routing ──────────────────────────────────────────
@@ -24,6 +25,7 @@ const settingsView = ref<{ requestClose: () => boolean } | null>(null)
 const showScheduleEditor = ref(false)
 const scheduleEditor = ref<{ requestClose: () => boolean } | null>(null)
 const dashboardKey = ref(0) // bumped when settings are saved, so the dashboard re-reads them
+const isDesktop = import.meta.env.VITE_PFLOW_DESKTOP === '1'
 
 function updateScheduleVisibility(show: boolean) {
   if (show) showScheduleEditor.value = true
@@ -35,7 +37,7 @@ function updateSettingsVisibility(show: boolean) {
   else settingsView.value?.requestClose()
 }
 
-onMounted(async () => {
+async function checkBoot() {
   try {
     const settingsResp = await fetch('/api/v1/settings')
     const settings = settingsResp.ok ? await settingsResp.json() as { dashboard?: { daily_boot_enabled?: boolean } } : null
@@ -55,6 +57,10 @@ onMounted(async () => {
   } finally {
     bootChecked.value = true
   }
+}
+
+onMounted(() => {
+  if (!isDesktop) void checkBoot()
 })
 
 async function onBootComplete(goal: string) {
@@ -88,6 +94,7 @@ async function onBootSkip() {
 <template>
   <NConfigProvider :theme="darkTheme" :locale="zhCN" :date-locale="dateZhCN">
     <NMessageProvider>
+      <DesktopConnection v-if="isDesktop" @ready="checkBoot" />
       <!-- Daily Boot: shown when today's boot hasn't been completed -->
       <DailyBootView
         v-if="showBoot"

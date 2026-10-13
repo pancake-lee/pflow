@@ -19,7 +19,7 @@ pflow aggregates the state of all these AI sessions onto a single dashboard. Lik
 ## Quick Start
 
 ```bash
-# Launch Web Dashboard (visit http://localhost:8080 in your browser)
+# Launch Web Dashboard (visit http://localhost:10002 in your browser)
 pflow serve
 
 # Start a managed Claude session in the current project (tmux auto-configured)
@@ -28,6 +28,22 @@ pflow claude -dir .
 # Get today's attention recommendations (focus / switch / approval reminders)
 pflow suggest
 ```
+
+## Windows Desktop
+
+Build on Linux with system Go, pnpm, project dependencies and the MinGW-w64 compiler (`x86_64-w64-mingw32-gcc`):
+
+```bash
+make build-windows
+```
+
+Copy `bin/pflow.exe` to Windows and double-click it. WebView2 Runtime is required; Go, Node.js and the source tree are not. On first launch, enter the HTTP/HTTPS URL of a Linux `pflow serve`. Use **连接设置** at the top to change services. Projects, schedules and preferences are managed by the selected Linux service. The desktop stores its address in `%USERPROFILE%\.pflow\desktop.json` and logs in `%USERPROFILE%\.pflow\logs\desktop.log`. Closing the window exits the application.
+
+- Local Docker: run pflow in the Agent container and publish the port, e.g. `-p 127.0.0.1:10002:10002`; connect to `http://127.0.0.1:10002`. Sharing the Agent container lets pflow read its data, inspect its PID and access tmux.
+- Local WSL: run pflow in the Agent distribution; Windows can usually connect to `http://127.0.0.1:10002`.
+- Remote Linux: use an existing protected HTTP/HTTPS endpoint or your own SSH tunnel. For example, run `ssh -N -L 127.0.0.1:11002:127.0.0.1:10002 user@host` and connect to `http://127.0.0.1:11002`. The remote port must be reachable from the SSH host; stop the tunnel with Ctrl+C. The desktop does not manage SSH processes.
+
+The current API has no authentication, so use local port publishing, an existing protected network or an SSH tunnel. This release connects to one service and disables desktop Web terminals; use your existing terminal for Agent interactions. Linux browser terminals continue to work. Future local Agent and multiple remote source fusion is tracked in [backlog #55](./docs/backlog.md#55-future本地与多远端会话融合).
 
 ## Core Experience
 

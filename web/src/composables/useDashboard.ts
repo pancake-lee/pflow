@@ -18,9 +18,15 @@ export function useDashboard() {
       })
       const resp = await fetch(`/api/v1/dashboard?${params}`)
       if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
+        const body = resp.headers.get('content-type')?.includes('application/json')
+          ? await resp.json() as { error?: string }
+          : {}
+        throw new Error(body.error || `HTTP ${resp.status}: ${resp.statusText}`)
       }
       data.value = (await resp.json()) as DashboardResponse
+      if (import.meta.env.VITE_PFLOW_DESKTOP === '1') {
+        for (const session of data.value.sessions ?? []) session.has_terminal = false
+      }
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Unknown error'
       data.value = null

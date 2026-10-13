@@ -19,7 +19,7 @@ pflow 把这些 AI 会话的状态汇聚到一张仪表盘上，让你像将军�
 ## 快速开始
 
 ```bash
-# 打开 Web Dashboard（浏览器访问 http://localhost:8080）
+# 打开 Web Dashboard（浏览器访问 http://localhost:10002）
 pflow serve
 
 # 在当前项目启动 Claude 托管会话（tmux 自动配置）
@@ -31,6 +31,24 @@ pflow codex -dir .
 # 查看今日军情建议（专注/切换/授权提醒）
 pflow suggest
 ```
+
+## Windows 桌面版
+
+桌面版在原生 Windows 上运行，通过 HTTP/HTTPS 连接 Linux 上的 `pflow serve`。Agent 扫描、项目、日程与偏好在 Linux 端处理，exe 仅保存连接地址和日志。本轮支持单个服务，本地 Agent 与多个远端融合展示的后续方向见 [backlog #55](./docs/backlog.md#55-future本地与多远端会话融合)。
+
+在 Linux 构建环境安装系统 Go、pnpm 与 MinGW-w64 交叉编译器（`x86_64-w64-mingw32-gcc`），安装项目依赖后执行：
+
+```bash
+make build-windows
+```
+
+产物为 `bin/pflow.exe`，复制到 Windows 后双击，首次填写服务地址并点击「保存并连接」。Windows 需要 WebView2 Runtime，无需 Go、Node.js 或项目源码。连接地址保存于 `%USERPROFILE%\.pflow\desktop.json`，日志位于 `%USERPROFILE%\.pflow\logs\desktop.log`；关闭窗口即退出。
+
+- 本机 Docker：在 Agent 所在容器运行 `pflow serve`，创建容器时将服务端口映射至宿主机，例如 `-p 127.0.0.1:10002:10002`，桌面填写 `http://127.0.0.1:10002`。pflow 与 Agent 同容器运行可正确读取数据、查询 PID 和访问 tmux。
+- 本机 WSL：在 Agent 所在发行版运行 `pflow serve`，桌面通常填写 `http://127.0.0.1:10002`。
+- 远程 Linux：填写可达的受保护服务地址，或先在 Windows 终端建立已有 SSH 隧道，再填写转发后的地址。例如 `ssh -N -L 127.0.0.1:11002:127.0.0.1:10002 user@host`，桌面填写 `http://127.0.0.1:11002`。此处远端 `10002` 必须是 SSH 主机可访问的服务端口；Ctrl+C 停止隧道，桌面不管理 SSH 进程。
+
+通过窗口顶部「连接设置」切换服务；网络不可达时 Dashboard 显示错误，仍可修改地址。当前 API 不提供认证，应使用本机映射、已有受保护网络或 SSH 隧道。桌面版暂不提供 Web 终端，请通过已有终端操作 Agent，Linux 浏览器版保留终端功能。
 
 ## 核心体验
 
