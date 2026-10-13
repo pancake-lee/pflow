@@ -28,7 +28,7 @@
 | Done | Dashboard 体验 | 45 | 活跃会话展示数量筛选 | 8.5 |
 | Done | 日程管理 | 46 | 日程模板与今日日程引导 | 8.5 |
 | Done | Dashboard 体验 | 47 | Dashboard 与日程交互修复 | 8.5 |
-| Done | Dashboard 体验 | 48 | Dashboard 扫描性能优化 | 8.0（逻辑） |
+| Done | Dashboard 体验 | 48 | Dashboard 扫描性能优化 | 8.2 |
 | Done | 日程管理 | 49 | 日程编辑器安全上下文回归修复 | 8.6 |
 | Done | 日程管理 | 50 | 日程编辑、模板与日期切换闭环 UX 审计问题 | 6.0（逻辑） |
 | Done | 可观测性 | 51 | 提示分与遮挡分诊断日志收敛 | 9.0（逻辑） |
@@ -290,8 +290,8 @@
 
 ### #48 Dashboard 扫描性能优化
 
-- **状态**：Done（2026-09-11 用户确认验收线 3.5s 后关单）
-- **评估**：8.0（逻辑轮，通过；正确性 8.0 健壮性 8.0 完整性 8.0），详见 [2026-10-13 Done 任务逻辑评估](eval/reports/2026-10-13-all-done-logic.md)。
+- **状态**：Done
+- **历史逻辑评估**：8.0（逻辑轮，通过；正确性 8.0 健壮性 8.0 完整性 8.0），详见 [2026-10-13 Done 任务逻辑评估](eval/reports/2026-10-13-all-done-logic.md)。
 - **分组**：Dashboard 体验
 - **背景**：`GET /api/v1/dashboard?window=1d&max_active=1&max_inactive=0` 实测约 12s 返回。2026-09-11 量化排查（临时计时测试）：三家扫描串行执行且全量解析历史数据，claude.Scan 3.85s（逐行解析 `~/.claude/projects` 全部 132 个 transcript 共 110MB）、codex.Scan 6.86s（逐行解析 `~/.codex/sessions` 全部 160 个 rollout 共 222MB）、hermes.Scan 2.50s（外部 CLI export 约 1.7s + 33MB 输出逐行解析），合计约 13.2s，最终仅产出 4 个时间窗内 session。
 - **分析**：时间窗过滤发生在全量解析之后，顺序颠倒。codex `parseRollout`（internal/codex/activity.go:152）对每行完整 JSON 反序列化和时间解析后，才在 `ScanDir` 按 `LastActive` 过滤；`~/.codex/sessions` 实际按 `YYYY/MM/DD` 日期目录分层，window=1d 时 160 个文件中仅 13 个近一天有修改。claude `readTranscripts`（internal/claude/activity.go:337）在 `applySessionLimits` 之前解析全部 transcript，聚合阶段已知的时间窗内 sessionID 集合未用于缩小解析范围（transcript 文件名即 sessionID）；近一天仅 8 个文件有修改。hermes 主要成本是每次请求同步执行外部 CLI（约 1.7s 固定开销）加 33MB 输出解析，超出本任务所选方案范围，暂不动。
@@ -309,6 +309,9 @@
   - [x] 时间窗内 session 数量、状态、最后请求/响应摘要与优化前一致（7d 窗口改前/改后快照对比，仅本对话会话的 lastResp 与新增活跃 codex 会话随环境变化，无条目丢失或字段异常）。
   - [x] `GOTOOLCHAIN=local make vet` 与 `make test` 通过。
 - **AI 自动验证**（2026-09-11）：1d 窗口实测 claude.Scan 3.85s→41.5ms、codex.Scan 6.86s→734ms、扫描合计 13.2s→3.17s；hermes.Scan 保持 2.39s（范围外）。
+- **评估**：8.2（2026-10-13 完整复评；正确性 8.5 健壮性 8.5 可维护性 8.5 简洁性 8.5 一致性 8.5 惊喜度 6.0 可用性 8.5 交互体验 8.5），Done。
+- **本轮自动验证**：mtime 剪枝、跨天长会话、Claude 心跳与旧 transcript 专项回归及全量 Go 竞态检查通过；现有运行服务只读 Dashboard 基线 HTTP 200，3.408277s。
+- **复评结论**：运行服务未重启，3.408s 是现有部署基线，不作为新二进制端到端测量；本轮关联复用扫描结果，未加入额外全量扫描。
 
 ### #47 Dashboard 与日程交互修复
 
