@@ -192,5 +192,15 @@
   "excluded_targets": {
     "19": "未开发",
     "40": "用户开发环境便利命令，保持现状、不评估"
+  },
+  "historical": true,
+  "superseded_by": {
+    "date": "2026-10-13",
+    "record": "docs/backlog.md",
+    "scope_count": 25,
+    "minimum": 8.2,
+    "maximum": 9.0,
+    "mean": 8.6,
+    "status": "Done"
   }
 }
