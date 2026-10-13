@@ -39,7 +39,8 @@ func TestLoadMergesOnlyPresentFields(t *testing.T) {
 			if !reflect.DeepEqual(actual, expected) {
 				t.Fatalf("got %+v want %+v", actual, expected)
 			}
-			if err := manager.Save(actual); err != nil {
+			err = manager.Save(actual)
+			if err != nil {
 				t.Fatal(err)
 			}
 			reloaded, err := NewManagerAt(path).Load()
@@ -59,10 +60,12 @@ func TestLoadRejectsPresentInvalidValues(t *testing.T) {
 		`{"version":1,"time_estimate":{"fallback_ratio":-1}}`,
 	} {
 		path := filepath.Join(t.TempDir(), "settings.json")
-		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		err := os.WriteFile(path, []byte(data), 0600)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := NewManagerAt(path).Load(); err == nil {
+		_, err = NewManagerAt(path).Load()
+		if err == nil {
 			t.Fatalf("accepted %s", data)
 		}
 	}
@@ -165,7 +168,8 @@ func TestExplicitSaveInvalidatesBrowserRevisionAndPersists(t *testing.T) {
 	}
 	bad := second
 	bad.Dashboard.MaxInactive = -1
-	if err := manager.Save(bad); err == nil {
+	err = manager.Save(bad)
+	if err == nil {
 		t.Fatal("invalid save accepted")
 	}
 	reloaded, err = manager.Load()

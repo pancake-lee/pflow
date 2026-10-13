@@ -22,7 +22,8 @@ func TestAssistantPhaseDoesNotFinishRunningTask(t *testing.T) {
 			data := `{"timestamp":"2026-10-13T10:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/work"}}` + "\n" +
 				`{"timestamp":"2026-10-13T10:01:00Z","type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
 				fmt.Sprintf(`{"timestamp":"2026-10-13T10:02:00Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":%q,"content":[{"type":"output_text","text":"message"}]}}`, tc.phase) + "\n"
-			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			err := os.WriteFile(path, []byte(data), 0600)
+			if err != nil {
 				t.Fatal(err)
 			}
 			summary, diagnostics := parseRollout(path)
@@ -34,7 +35,8 @@ func TestAssistantPhaseDoesNotFinishRunningTask(t *testing.T) {
 			}
 			for _, event := range []string{"task_complete", "turn_aborted"} {
 				completed := data + fmt.Sprintf(`{"timestamp":"2026-10-13T10:03:00Z","type":"event_msg","payload":{"type":%q}}`, event) + "\n"
-				if err := os.WriteFile(path, []byte(completed), 0600); err != nil {
+				err = os.WriteFile(path, []byte(completed), 0600)
+				if err != nil {
 					t.Fatal(err)
 				}
 				result, _ := parseRollout(path)
@@ -53,7 +55,8 @@ func TestFirstEffectiveMessageEstablishesMapping(t *testing.T) {
 	messageList := []string{"<environment_context>injected", " /help", "", "Implement the task", "follow-up"}
 	for i, message := range messageList {
 		data += fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"user_message","message":%q}}`, base.Add(time.Duration(i+1)*time.Minute).Format(time.RFC3339), message) + "\n"
-		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		err := os.WriteFile(path, []byte(data), 0600)
+		if err != nil {
 			t.Fatal(err)
 		}
 		summary, _ := parseRollout(path)

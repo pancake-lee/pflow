@@ -25,7 +25,8 @@ func TestSettingsAPIExposesDefaultsAndSavedRevision(t *testing.T) {
 		settings.File
 		Defaults settings.File `json:"defaults"`
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+	err := json.Unmarshal(response.Body.Bytes(), &body)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if response.Code != http.StatusOK || body.Defaults.Dashboard.RefreshSeconds != 30 {
@@ -40,7 +41,8 @@ func TestSettingsAPIExposesDefaultsAndSavedRevision(t *testing.T) {
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(data)))
 	var saved settings.File
-	if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil {
+	err = json.Unmarshal(response.Body.Bytes(), &saved)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if response.Code != http.StatusOK || saved.DashboardRevision == "" || saved.Dashboard.Window != "7d" {

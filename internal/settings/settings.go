@@ -83,7 +83,8 @@ func (m *Manager) loadLocked() (File, error) {
 	}
 	stored.Version = Version
 	normalizeMaxActive(&stored)
-	if err := validate(stored); err != nil {
+	err = validate(stored)
+	if err != nil {
 		return File{}, err
 	}
 	return stored, nil

@@ -10,10 +10,11 @@ import (
 func TestRejectedUpdatePreservesPersistedRecords(t *testing.T) {
 	manager := NewManagerAt(filepath.Join(t.TempDir(), "schedule.json"))
 	file := File{Days: map[string]Day{"2026-10-13": {Date: "2026-10-13", Items: []Item{{ID: "a", Title: "original", Start: "09:00", FocusMinutes: 30, Status: "completed"}}}}}
-	if err := manager.Save(file); err != nil {
+	err := manager.Save(file)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := manager.Update(func(f *File) error { delete(f.Days, "2026-10-13"); return ErrRecordedItemsNeedConfirmation })
+	_, err = manager.Update(func(f *File) error { delete(f.Days, "2026-10-13"); return ErrRecordedItemsNeedConfirmation })
 	if !errors.Is(err, ErrRecordedItemsNeedConfirmation) {
 		t.Fatalf("err=%v", err)
 	}
@@ -211,7 +212,8 @@ func TestSaveSanitizesTemplateAndRejectsInvalidTimeline(t *testing.T) {
 	file.Templates = []Template{{ID: "t", Name: "template", Items: []Item{{
 		ID: "a", Start: "09:00", Title: "A", FocusMinutes: 50, Status: "completed", CompletedAt: time.Now(),
 	}}}}
-	if err := manager.Save(file); err != nil {
+	err := manager.Save(file)
+	if err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := manager.Load()
@@ -232,7 +234,8 @@ func TestSaveAllowsItemsAcrossMidnight(t *testing.T) {
 			{ID: "next", Start: "00:15", DayOffset: 1, Title: "after midnight", FocusMinutes: 50},
 		},
 	}}}
-	if err := manager.Save(file); err != nil {
+	err := manager.Save(file)
+	if err != nil {
 		t.Fatalf("cross-midnight schedule rejected: %v", err)
 	}
 
