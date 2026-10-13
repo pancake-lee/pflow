@@ -17,7 +17,7 @@
 | 待规划 | 视觉扩展 | 23 | 双层换肤系统 | — |
 | 待规划 | 平台扩展 | 24 | Web AI 平台状态监控 | — |
 | 待规划 | 平台扩展 | 25 | 跨设备同步 | — |
-| Done | Agent 扩展 | 26 | Codex 会话支持 | 5.7（逻辑） |
+| Done | Agent 扩展 | 26 | Codex 会话支持 | 8.4 |
 | Done | Agent 扩展 | 38 | Codex 会话名称提取 | 8.7（逻辑） |
 | Done | Agent 扩展 | 39 | Codex 会话标题回退修复 | 8.7（逻辑） |
 | Done | Agent 扩展 | 41 | Claude 会话误报 waiting（同 sessionId 元数据覆盖） | 8.7（逻辑） |
@@ -423,7 +423,7 @@
 ### #26 Codex 会话支持
 
 - **状态**：Done
-- **评估**：5.7（逻辑轮，不通过；正确性 5.0 健壮性 6.0 完整性 6.0），详见 [2026-10-13 Done 任务逻辑评估](eval/reports/2026-10-13-all-done-logic.md)。
+- **历史逻辑评估**：5.7（逻辑轮，不通过；正确性 5.0 健壮性 6.0 完整性 6.0），详见 [2026-10-13 Done 任务逻辑评估](eval/reports/2026-10-13-all-done-logic.md)。
 - **分组**：Agent 扩展
 - **背景**：当前 pflow 仅展示 Claude Code 与 Hermes 会话，用户通过 Codex CLI 完成的工作无法进入同一注意力面板。
 - **分析**：本机 Codex CLI 已将交互会话写入 `~/.codex/sessions/` 的 JSONL rollout 记录，并可按会话 ID 恢复。该记录含会话元数据、工作目录和事件时间线，适合作为无需常驻进程的发现源。Codex app-server 仍属实验能力，不作为本任务依赖；终端画面解析也不符合项目的稳定数据源约束。
@@ -436,8 +436,11 @@
   - [x] 近期 Codex CLI 会话能按工作目录、会话 ID、活动时间和状态显示在 CLI 与 Dashboard API，且不读取或返回完整对话内容。
   - [x] Codex 正在执行、已空闲及证据不足会话分别映射为既有状态和 `unknown`；等待状态仅在记录提供明确证据时映射，避免误报等待。
   - [x] Codex 会话参与项目归类、提醒分数和军情哨，既有 Claude/Hermes 测试未回归。
-  - [ ] 通过 `pflow codex` 创建的会话能在 Dashboard 中关联到 tmux/ttyd 终端，需运行时：在交互式终端执行设计文档中的手动验证；普通用户直接启动的 Codex 会话已通过只读发现验证。
+  - [x] 通过 `pflow codex` 创建的会话能在 Dashboard 中关联到 tmux/ttyd 终端，需运行时：在交互式终端执行设计文档中的手动验证；普通用户直接启动的 Codex 会话已通过只读发现验证。
   - [x] `GOTOOLCHAIN=local make vet`、`GOTOOLCHAIN=local make test` 和 `make build` 均通过。
+- **评估**：8.4（2026-10-13 完整复评；正确性 9.0 健壮性 8.0 可维护性 8.0 简洁性 8.5 一致性 9.0 惊喜度 7.0 可用性 9.0 交互体验 8.5），Done。
+- **本轮自动验证**：Codex/session/API 非缓存及竞态回归通过，覆盖各回复阶段、首次有效消息、目录匹配与持久化终端关联；整包构建通过。
+- **复评结论**：状态、标题、项目聚合和待关联映射闭环已修复；接受 rollout 落盘/刷新延迟与小窗口误判，不接管 Agent 输入。
 
 ### #38 Codex 会话名称提取
 
