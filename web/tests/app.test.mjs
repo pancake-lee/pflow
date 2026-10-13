@@ -1,0 +1,66 @@
+import { readFileSync } from 'node:fs'
+import vm from 'node:vm'
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import ts from 'typescript'
+import { ref } from 'vue'
+
+const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+  .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
+  .replace(/import[\s\S]*?from\s+['"][^'"]+['"]/g, '')
+
+function app(fetch) {
+  let mounted
+  const context = vm.createContext({
+    ref, fetch, onMounted: (callback) => { mounted = callback },
+  })
+  vm.runInContext(ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText, context)
+  return { mount: () => mounted(), run: (code) => vm.runInContext(code, context) }
+}
+
+test('disabled daily boot finishes startup without fetching the boot API', async () => {
+  const requests = []
+  const instance = app(async (url) => {
+    requests.push(url)
+    return { ok: true, json: async () => ({ dashboard: { daily_boot_enabled: false } }) }
+  })
+  await instance.mount()
+  assert.deepEqual(requests, ['/api/v1/settings'])
+  assert.equal(instance.run('bootChecked.value && !showBoot.value'), true)
+})
+
+for (const completed of [false, true]) {
+  test(`enabled daily boot completes startup with completed=${completed}`, async () => {
+    const instance = app(async (url) => ({
+      ok: true,
+      json: async () => url.includes('settings')
+        ? { dashboard: { daily_boot_enabled: true } }
+        : { completed, goal: 'test goal' },
+    }))
+    await instance.mount()
+    assert.equal(instance.run('bootChecked.value'), true)
+    assert.equal(instance.run('showBoot.value'), !completed)
+    assert.equal(instance.run('todayGoal.value'), 'test goal')
+  })
+}
+
+for (const failure of ['settings-network', 'settings-json', 'boot-network', 'boot-http']) {
+  test(`startup finishes when ${failure} fails`, async () => {
+    const instance = app(async (url) => {
+      const settings = url.includes('settings')
+      if ((settings && failure === 'settings-network') ||
+          (!settings && failure === 'boot-network')) throw new Error('offline')
+      return {
+        ok: settings || failure !== 'boot-http',
+        json: async () => {
+          if (settings && failure === 'settings-json') throw new Error('invalid JSON')
+          return settings ? { dashboard: { daily_boot_enabled: true } } : {}
+        },
+      }
+    })
+    await instance.mount()
+    assert.equal(instance.run('bootChecked.value && !showBoot.value'), true)
+  })
+}

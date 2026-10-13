@@ -40,8 +40,9 @@ onMounted(async () => {
     }
   } catch {
     // API not available — skip boot, show dashboard directly
+  } finally {
+    bootChecked.value = true
   }
-  bootChecked.value = true
 })
 
 async function onBootComplete(goal: string) {
