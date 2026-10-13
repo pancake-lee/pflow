@@ -13,4 +13,6 @@
 - `v0.0.5`：完成 Web/CLI Dashboard、Claude 托管会话、ttyd Web 终端和单二进制部署；见 [`cycles/01-phase1-phase2-foundation.md`](cycles/01-phase1-phase2-foundation.md) 和 [`cycles/03-tmux-ttyd.md`](cycles/03-tmux-ttyd.md)。
 - `v0.0.8`：完成动态注意力引导系统及多 Agent 会话管理；见 [`cycles/09-v0.0.8-dynamic-attention-guidance.md`](cycles/09-v0.0.8-dynamic-attention-guidance.md)。
 
+- `v0.0.9`：完成 Codex 会话、设置与日程体验闭环，25 项产品任务均达到 8 分；见 [版本归档](v0.0.9.md)。
+
 当前有效的工作流从 [`../harness.md`](../harness.md) 进入。
