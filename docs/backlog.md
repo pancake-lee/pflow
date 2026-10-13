@@ -18,7 +18,7 @@
 | 待规划 | 平台扩展 | 24 | Web AI 平台状态监控 | — |
 | 待规划 | 平台扩展 | 25 | 跨设备同步 | — |
 | Done | Agent 扩展 | 26 | Codex 会话支持 | 8.4 |
-| Done | Agent 扩展 | 38 | Codex 会话名称提取 | 8.7（逻辑） |
+| Done | Agent 扩展 | 38 | Codex 会话名称提取 | 8.5 |
 | Done | Agent 扩展 | 39 | Codex 会话标题回退修复 | 8.7（逻辑） |
 | Done | Agent 扩展 | 41 | Claude 会话误报 waiting（同 sessionId 元数据覆盖） | 8.7（逻辑） |
 | Done | 服务管理 | 40 | `make start` 误杀 Codex 会话 | 不评估 |
@@ -445,7 +445,7 @@
 ### #38 Codex 会话名称提取
 
 - **状态**：Done
-- **评估**：8.7（逻辑轮，通过；正确性 9.0 健壮性 8.0 完整性 9.0），详见 [2026-10-13 Done 任务逻辑评估](eval/reports/2026-10-13-all-done-logic.md)。
+- **历史逻辑评估**：8.7（逻辑轮，通过；正确性 9.0 健壮性 8.0 完整性 9.0），详见 [2026-10-13 Done 任务逻辑评估](eval/reports/2026-10-13-all-done-logic.md)。
 - **分组**：Agent 扩展
 - **背景**：Codex 会话名称当前显示 AGENTS 注入上下文，而非用户实际要处理的工作。
 - **分析**：现有解析器把第一条 `response_item` user 消息写入 `Name`。本机 rollout 另有 159 条 `event_msg` / `user_message`；它不含首次 `response_item` 中的 AGENTS 注入记录。`session_meta` 提供 cwd、git 分支、提交和来源，但没有独立会话标题；reasoning summary 也不是稳定标题。
@@ -457,6 +457,9 @@
   - [x] 首个 `event_msg` / `user_message` 稳定作为会话名称；AGENTS 注入片段会被剥离，后续回合不改名。
   - [x] `user_message` 缺失时显示工作目录基名，空工作目录显示 `Codex session`。
   - [x] `GOTOOLCHAIN=local make vet`、`GOTOOLCHAIN=local make test` 与 `GOTOOLCHAIN=local make build` 均通过。
+- **评估**：8.5（2026-10-13 完整复评；正确性 9.0 健壮性 8.5 可维护性 8.5 简洁性 9.0 一致性 9.0 惊喜度 6.5 可用性 9.0 交互体验 8.5），Done。
+- **本轮自动验证**：Codex 标题注入、多轮稳定名称、空目录与目录回退回归通过；全量 Go 竞态测试和构建通过。
+- **复评结论**：按 #39 后的首条真实任务标题语义复评，不以旧 event_msg 单来源限制判回归。
 
 ### #39 Codex 会话标题回退修复
 
