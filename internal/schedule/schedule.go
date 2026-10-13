@@ -17,6 +17,8 @@ import (
 // remove an item that already has an execution record.
 var ErrRecordedItemsNeedConfirmation = errors.New("recorded schedule items require replacement confirmation")
 
+var ErrInvalidSchedule = errors.New("invalid schedule")
+
 type Item struct {
 	ID           string    `json:"id"`
 	Start        string    `json:"start"`
@@ -59,6 +61,10 @@ func NewManagerAt(path string) *Manager {
 func (m *Manager) Load() (File, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.loadLocked()
+}
+
+func (m *Manager) loadLocked() (File, error) {
 	data, err := os.ReadFile(m.path)
 	if os.IsNotExist(err) {
 		return File{Version: 1, Days: map[string]Day{}}, nil
@@ -186,25 +192,52 @@ func containsItem(itemList []Item, id string) bool {
 func (m *Manager) Save(f File) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.saveLocked(f)
+}
+
+// Update serializes the complete read-modify-write operation for this manager.
+// A rejected change leaves the persisted file untouched.
+func (m *Manager) Update(change func(*File) error) (File, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f, err := m.loadLocked()
+	if err != nil {
+		return File{}, err
+	}
+	err = change(&f)
+	if err != nil {
+		return File{}, err
+	}
+	err = m.saveLocked(f)
+	if err != nil {
+		return File{}, err
+	}
+	return f, nil
+}
+
+func (m *Manager) saveLocked(f File) error {
 	f.Version = 1
 	if f.Days == nil {
 		f.Days = map[string]Day{}
 	}
 	for _, d := range f.Days {
 		if err := validate(d.Items); err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrInvalidSchedule, err)
 		}
 	}
 	for _, t := range f.Templates {
 		if err := validate(t.Items); err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrInvalidSchedule, err)
 		}
 	}
 	f.Templates = CleanTemplateList(f.Templates)
 	if err := os.MkdirAll(filepath.Dir(m.path), 0755); err != nil {
 		return err
 	}
-	data, _ := json.MarshalIndent(f, "", "  ")
+	data, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
 	tmp := m.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err

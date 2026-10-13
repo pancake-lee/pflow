@@ -7,6 +7,30 @@ import (
 	"time"
 )
 
+func TestRejectedUpdatePreservesPersistedRecords(t *testing.T) {
+	manager := NewManagerAt(filepath.Join(t.TempDir(), "schedule.json"))
+	file := File{Days: map[string]Day{"2026-10-13": {Date: "2026-10-13", Items: []Item{{ID: "a", Title: "original", Start: "09:00", FocusMinutes: 30, Status: "completed"}}}}}
+	if err := manager.Save(file); err != nil {
+		t.Fatal(err)
+	}
+	_, err := manager.Update(func(f *File) error { delete(f.Days, "2026-10-13"); return ErrRecordedItemsNeedConfirmation })
+	if !errors.Is(err, ErrRecordedItemsNeedConfirmation) {
+		t.Fatalf("err=%v", err)
+	}
+	reloaded, err := manager.Load()
+	if err != nil || len(reloaded.Days) != 1 {
+		t.Fatalf("lost records: %+v %v", reloaded, err)
+	}
+	_, err = manager.Update(func(f *File) error { f.Days["bad"] = Day{Items: []Item{{ID: "bad", Start: "wrong"}}}; return nil })
+	if !errors.Is(err, ErrInvalidSchedule) {
+		t.Fatalf("validation err=%v", err)
+	}
+	reloaded, err = manager.Load()
+	if err != nil || len(reloaded.Days) != 1 {
+		t.Fatal("invalid update was persisted")
+	}
+}
+
 func TestPreviousPlanOwnsUnfinishedCrossMidnightItem(t *testing.T) {
 	testList := []struct {
 		name    string

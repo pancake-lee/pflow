@@ -8,11 +8,60 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/pancake-lee/pflow/internal/schedule"
 )
+
+func TestConcurrentScheduleAndTemplateUpdatesDoNotOverwrite(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	var workers sync.WaitGroup
+	start := make(chan struct{})
+	for i := 1; i <= 24; i++ {
+		for _, kind := range []string{"day", "template"} {
+			workers.Add(1)
+			go func(i int, kind string) {
+				defer workers.Done()
+				<-start
+				body := fmt.Sprintf(`{"date":"2026-10-%02d","items":[]}`, i)
+				url := "/api/v1/schedules"
+				if kind == "template" {
+					body = fmt.Sprintf(`{"name":"template-%d","items":[]}`, i)
+					url = "/api/v1/schedule-templates"
+				}
+				r := httptest.NewRequest(http.MethodPut, url, bytes.NewBufferString(body))
+				w := httptest.NewRecorder()
+				server.ServeHTTP(w, r)
+				if w.Code != http.StatusOK {
+					t.Errorf("%s status=%d body=%s", kind, w.Code, w.Body.String())
+				}
+			}(i, kind)
+		}
+	}
+	close(start)
+	workers.Wait()
+	file, err := server.scheduleMgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Days) != 24 || len(file.Templates) != 24 {
+		t.Fatalf("days=%d templates=%d", len(file.Days), len(file.Templates))
+	}
+}
+
+func TestScheduleStorageFailureReturnsServerError(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(t.TempDir())
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/schedules", bytes.NewBufferString(`{"date":"2026-10-13","items":[]}`))
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
 
 func TestComputeReminderScoresIncludesCodexSession(t *testing.T) {
 	now := time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)

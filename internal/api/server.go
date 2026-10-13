@@ -182,8 +182,18 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	current, next := schedule.SetCurrent(&day, now)
 	if ok && f.Days[date].CurrentID != day.CurrentID {
-		f.Days[date] = day
-		_ = s.scheduleMgr.Save(f)
+		updated, updateErr := s.scheduleMgr.Update(func(file *schedule.File) error {
+			latest := file.Days[date]
+			schedule.SetCurrent(&latest, now)
+			file.Days[date] = latest
+			return nil
+		})
+		if updateErr != nil {
+			writeScheduleError(w, updateErr)
+			return
+		}
+		day = updated.Days[date]
+		current, next = schedule.Current(day, now)
 	}
 	phase := "free"
 	breakRemainingMinutes := 0
@@ -228,27 +238,20 @@ func (s *Server) handlePutSchedule(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "invalid date"})
 		return
 	}
-	f, err := s.scheduleMgr.Load()
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	previous := f.Days[request.Date]
-	day, err := schedule.PrepareDaySave(previous, schedule.Day{Date: request.Date, Items: request.Items}, request.ReplaceRecorded)
-	if err != nil {
-		if errors.Is(err, schedule.ErrRecordedItemsNeedConfirmation) {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "recorded_items_need_confirmation"})
-			return
+	updated, err := s.scheduleMgr.Update(func(file *schedule.File) error {
+		day, prepareErr := schedule.PrepareDaySave(file.Days[request.Date],
+			schedule.Day{Date: request.Date, Items: request.Items}, request.ReplaceRecorded)
+		if prepareErr != nil {
+			return prepareErr
 		}
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		file.Days[day.Date] = day
+		return nil
+	})
+	if err != nil {
+		writeScheduleError(w, err)
 		return
 	}
-	f.Days[day.Date] = day
-	if err := s.scheduleMgr.Save(f); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, day)
+	writeJSON(w, 200, updated.Days[request.Date])
 }
 
 func (s *Server) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
@@ -279,39 +282,24 @@ func (s *Server) handlePutTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	template = schedule.CleanTemplate(template)
-	f, err := s.scheduleMgr.Load()
+	_, err := s.scheduleMgr.Update(func(file *schedule.File) error {
+		for index, existing := range file.Templates {
+			if existing.Name == template.Name && existing.ID != template.ID {
+				if !request.ReplaceExisting {
+					return errTemplateNameConflict
+				}
+				template.ID = existing.ID
+			}
+			if existing.ID == template.ID {
+				file.Templates[index] = template
+				return nil
+			}
+		}
+		file.Templates = append(file.Templates, template)
+		return nil
+	})
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	for index := range f.Templates {
-		if f.Templates[index].Name == template.Name && f.Templates[index].ID != template.ID {
-			if !request.ReplaceExisting {
-				writeJSON(w, http.StatusConflict, map[string]string{"error": "template name already exists", "code": "template_name_conflict"})
-				return
-			}
-			template.ID = f.Templates[index].ID
-			f.Templates[index] = template
-			if err := s.scheduleMgr.Save(f); err != nil {
-				writeJSON(w, 400, map[string]string{"error": err.Error()})
-				return
-			}
-			writeJSON(w, 200, template)
-			return
-		}
-		if f.Templates[index].ID == template.ID {
-			f.Templates[index] = template
-			if err := s.scheduleMgr.Save(f); err != nil {
-				writeJSON(w, 400, map[string]string{"error": err.Error()})
-				return
-			}
-			writeJSON(w, 200, template)
-			return
-		}
-	}
-	f.Templates = append(f.Templates, template)
-	if err := s.scheduleMgr.Save(f); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		writeScheduleError(w, err)
 		return
 	}
 	writeJSON(w, 200, template)
@@ -323,20 +311,18 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "id is required"})
 		return
 	}
-	f, err := s.scheduleMgr.Load()
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	filtered := f.Templates[:0]
-	for _, t := range f.Templates {
-		if t.ID != id {
-			filtered = append(filtered, t)
+	_, err := s.scheduleMgr.Update(func(file *schedule.File) error {
+		filtered := file.Templates[:0]
+		for _, template := range file.Templates {
+			if template.ID != id {
+				filtered = append(filtered, template)
+			}
 		}
-	}
-	f.Templates = filtered
-	if err := s.scheduleMgr.Save(f); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		file.Templates = filtered
+		return nil
+	})
+	if err != nil {
+		writeScheduleError(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -356,37 +342,54 @@ func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "action must be completed or skipped"})
 		return
 	}
-	f, err := s.scheduleMgr.Load()
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	day, ok := f.Days[req.Date]
-	if !ok {
-		writeJSON(w, 404, map[string]string{"error": "schedule not found"})
-		return
-	}
-	found := false
-	for i := range day.Items {
-		if day.Items[i].ID == req.ID {
-			day.Items[i].Status = req.Action
-			day.Items[i].CompletedAt = time.Now()
-			found = true
+	updated, err := s.scheduleMgr.Update(func(file *schedule.File) error {
+		day, exists := file.Days[req.Date]
+		if !exists {
+			return fmt.Errorf("schedule not found: %w", errScheduleNotFound)
 		}
-	}
-	if day.CurrentID == req.ID {
-		_, _ = schedule.Advance(&day, req.ID)
-	}
-	if !found {
-		writeJSON(w, 404, map[string]string{"error": "item not found"})
+		found := false
+		for i := range day.Items {
+			if day.Items[i].ID == req.ID {
+				day.Items[i].Status = req.Action
+				day.Items[i].CompletedAt = time.Now()
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("item not found: %w", errScheduleNotFound)
+		}
+		if day.CurrentID == req.ID {
+			schedule.Advance(&day, req.ID)
+		}
+		file.Days[req.Date] = day
+		return nil
+	})
+	if err != nil {
+		writeScheduleError(w, err)
 		return
 	}
-	f.Days[req.Date] = day
-	if err := s.scheduleMgr.Save(f); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
+	writeJSON(w, 200, updated.Days[req.Date])
+}
+
+var errTemplateNameConflict = errors.New("template name already exists")
+var errScheduleNotFound = errors.New("schedule or item not found")
+
+func writeScheduleError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	payload := map[string]string{"error": err.Error()}
+	switch {
+	case errors.Is(err, schedule.ErrRecordedItemsNeedConfirmation):
+		status = http.StatusConflict
+		payload["code"] = "recorded_items_need_confirmation"
+	case errors.Is(err, errTemplateNameConflict):
+		status = http.StatusConflict
+		payload["code"] = "template_name_conflict"
+	case errors.Is(err, schedule.ErrInvalidSchedule):
+		status = http.StatusBadRequest
+	case errors.Is(err, errScheduleNotFound):
+		status = http.StatusNotFound
 	}
-	writeJSON(w, 200, day)
+	writeJSON(w, status, payload)
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
