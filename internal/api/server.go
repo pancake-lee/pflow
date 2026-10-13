@@ -283,13 +283,16 @@ func (s *Server) handlePutTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	template = schedule.CleanTemplate(template)
 	_, err := s.scheduleMgr.Update(func(file *schedule.File) error {
-		for index, existing := range file.Templates {
+		// Resolve name conflicts before updating by ID, regardless of order.
+		for _, existing := range file.Templates {
 			if existing.Name == template.Name && existing.ID != template.ID {
 				if !request.ReplaceExisting {
 					return errTemplateNameConflict
 				}
 				template.ID = existing.ID
 			}
+		}
+		for index, existing := range file.Templates {
 			if existing.ID == template.ID {
 				file.Templates[index] = template
 				return nil

@@ -50,6 +50,41 @@ func TestSettingsAPIExposesDefaultsAndSavedRevision(t *testing.T) {
 	}
 }
 
+func TestTemplateRenameCannotBypassNameConflictWithAnExistingID(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	file := schedule.File{Templates: []schedule.Template{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}}}
+	err := server.scheduleMgr.Save(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/schedule-templates", bytes.NewBufferString(`{"id":"a","name":"B","items":[]}`))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	reloaded, err := server.scheduleMgr.Load()
+	if err != nil || reloaded.Templates[0].Name != "A" {
+		t.Fatal("conflict mutated the other template")
+	}
+	request = httptest.NewRequest(http.MethodPut, "/api/v1/schedule-templates", bytes.NewBufferString(`{"id":"a","name":"B","items":[],"replace_existing":true}`))
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d", response.Code)
+	}
+	var saved schedule.Template
+	err = json.Unmarshal(response.Body.Bytes(), &saved)
+	if err != nil || saved.ID != "b" {
+		t.Fatalf("saved=%+v err=%v", saved, err)
+	}
+	reloaded, err = server.scheduleMgr.Load()
+	if err != nil || len(reloaded.Templates) != 2 || reloaded.Templates[0].Name != "A" {
+		t.Fatal("confirmed overwrite removed or renamed unrelated template")
+	}
+}
+
 func TestConcurrentScheduleAndTemplateUpdatesDoNotOverwrite(t *testing.T) {
 	server := NewServer(nil, nil)
 	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
