@@ -52,6 +52,8 @@ install: build
 	@echo "==> pflow installed to $$(go env GOPATH)/bin/pflow"
 
 # ── 服务管理 ──────────────────────────────────────────────────────
+# start/stop/status 仅供本项目开发环境使用，保持现有便利脚本行为。
+# 不作为产品服务管理能力，不纳入功能质量评估或严谨生命周期治理。
 
 PID_DIR := .local/.pids
 LOG_DIR := logs
