@@ -7,6 +7,39 @@ import (
 	"time"
 )
 
+func TestPreviousPlanOwnsUnfinishedCrossMidnightItem(t *testing.T) {
+	testList := []struct {
+		name    string
+		item    Item
+		pending bool
+	}{
+		{"focus crosses midnight", Item{Start: "23:30", FocusMinutes: 60, BreakMinutes: 10}, true},
+		{"break crosses midnight", Item{Start: "23:30", FocusMinutes: 20, BreakMinutes: 20}, true},
+		{"ends at midnight", Item{Start: "23:30", FocusMinutes: 20, BreakMinutes: 10}, false},
+		{"explicit next day", Item{Start: "00:00", DayOffset: 1, FocusMinutes: 30}, true},
+		{"already complete", Item{Start: "23:30", FocusMinutes: 60, Status: "completed"}, false},
+		{"already skipped", Item{Start: "23:30", FocusMinutes: 60, Status: "skipped"}, false},
+	}
+	for _, tc := range testList {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.item.ID, tc.item.Title = "night", "night"
+			day := Day{Date: "2026-10-12", Items: []Item{tc.item}, CurrentID: "night"}
+			if got := HasNextDayPending(day, "2026-10-13"); got != tc.pending {
+				t.Fatalf("pending=%v want %v", got, tc.pending)
+			}
+			if HasNextDayPending(day, "2026-10-14") {
+				t.Fatal("plan carried beyond next day")
+			}
+			if tc.pending {
+				current, _ := Current(day, time.Date(2026, 10, 13, 0, 15, 0, 0, time.UTC))
+				if current.ID != "night" {
+					t.Fatalf("current=%+v", current)
+				}
+			}
+		})
+	}
+}
+
 func TestSetCurrentLocatesOnceAndDoesNotAutoAdvance(t *testing.T) {
 	day := Day{Items: []Item{{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 50}, {ID: "b", Start: "10:00", Title: "B", FocusMinutes: 50}}}
 	now := time.Date(2026, 9, 11, 9, 30, 0, 0, time.Local)

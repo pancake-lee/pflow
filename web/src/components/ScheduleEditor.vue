@@ -118,7 +118,9 @@ function sortItems() { items.value.sort((left, right) => minuteOf(left) - minute
 function isNextDayCandidate(index: number) {
   const item = items.value[index]
   const previous = items.value[index - 1]
-  if (!previous || item.day_offset === 1 || previous.day_offset === 1) return false
+  if (item.day_offset === 1) return false
+  if (!previous) return minuteOf(item) < 6 * 60
+  if (previous.day_offset === 1) return false
   return minuteOf({ ...previous, day_offset: 0 }) >= 18 * 60 && minuteOf({ ...item, day_offset: 0 }) < minuteOf(previous)
 }
 function toggleDayOffset(item: Item) { item.day_offset = item.day_offset === 1 ? 0 : 1 }

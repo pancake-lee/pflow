@@ -43,6 +43,17 @@ test('dirty editor close can be cancelled and busy close cannot discard a draft'
   assert.equal(api.run('close()'), true)
 })
 
+test('a standalone early morning item can be marked as next day without affecting ordinary rows', () => {
+  const api = setup()
+  api.run("items.value = [{ id: 'single', start: '00:00', title: 'night', focus_minutes: 30, break_minutes: 0 }]")
+  assert.equal(api.run('isNextDayCandidate(0)'), true)
+  api.run('toggleDayOffset(items.value[0])')
+  assert.equal(api.run('items.value[0].day_offset'), 1)
+  assert.equal(api.run('validateTimeline(items.value)'), '')
+  api.run("toggleDayOffset(items.value[0]); items.value[0].start = '09:00'")
+  assert.equal(api.run('isNextDayCandidate(0)'), false)
+})
+
 for (const mode of ['content', 'item']) {
   for (const [from, gap, order] of [[2, 0, 'CAB'], [0, 3, 'BCA'], [1, 0, 'BAC'], [1, 3, 'ACB'], [0, 0, 'ABC'], [0, 1, 'ABC'], [2, 3, 'ABC'], [-1, 0, 'ABC'], [0, 4, 'ABC']]) {
     test(`${mode}: source ${from}, insertion gap ${gap}`, () => {

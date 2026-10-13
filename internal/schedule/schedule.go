@@ -278,7 +278,8 @@ func HasNextDayPending(day Day, date string) bool {
 		return false
 	}
 	for _, item := range day.Items {
-		if item.DayOffset == 1 && item.Status == "" {
+		endMinute := timelineMinute(item) + item.FocusMinutes + item.BreakMinutes
+		if item.Status == "" && (item.DayOffset == 1 || endMinute > 24*60) {
 			return true
 		}
 	}
