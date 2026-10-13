@@ -64,3 +64,16 @@ for (const failure of ['settings-network', 'settings-json', 'boot-network', 'boo
     assert.equal(instance.run('bootChecked.value && !showBoot.value'), true)
   })
 }
+
+test('modal header and Escape updates are routed to the editor close guard', () => {
+  const instance = app(() => {})
+  instance.run('showScheduleEditor.value = true; scheduleEditor.value = { requestClose: () => false }')
+  instance.run('updateScheduleVisibility(false)')
+  assert.equal(instance.run('showScheduleEditor.value'), true)
+  instance.run('scheduleEditor.value = { requestClose: () => { showScheduleEditor.value = false; return true } }')
+  instance.run('updateScheduleVisibility(false)')
+  assert.equal(instance.run('showScheduleEditor.value'), false)
+  const template = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+  assert.match(template, /:show="showScheduleEditor"\s+@update:show="updateScheduleVisibility"/)
+  assert.match(template, /ScheduleEditor ref="scheduleEditor" @close="showScheduleEditor = false"/)
+})

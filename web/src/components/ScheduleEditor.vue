@@ -203,9 +203,12 @@ async function delTemplate(template: Template) {
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '删除模板失败' } finally { deletingTemplateID.value = '' }
 }
 function close() {
-  if (dirty.value && !window.confirm('关闭会放弃当前未保存的编辑，确定关闭吗？')) return
+  if (busy.value) return false
+  if (dirty.value && !window.confirm('关闭会放弃当前未保存的编辑，确定关闭吗？')) return false
   emit('close')
+  return true
 }
+defineExpose({ requestClose: close })
 onMounted(() => void load())
 </script>
 

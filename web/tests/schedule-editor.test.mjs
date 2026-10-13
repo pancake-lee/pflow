@@ -13,7 +13,7 @@ const source = readFileSync(new URL('../src/components/ScheduleEditor.vue', impo
 function editor() {
   const requests = []
   const context = vm.createContext({
-    ref, computed, watch, onMounted: () => {}, defineEmits: () => () => {},
+    ref, computed, watch, onMounted: () => {}, defineEmits: () => () => {}, defineExpose: () => {},
     useMessage: () => ({ success() {} }), window: { confirm: () => true },
     fetch: async (...args) => { requests.push(args); return { ok: true, json: async () => ({ items: [] }) } },
   })
@@ -31,6 +31,17 @@ function setup() {
   return api
 }
 function plain(value) { return JSON.parse(JSON.stringify(value)) }
+
+test('dirty editor close can be cancelled and busy close cannot discard a draft', () => {
+  const api = setup()
+  api.run("items.value[0].title = 'unsaved'; window.confirm = () => false")
+  assert.equal(api.run('close()'), false)
+  assert.equal(api.run('items.value[0].title'), 'unsaved')
+  api.run('window.confirm = () => true; saving.value = true')
+  assert.equal(api.run('close()'), false)
+  api.run('saving.value = false')
+  assert.equal(api.run('close()'), true)
+})
 
 for (const mode of ['content', 'item']) {
   for (const [from, gap, order] of [[2, 0, 'CAB'], [0, 3, 'BCA'], [1, 0, 'BAC'], [1, 3, 'ACB'], [0, 0, 'ABC'], [0, 1, 'ABC'], [2, 3, 'ABC'], [-1, 0, 'ABC'], [0, 4, 'ABC']]) {

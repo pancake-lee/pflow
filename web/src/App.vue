@@ -21,7 +21,13 @@ const bootChecked = ref(false) // true once API check completes
 const todayGoal = ref('')
 const showSettings = ref(false)
 const showScheduleEditor = ref(false)
+const scheduleEditor = ref<{ requestClose: () => boolean } | null>(null)
 const dashboardKey = ref(0) // bumped when settings are saved, so the dashboard re-reads them
+
+function updateScheduleVisibility(show: boolean) {
+  if (show) showScheduleEditor.value = true
+  else scheduleEditor.value?.requestClose()
+}
 
 onMounted(async () => {
   try {
@@ -96,14 +102,15 @@ async function onBootSkip() {
           <SettingsView @saved="dashboardKey++" />
         </NModal>
         <NModal
-          v-model:show="showScheduleEditor"
+          :show="showScheduleEditor"
+          @update:show="updateScheduleVisibility"
           preset="card"
           title="今日日程编辑"
           :style="{ width: 'min(960px, calc(100vw - 32px))', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto' }"
           :mask-closable="false"
           closable
         >
-          <ScheduleEditor @close="showScheduleEditor = false" @saved="dashboardKey++" />
+          <ScheduleEditor ref="scheduleEditor" @close="showScheduleEditor = false" @saved="dashboardKey++" />
         </NModal>
       </template>
       <!-- Loading state while checking boot status -->
