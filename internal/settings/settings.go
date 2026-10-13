@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"time"
 )
 
 const Version = 1
@@ -31,10 +33,11 @@ type TimeEstimate struct {
 }
 
 type File struct {
-	Version      int          `json:"version"`
-	Dashboard    Dashboard    `json:"dashboard"`
-	Attention    Attention    `json:"attention"`
-	TimeEstimate TimeEstimate `json:"time_estimate"`
+	DashboardRevision string       `json:"dashboard_revision,omitempty"`
+	Version           int          `json:"version"`
+	Dashboard         Dashboard    `json:"dashboard"`
+	Attention         Attention    `json:"attention"`
+	TimeEstimate      TimeEstimate `json:"time_estimate"`
 }
 
 func Default() File {
@@ -134,6 +137,9 @@ func (m *Manager) Save(value File) error {
 	if err := validate(value); err != nil {
 		return err
 	}
+	// A successful explicit save supersedes older browser filter overrides,
+	// even when the submitted dashboard values themselves are unchanged.
+	value.DashboardRevision = strconv.FormatInt(time.Now().UnixNano(), 10)
 	if err := os.MkdirAll(filepath.Dir(m.path), 0755); err != nil {
 		return fmt.Errorf("create settings directory: %w", err)
 	}

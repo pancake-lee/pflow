@@ -243,8 +243,10 @@ const agentFilter = ref<AgentFilter>('all')
 const refreshInterval = ref<RefreshInterval>(30)
 const FILTER_PREFERENCES_KEY = 'pflow:dashboard-filters'
 const filterPreferencesLoaded = ref(false)
+const dashboardRevision = ref('')
 
 type FilterPreferences = {
+  dashboardRevision?: string
   window?: string
   maxActive?: number
   maxInactive?: number
@@ -257,12 +259,13 @@ function loadFilterPreferences(): FilterPreferences {
     const raw = localStorage.getItem(FILTER_PREFERENCES_KEY)
     if (!raw) return {}
     const stored = JSON.parse(raw) as FilterPreferences
+    const sameRevision = (stored.dashboardRevision ?? '') === dashboardRevision.value
     return {
-      window: windowOptions.some((option) => option.value === stored.window) ? stored.window : undefined,
-      maxActive: typeof stored.maxActive === 'number' && stored.maxActive >= 1 && stored.maxActive <= 10 ? stored.maxActive : undefined,
-      maxInactive: typeof stored.maxInactive === 'number' && stored.maxInactive >= 0 && stored.maxInactive <= 10 ? stored.maxInactive : undefined,
+      window: sameRevision && windowOptions.some((option) => option.value === stored.window) ? stored.window : undefined,
+      maxActive: sameRevision && typeof stored.maxActive === 'number' && stored.maxActive >= 1 && stored.maxActive <= 10 ? stored.maxActive : undefined,
+      maxInactive: sameRevision && typeof stored.maxInactive === 'number' && stored.maxInactive >= 0 && stored.maxInactive <= 10 ? stored.maxInactive : undefined,
       agentFilter: agentFilterOptions.some((option) => option.value === stored.agentFilter) ? stored.agentFilter : undefined,
-      refreshInterval: refreshOptions.some((option) => option.value === stored.refreshInterval) ? stored.refreshInterval : undefined,
+      refreshInterval: sameRevision && refreshOptions.some((option) => option.value === stored.refreshInterval) ? stored.refreshInterval : undefined,
     }
   } catch {
     return {}
@@ -273,6 +276,7 @@ function persistFilterPreferences() {
   if (!filterPreferencesLoaded.value) return
   try {
     localStorage.setItem(FILTER_PREFERENCES_KEY, JSON.stringify({
+      dashboardRevision: dashboardRevision.value,
       window: selectedWindow.value,
       maxActive: maxActive.value,
       maxInactive: maxInactive.value,
@@ -744,7 +748,8 @@ onMounted(async () => {
   try {
     const response = await fetch('/api/v1/settings')
     if (response.ok) {
-      const settings = await response.json() as { dashboard?: { window?: string; max_active?: number; max_inactive?: number; refresh_seconds?: number } }
+      const settings = await response.json() as { dashboard_revision?: string; dashboard?: { window?: string; max_active?: number; max_inactive?: number; refresh_seconds?: number } }
+      dashboardRevision.value = settings.dashboard_revision ?? ''
       if (settings.dashboard?.window) selectedWindow.value = settings.dashboard.window
       if (settings.dashboard?.max_active !== undefined) maxActive.value = settings.dashboard.max_active
       if (settings.dashboard?.max_inactive !== undefined) maxInactive.value = settings.dashboard.max_inactive

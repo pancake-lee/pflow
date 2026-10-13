@@ -43,6 +43,7 @@ func TestLoadMergesOnlyPresentFields(t *testing.T) {
 				t.Fatal(err)
 			}
 			reloaded, err := NewManagerAt(path).Load()
+			expected.DashboardRevision = reloaded.DashboardRevision
 			if err != nil || !reflect.DeepEqual(reloaded, expected) {
 				t.Fatalf("reload=%+v err=%v", reloaded, err)
 			}
@@ -141,5 +142,34 @@ func TestMaxActiveCoercedToMinimum(t *testing.T) {
 	}
 	if reloaded.Dashboard.MaxActive != 1 {
 		t.Fatalf("reloaded max_active=%d, want 1", reloaded.Dashboard.MaxActive)
+	}
+}
+
+func TestExplicitSaveInvalidatesBrowserRevisionAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	manager := NewManagerAt(path)
+	first, err := manager.Update(Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Update(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.DashboardRevision == "" || second.DashboardRevision == first.DashboardRevision {
+		t.Fatal("explicit no-op save did not update revision")
+	}
+	reloaded, err := NewManagerAt(path).Load()
+	if err != nil || reloaded.DashboardRevision != second.DashboardRevision {
+		t.Fatalf("revision not persisted: %+v %v", reloaded, err)
+	}
+	bad := second
+	bad.Dashboard.MaxInactive = -1
+	if err := manager.Save(bad); err == nil {
+		t.Fatal("invalid save accepted")
+	}
+	reloaded, err = manager.Load()
+	if err != nil || reloaded.DashboardRevision != second.DashboardRevision {
+		t.Fatal("failed save invalidated overrides")
 	}
 }
