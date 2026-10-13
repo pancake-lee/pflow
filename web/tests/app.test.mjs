@@ -77,3 +77,13 @@ test('modal header and Escape updates are routed to the editor close guard', () 
   assert.match(template, /:show="showScheduleEditor"\s+@update:show="updateScheduleVisibility"/)
   assert.match(template, /ScheduleEditor ref="scheduleEditor" @close="showScheduleEditor = false"/)
 })
+
+test('settings modal updates respect the settings close guard', () => {
+  const instance = app(() => {})
+  instance.run('showSettings.value = true; settingsView.value = { requestClose: () => false }')
+  instance.run('updateSettingsVisibility(false)')
+  assert.equal(instance.run('showSettings.value'), true)
+  instance.run('settingsView.value = { requestClose: () => { showSettings.value = false; return true } }')
+  instance.run('updateSettingsVisibility(false)')
+  assert.equal(instance.run('showSettings.value'), false)
+})

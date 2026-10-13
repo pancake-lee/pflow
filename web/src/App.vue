@@ -20,6 +20,7 @@ const showBoot = ref(false)
 const bootChecked = ref(false) // true once API check completes
 const todayGoal = ref('')
 const showSettings = ref(false)
+const settingsView = ref<{ requestClose: () => boolean } | null>(null)
 const showScheduleEditor = ref(false)
 const scheduleEditor = ref<{ requestClose: () => boolean } | null>(null)
 const dashboardKey = ref(0) // bumped when settings are saved, so the dashboard re-reads them
@@ -27,6 +28,11 @@ const dashboardKey = ref(0) // bumped when settings are saved, so the dashboard 
 function updateScheduleVisibility(show: boolean) {
   if (show) showScheduleEditor.value = true
   else scheduleEditor.value?.requestClose()
+}
+
+function updateSettingsVisibility(show: boolean) {
+  if (show) showSettings.value = true
+  else settingsView.value?.requestClose()
 }
 
 onMounted(async () => {
@@ -92,14 +98,15 @@ async function onBootSkip() {
       <template v-else-if="bootChecked">
         <DashboardView :key="dashboardKey" :initial-goal="todayGoal" @open-settings="showSettings = true" @open-schedule="showScheduleEditor = true" />
         <NModal
-          v-model:show="showSettings"
+          :show="showSettings"
+          @update:show="updateSettingsVisibility"
           preset="card"
           title="设置"
           :style="{ width: 'min(760px, calc(100vw - 32px))' }"
           :mask-closable="false"
           closable
         >
-          <SettingsView @saved="dashboardKey++" />
+          <SettingsView ref="settingsView" @close="showSettings = false" @saved="dashboardKey++" />
         </NModal>
         <NModal
           :show="showScheduleEditor"

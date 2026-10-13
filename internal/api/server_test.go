@@ -13,7 +13,40 @@ import (
 	"time"
 
 	"github.com/pancake-lee/pflow/internal/schedule"
+	"github.com/pancake-lee/pflow/internal/settings"
 )
+
+func TestSettingsAPIExposesDefaultsAndSavedRevision(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.settingsMgr = settings.NewManagerAt(filepath.Join(t.TempDir(), "settings.json"))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil))
+	var body struct {
+		settings.File
+		Defaults settings.File `json:"defaults"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || body.Defaults.Dashboard.RefreshSeconds != 30 {
+		t.Fatalf("body=%s", response.Body.String())
+	}
+	value := body.File
+	value.Dashboard.Window = "7d"
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(data)))
+	var saved settings.File
+	if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || saved.DashboardRevision == "" || saved.Dashboard.Window != "7d" {
+		t.Fatalf("save=%s", response.Body.String())
+	}
+}
 
 func TestConcurrentScheduleAndTemplateUpdatesDoNotOverwrite(t *testing.T) {
 	server := NewServer(nil, nil)

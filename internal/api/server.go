@@ -398,7 +398,11 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, value)
+	response := struct {
+		settings.File
+		Defaults settings.File `json:"defaults"`
+	}{File: value, Defaults: settings.Default()}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
