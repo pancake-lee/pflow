@@ -13,6 +13,7 @@ const fog = ref(1)
 const reminder = ref(0)
 const breakRemainingMinutes = ref(0)
 const loadError = ref('')
+const acting = ref(false)
 const emit = defineEmits<{ edit: [] }>()
 const message = useMessage()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -36,17 +37,22 @@ async function load() {
 }
 
 async function act(action: 'completed' | 'skipped') {
-  if (!current.value?.id) return
-  const response = await fetch('/api/v1/schedules/action', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ date: day.value, id: current.value.id, action }),
-  })
-  if (!response.ok) {
+  if (!current.value?.id || acting.value || loadError.value) return
+  acting.value = true
+  try {
+    const options = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: day.value, id: current.value.id, action }),
+    }
+    const response = await fetch('/api/v1/schedules/action', options)
+    if (!response.ok) throw new Error('更新日程状态失败，请重试')
+    await load()
+  } catch {
     message.error('更新日程状态失败，请重试')
-    return
+  } finally {
+    acting.value = false
   }
-  await load()
 }
 
 // Break drives the current card's orange marquee at full intensity.
@@ -102,8 +108,8 @@ onUnmounted(() => {
         <div class="s-actions">
           <NButton size="small" quaternary @click="emit('edit')">编辑</NButton>
           <template v-if="current.id">
-            <NButton size="small" @click="act('completed')">完成</NButton>
-            <NButton size="small" @click="act('skipped')">跳过</NButton>
+            <NButton size="small" :loading="acting" :disabled="!!loadError" @click="act('completed')">完成</NButton>
+            <NButton size="small" :disabled="acting || !!loadError" @click="act('skipped')">跳过</NButton>
           </template>
         </div>
       </div>
