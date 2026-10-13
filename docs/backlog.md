@@ -20,7 +20,7 @@
 | Done | Agent 扩展 | 26 | Codex 会话支持 | 8.4 |
 | Done | Agent 扩展 | 38 | Codex 会话名称提取 | 8.5 |
 | Done | Agent 扩展 | 39 | Codex 会话标题回退修复 | 8.4 |
-| Done | Agent 扩展 | 41 | Claude 会话误报 waiting（同 sessionId 元数据覆盖） | 8.7（逻辑） |
+| Done | Agent 扩展 | 41 | Claude 会话误报 waiting（同 sessionId 元数据覆盖） | 8.8 |
 | Done | 服务管理 | 40 | `make start` 误杀 Codex 会话 | 不评估 |
 | Done | 时间追踪 | 42 | 基于 tmux 焦点事件的项目计时 | 5.0（逻辑） |
 | Done | 设置与个性化 | 43 | 设置中心与项目管理迁入 | 8.6 |
@@ -485,7 +485,7 @@
 ### #41 Claude 会话误报 waiting（同 sessionId 元数据覆盖）
 
 - **状态**：Done
-- **评估**：8.7（逻辑轮，通过；正确性 9.0 健壮性 8.0 完整性 9.0），详见 [2026-10-13 Done 任务逻辑评估](eval/reports/2026-10-13-all-done-logic.md)。
+- **历史逻辑评估**：8.7（逻辑轮，通过；正确性 9.0 健壮性 8.0 完整性 9.0），详见 [2026-10-13 Done 任务逻辑评估](eval/reports/2026-10-13-all-done-logic.md)。
 - **分组**：Agent 扩展
 - **背景**：alanz-site 项目 session `20aa3620` 已完成对话、无等待操作，Dashboard 仍显示 waiting 且边框闪烁。
 - **分析**：该 session 昨天经 `claude -r` 恢复到新进程，老进程未退出且卡在 permission prompt，`~/.claude/sessions/` 下两个 PID 文件指向同一 sessionId。`readSessionMetas` 用 map 按 sessionId 直接覆盖，`os.ReadDir` 按文件名排序使旧文件（`944733.json`，waiting）后读并覆盖新文件（`1230917.json`，idle）。误报 waiting 同时污染了注意力评分的等待时长。已排查并排除"截取短 ID 撞车"假设：两个文件完整 UUID 逐字符相同，合并发生在完整 sessionId 层面。
@@ -493,6 +493,9 @@
 - **验收**：
   - [x] 同 sessionId 双元数据（旧 waiting / 新 idle）时，扫描结果取 idle。
   - [x] `gofmt`、`go vet`、`go test ./internal/...` 通过。
+- **评估**：8.8（2026-10-13 完整复评；正确性 9.0 健壮性 8.5 可维护性 8.5 简洁性 9.0），Done。
+- **本轮自动验证**：同完整 sessionId、旧 waiting 后读和最新 UpdatedAt 元数据回归通过；Go 全量竞态检查与静态分析通过。
+- **复评结论**：元数据按最新更新时间保留，避免旧 PID 文件覆盖；同时间戳冲突沿用既有稳定顺序，不扩大到进程管理。
 
 ## 2026-10-13 Done 任务逻辑评估发现
 
