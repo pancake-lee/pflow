@@ -231,6 +231,7 @@ func parseRollout(path string) (SessionSummary, []string) {
 			var p struct {
 				Type    string            `json:"type"`
 				Role    string            `json:"role"`
+				Phase   string            `json:"phase"`
 				Content []responseContent `json:"content"`
 			}
 			if json.Unmarshal(line.Payload, &p) != nil {
@@ -245,8 +246,12 @@ func parseRollout(path string) (SessionSummary, []string) {
 				setSessionName(&s, text)
 				s.Status = "busy"
 			case p.Type == "message" && p.Role == "assistant":
-				s.LastResp = truncate(firstContentText(p.Content), 160)
-				s.Status = "idle"
+				// Interim messages do not finish a running task or replace its
+				// final-response summary. Empty phase preserves legacy rollouts.
+				if p.Phase == "" || p.Phase == "final" || p.Phase == "final_answer" {
+					s.LastResp = truncate(firstContentText(p.Content), 160)
+					s.Status = "idle"
+				}
 			case p.Type == "function_call", p.Type == "custom_tool_call":
 				s.Status = "busy"
 			}

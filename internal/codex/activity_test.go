@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,41 @@ import (
 
 	"github.com/pancake-lee/pflow/internal/config"
 )
+
+func TestAssistantPhaseDoesNotFinishRunningTask(t *testing.T) {
+	testList := []struct{ phase, expected string }{
+		{"commentary", "busy"}, {"analysis", "busy"}, {"future_phase", "busy"},
+		{"final_answer", "idle"}, {"final", "idle"}, {"", "idle"},
+	}
+	for _, tc := range testList {
+		t.Run(tc.phase, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rollout-test.jsonl")
+			data := `{"timestamp":"2026-10-13T10:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/work"}}` + "\n" +
+				`{"timestamp":"2026-10-13T10:01:00Z","type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+				fmt.Sprintf(`{"timestamp":"2026-10-13T10:02:00Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":%q,"content":[{"type":"output_text","text":"message"}]}}`, tc.phase) + "\n"
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			summary, diagnostics := parseRollout(path)
+			if len(diagnostics) != 0 || summary.Status != tc.expected {
+				t.Fatalf("summary=%+v diagnostics=%v", summary, diagnostics)
+			}
+			if tc.expected == "busy" && summary.LastResp != "" {
+				t.Fatal("interim message replaced final summary")
+			}
+			for _, event := range []string{"task_complete", "turn_aborted"} {
+				completed := data + fmt.Sprintf(`{"timestamp":"2026-10-13T10:03:00Z","type":"event_msg","payload":{"type":%q}}`, event) + "\n"
+				if err := os.WriteFile(path, []byte(completed), 0600); err != nil {
+					t.Fatal(err)
+				}
+				result, _ := parseRollout(path)
+				if result.Status != "idle" {
+					t.Fatalf("event=%s status=%s", event, result.Status)
+				}
+			}
+		})
+	}
+}
 
 func TestScanDirAggregatesRollout(t *testing.T) {
 	dir := t.TempDir()
