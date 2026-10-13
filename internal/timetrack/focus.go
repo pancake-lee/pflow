@@ -151,68 +151,79 @@ func parseFocusLine(line string) (FocusEvent, bool) {
 //  4. Filter out segments shorter than MinFocusSegmentSeconds
 //  5. Return total minutes
 func (fl *FocusLog) ProjectMinutes(projectPath string, todayStart, now time.Time) float64 {
-	events, ok := fl.ByProject[projectPath]
-	if !ok || len(events) == 0 {
+	if fl == nil || len(fl.ByProject[projectPath]) == 0 {
 		return 0
 	}
 
-	// Filter to today's events only
-	var todayEvents []FocusEvent
-	for _, ev := range events {
-		if !ev.Timestamp.Before(todayStart) {
-			todayEvents = append(todayEvents, ev)
+	// Merge all known projects so another project's focus-in ends the grace
+	// period, even if this project regains focus within five minutes.
+	var eventList []FocusEvent
+	for path, projectEventList := range fl.ByProject {
+		for _, event := range projectEventList {
+			if event.Timestamp.After(now) {
+				continue
+			}
+			event.Project = path
+			eventList = append(eventList, event)
 		}
 	}
-	if len(todayEvents) == 0 {
-		return 0
-	}
+	sort.SliceStable(eventList, func(i, j int) bool {
+		if eventList[i].Timestamp.Equal(eventList[j].Timestamp) {
+			return eventList[i].Action == "focus-out" && eventList[j].Action != "focus-out"
+		}
+		return eventList[i].Timestamp.Before(eventList[j].Timestamp)
+	})
 
 	var totalSeconds float64
 	var segmentStart *time.Time
 	var lastOut *time.Time
+	closeSegment := func(end time.Time) {
+		if segmentStart == nil {
+			return
+		}
+		start := *segmentStart
+		if start.Before(todayStart) {
+			start = todayStart
+		}
+		duration := end.Sub(start).Seconds()
+		if duration >= MinFocusSegmentSeconds {
+			totalSeconds += duration
+		}
+		segmentStart, lastOut = nil, nil
+	}
 
-	for _, ev := range todayEvents {
-		switch ev.Action {
-		case "focus-in":
-			if segmentStart == nil {
-				t := ev.Timestamp
-				segmentStart = &t
-				lastOut = nil
-			} else if lastOut != nil && ev.Timestamp.Sub(*lastOut) <= FocusResumeGrace {
-				// Keep the original segment start. The brief gap is part of the
-				// same project's continuous work period.
-				lastOut = nil
-			} else if lastOut != nil {
-				dur := lastOut.Sub(*segmentStart).Seconds()
-				if dur >= MinFocusSegmentSeconds {
-					totalSeconds += dur
+	for _, event := range eventList {
+		if event.Project != projectPath {
+			if event.Action == "focus-in" {
+				end := event.Timestamp
+				if lastOut != nil {
+					end = *lastOut
 				}
-				t := ev.Timestamp
-				segmentStart = &t
-				lastOut = nil
+				closeSegment(end)
 			}
+			continue
+		}
+		switch event.Action {
+		case "focus-in":
+			if lastOut != nil && event.Timestamp.Sub(*lastOut) > FocusResumeGrace {
+				closeSegment(*lastOut)
+			}
+			if segmentStart == nil {
+				start := event.Timestamp
+				segmentStart = &start
+			}
+			lastOut = nil
 		case "focus-out":
 			if segmentStart != nil && lastOut == nil {
-				t := ev.Timestamp
-				lastOut = &t
+				end := event.Timestamp
+				lastOut = &end
 			}
 		}
 	}
-	if segmentStart != nil && lastOut != nil {
-		dur := lastOut.Sub(*segmentStart).Seconds()
-		if dur >= MinFocusSegmentSeconds {
-			totalSeconds += dur
-		}
-		segmentStart = nil
+	end := now
+	if lastOut != nil {
+		end = *lastOut
 	}
-
-	// If last event was focus-in, close at now
-	if segmentStart != nil {
-		dur := now.Sub(*segmentStart).Seconds()
-		if dur >= MinFocusSegmentSeconds {
-			totalSeconds += dur
-		}
-	}
-
-	return totalSeconds / 60.0
+	closeSegment(end)
+	return totalSeconds / 60
 }
