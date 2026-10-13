@@ -52,6 +52,34 @@ func TestReadSessionMetasDuplicateID(t *testing.T) {
 	}
 }
 
+func TestSessionQuotasAreIndependentPerProject(t *testing.T) {
+	base := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	list := []SessionSummary{
+		{SessionID: "a-old", Project: "/a", Status: "busy", LastActive: base},
+		{SessionID: "a-new", Project: "/a", Status: "idle", LastActive: base.Add(time.Minute)},
+		{SessionID: "a-inactive", Project: "/a", Status: "inactive", LastActive: base},
+		{SessionID: "b", Project: "/b", Status: "waiting", LastActive: base},
+	}
+	got := applySessionLimits(list, 1, 1)
+	if len(got) != 3 {
+		t.Fatalf("got %v", got)
+	}
+	for _, s := range got {
+		if s.SessionID == "a-old" {
+			t.Fatal("old active entry displaced newer")
+		}
+	}
+	if got := applySessionLimits(list, 1, 0); len(got) != 2 {
+		t.Fatal("inactive quota affected active quota")
+	}
+	if got := applySessionLimits(list, 0, 0); len(got) != 0 {
+		t.Fatal("zero did not hide all")
+	}
+	if got := applySessionLimits(list, -1, -1); len(got) != 4 {
+		t.Fatal("unlimited lost sessions")
+	}
+}
+
 // writeClaudeFixture builds a minimal ~/.claude layout for scanDir tests:
 // history entries, session metadata and transcript files.
 func writeClaudeFixture(t *testing.T) (dir, recentSID, oldSID, missingSID string, now time.Time) {
