@@ -124,6 +124,11 @@ func (m *Manager) launch(cfg launchConfig) (*Session, error) {
 		}
 	}
 
+	err = configureTmuxMouse(name)
+	if err != nil {
+		return nil, err
+	}
+
 	// 4. Launch async session ID capture in background.
 	//    The agent takes a few seconds to initialize and display its session
 	//    identifier — we return immediately so the user can attach to tmux

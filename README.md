@@ -32,6 +32,8 @@ pflow codex -dir .
 pflow suggest
 ```
 
+pflow 托管会话会在运行时配置鼠标滚动：应用自行处理鼠标时透传滚轮，否则使用 tmux 历史滚动。无需修改 `~/.tmux.conf`，其他 tmux 会话沿用原有设置。旧托管会话可先按 `Ctrl+B`、`D` 分离，再用新版 pflow 的原启动命令接入，无需退出 Agent。
+
 ## Windows 桌面版
 
 桌面版在原生 Windows 上运行，通过 HTTP/HTTPS 连接 Linux 上的 `pflow serve`。Agent 扫描、项目、日程与偏好在 Linux 端处理，exe 仅保存连接地址和日志。本轮支持单个服务，本地 Agent 与多个远端融合展示的后续方向见 [backlog #55](./docs/backlog.md#55-future本地与多远端会话融合)。

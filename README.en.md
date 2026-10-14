@@ -29,6 +29,8 @@ pflow claude -dir .
 pflow suggest
 ```
 
+Managed sessions configure mouse scrolling at runtime: wheel events pass through when the application handles the mouse, and otherwise scroll tmux history. No edits to `~/.tmux.conf` are needed; other tmux sessions keep their settings. For an existing managed session, detach with `Ctrl+B`, then `D`, and reconnect using the original launch command with the updated pflow binary. The Agent can keep running.
+
 ## Windows Desktop
 
 Build on Linux with system Go, pnpm, project dependencies and the MinGW-w64 compiler (`x86_64-w64-mingw32-gcc`):

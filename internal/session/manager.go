@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,6 +121,10 @@ func (m *Manager) StartExisting(tmuxName, workDir string) (*Session, error) {
 	// Verify the tmux session exists
 	if !tmuxSessionExists(tmuxName) {
 		return nil, fmt.Errorf("tmux session %q does not exist", tmuxName)
+	}
+	err := configureTmuxMouse(tmuxName)
+	if err != nil {
+		return nil, err
 	}
 
 	m.mu.Lock()
@@ -286,13 +291,63 @@ func checkClaudeDeps() error {
 func ensureTmux(name, workDir string) error {
 	// Check if session already exists
 	if err := exec.Command("tmux", "has-session", "-t", name).Run(); err == nil {
-		return nil // session exists
+		return configureTmuxMouse(name)
 	}
 
 	// Create new detached session running bash
 	create := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", workDir, "bash")
 	if out, err := create.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux new-session failed: %w (output: %s)", err, string(out))
+	}
+	return configureTmuxMouse(name)
+}
+
+const managedKeyTable = "pflow-root"
+
+// list-keys emits public, reusable bind-key commands. Rewrite only their
+// destination table, leaving key names and command bodies untouched.
+var rootBindingPattern = regexp.MustCompile(
+	`(?m)^(bind-key[ \t]+(?:-r[ \t]+)?-T[ \t]+)root([ \t]+)`,
+)
+
+// configureTmuxMouse installs a managed root table without changing the user's
+// root or prefix tables. tmuxArgs allows tests to use an isolated server socket.
+func configureTmuxMouse(name string, tmuxArgs ...string) error {
+	args := append([]string{}, tmuxArgs...)
+	args = append(args, "list-keys", "-T", "root")
+	out, err := exec.Command("tmux", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux list root bindings: %w (%s)", err, out)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if !rootBindingPattern.MatchString(line) {
+			return fmt.Errorf("tmux emitted an invalid root binding: %q", line)
+		}
+	}
+	bindings := rootBindingPattern.ReplaceAllString(
+		string(out), "${1}"+managedKeyTable+"${2}",
+	)
+
+	// Refresh our own table so deleted user bindings do not linger. All managed
+	// sessions share this table; non-managed sessions continue to use root.
+	var config strings.Builder
+	fmt.Fprintf(&config, "unbind-key -q -a -T %s\n", managedKeyTable)
+	config.WriteString(bindings)
+	config.WriteString("\n")
+	fmt.Fprintf(&config, `bind-key -T %s WheelUpPane if-shell -F -t = "#{||:#{pane_in_mode},#{mouse_any_flag}}" "send-keys -M" "copy-mode -e -t ="
+bind-key -T %s WheelDownPane if-shell -F -t = "#{||:#{pane_in_mode},#{mouse_any_flag}}" "send-keys -M" ""
+`, managedKeyTable, managedKeyTable)
+	fmt.Fprintf(&config, "set-option -t %q mouse on\n", name)
+	fmt.Fprintf(&config, "set-option -t %q key-table %s\n",
+		name, managedKeyTable)
+
+	args = append([]string{}, tmuxArgs...)
+	args = append(args, "source-file", "-")
+	cmd := exec.Command("tmux", args...)
+	cmd.Stdin = strings.NewReader(config.String())
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux configure mouse for %q: %w (%s)", name, err, out)
 	}
 	return nil
 }
