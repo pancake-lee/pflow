@@ -252,10 +252,10 @@ git show <commit>
 ### 验证命令
 
 ```bash
-GOTOOLCHAIN=local make vet
-GOTOOLCHAIN=local make test
+make vet
+make test
 make build
-cd web && npx vue-tsc --noEmit
+pnpm --dir web exec vue-tsc -b
 ```
 
 ### 手动验收说明
