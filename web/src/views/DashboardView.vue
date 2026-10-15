@@ -1167,6 +1167,12 @@ function rowProps(row: DashboardEntry) {
 
           </div>
 
+          <!-- Knowledge remains useful when no sessions match the current filters. -->
+          <div v-if="data && groupedSessions.length === 0" class="suggestion-knowledge-row">
+            <SuggestCard :suggestions="suggestions" />
+            <KnowledgeAnchor :suggestions="suggestions" :custom-tips="data.custom_knowledge_tips ?? []" />
+          </div>
+
           <!-- Empty state -->
           <div v-if="!loading && !error && filteredSessions.length === 0" class="empty-state">
             <p>No active sessions found in the selected time window.</p>
