@@ -221,6 +221,7 @@ onUnmounted(() => {
 }
 
 .ka-title {
+  overflow-wrap: anywhere;
   font-size: 14px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.9);
@@ -228,6 +229,8 @@ onUnmounted(() => {
 }
 
 .ka-theory {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.55);
   line-height: 1.5;
@@ -239,6 +242,12 @@ onUnmounted(() => {
   line-height: 1.5;
   display: flex;
   gap: 4px;
+}
+
+.ka-design > span:last-child {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .ka-design-icon {
