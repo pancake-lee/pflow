@@ -1076,7 +1076,7 @@ function rowProps(row: DashboardEntry) {
             <!-- 🔔 行动建议与知识库 -->
             <div class="suggestion-knowledge-row">
               <SuggestCard :suggestions="suggestions" />
-              <KnowledgeAnchor :suggestions="suggestions" />
+              <KnowledgeAnchor :suggestions="suggestions" :custom-tips="data?.custom_knowledge_tips ?? []" />
             </div>
 
             <!-- 🚩 支线项目 — 2 cards side by side, each with own title -->

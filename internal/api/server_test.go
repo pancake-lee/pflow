@@ -283,3 +283,58 @@ func TestPutTemplateRequiresConfirmationBeforeReplacingSameName(t *testing.T) {
 		t.Fatalf("templates=%+v, want one replaced template", file.Templates)
 	}
 }
+
+func TestCustomKnowledgeSettingsAndDashboard(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	server := NewServer(nil, nil)
+	value := settings.Default()
+	value.CustomKnowledgeTips = []settings.CustomKnowledgeTip{
+		{ID: "custom_api", Title: "知识", Theory: "<b>按文本显示</b>"},
+	}
+	request := func(method, path string, value any) *httptest.ResponseRecorder {
+		t.Helper()
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(method, path, bytes.NewReader(data)))
+		return response
+	}
+	saved := request(http.MethodPut, "/api/v1/settings", value)
+	if saved.Code != http.StatusOK {
+		t.Fatalf("save: %s", saved.Body.String())
+	}
+	// Both endpoints expose exactly the saved content and identity.
+	for _, path := range []string{"/api/v1/settings", "/api/v1/dashboard"} {
+		response := request(http.MethodGet, path, nil)
+		var body struct {
+			Tips []settings.CustomKnowledgeTip `json:"custom_knowledge_tips"`
+		}
+		err := json.Unmarshal(response.Body.Bytes(), &body)
+		if response.Code != http.StatusOK || err != nil || !reflect.DeepEqual(body.Tips, value.CustomKnowledgeTips) {
+			t.Fatalf("%s: %d %s, %v", path, response.Code, response.Body.String(), err)
+		}
+	}
+	invalid := value
+	invalid.CustomKnowledgeTips = []settings.CustomKnowledgeTip{{ID: "custom_invalid", Title: "", Theory: "body"}}
+	rejected := request(http.MethodPut, "/api/v1/settings", invalid)
+	if rejected.Code != http.StatusBadRequest {
+		t.Fatalf("invalid accepted: %s", rejected.Body.String())
+	}
+	reloaded, err := server.settingsMgr.Load()
+	if err != nil || !reflect.DeepEqual(reloaded.CustomKnowledgeTips, value.CustomKnowledgeTips) {
+		t.Fatal("invalid request overwrote settings")
+	}
+	value.CustomKnowledgeTips = []settings.CustomKnowledgeTip{}
+	deleted := request(http.MethodPut, "/api/v1/settings", value)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete: %s", deleted.Body.String())
+	}
+	response := request(http.MethodGet, "/api/v1/dashboard", nil)
+	var body DashboardResponse
+	err = json.Unmarshal(response.Body.Bytes(), &body)
+	if err != nil || len(body.CustomKnowledgeTips) != 0 {
+		t.Fatalf("deleted knowledge still present: %s", response.Body.String())
+	}
+}

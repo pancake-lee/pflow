@@ -5,6 +5,7 @@ import { ALL_TIPS, getAssociatedTips, selectKnowledgeTips } from '../config/know
 
 const props = defineProps<{
   suggestions: Suggestion[]
+  customTips?: KnowledgeTip[]
 }>()
 
 const isHovered = ref(false)
@@ -14,7 +15,11 @@ let rotationTimer: ReturnType<typeof setInterval> | null = null
 let manualPauseTimer: ReturnType<typeof setTimeout> | null = null
 
 // Stable across polling responses that contain the same associated knowledge.
-const candidateKey = computed(() => JSON.stringify(getAssociatedTips(props.suggestions)))
+const knowledgePool = computed(() => [...ALL_TIPS, ...(props.customTips ?? [])])
+const candidateKey = computed(() => JSON.stringify({
+  associated: getAssociatedTips(props.suggestions),
+  pool: knowledgePool.value,
+}))
 const rotationTips = ref<KnowledgeTip[]>([])
 const visibleTip = computed(() => rotationTips.value[rotationIndex.value] ?? null)
 const modeLabel = computed(() => '📖 知识库')
@@ -58,7 +63,7 @@ function goPrev() {
 }
 
 watch(candidateKey, () => {
-  rotationTips.value = selectKnowledgeTips(props.suggestions, ALL_TIPS)
+  rotationTips.value = selectKnowledgeTips(props.suggestions, knowledgePool.value)
   rotationIndex.value = 0
   if (!manualPause.value) startRotation()
 }, { immediate: true })

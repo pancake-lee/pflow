@@ -72,15 +72,16 @@ type SuggestionJSON struct {
 
 // DashboardResponse is the JSON response for GET /api/v1/dashboard.
 type DashboardResponse struct {
-	Now            time.Time                           `json:"now"`
-	Window         string                              `json:"window"`
-	Slots          map[string]string                   `json:"slots,omitempty"` // slot → path mapping
-	ProjectRoots   []ProjectRootJSON                   `json:"project_roots"`
-	Sessions       []DashboardEntry                    `json:"sessions"`
-	ReminderScores map[string]attention.ReminderOutput `json:"reminder_scores"`
-	Suggestions    []SuggestionJSON                    `json:"suggestions"`
-	Focus          *attention.FocusSnapshot            `json:"focus,omitempty"`
-	Errors         []string                            `json:"errors,omitempty"`
+	CustomKnowledgeTips []settings.CustomKnowledgeTip       `json:"custom_knowledge_tips"`
+	Now                 time.Time                           `json:"now"`
+	Window              string                              `json:"window"`
+	Slots               map[string]string                   `json:"slots,omitempty"` // slot → path mapping
+	ProjectRoots        []ProjectRootJSON                   `json:"project_roots"`
+	Sessions            []DashboardEntry                    `json:"sessions"`
+	ReminderScores      map[string]attention.ReminderOutput `json:"reminder_scores"`
+	Suggestions         []SuggestionJSON                    `json:"suggestions"`
+	Focus               *attention.FocusSnapshot            `json:"focus,omitempty"`
+	Errors              []string                            `json:"errors,omitempty"`
 }
 
 // Server is the pflow HTTP API server.
@@ -511,10 +512,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := DashboardResponse{
-		Now:          time.Now(),
-		Window:       opts.Window.String(),
-		Slots:        slotsMap,
-		ProjectRoots: projectRoots,
+		CustomKnowledgeTips: settingsValue.CustomKnowledgeTips,
+		Now:                 time.Now(),
+		Window:              opts.Window.String(),
+		Slots:               slotsMap,
+		ProjectRoots:        projectRoots,
 	}
 
 	var errors []string

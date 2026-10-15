@@ -177,3 +177,78 @@ func TestExplicitSaveInvalidatesBrowserRevisionAndPersists(t *testing.T) {
 		t.Fatal("failed save invalidated overrides")
 	}
 }
+
+func TestCustomKnowledgeRoundTripAndReset(t *testing.T) {
+	manager := NewManagerAt(filepath.Join(t.TempDir(), "settings.json"))
+	value := Default()
+	value.CustomKnowledgeTips = []CustomKnowledgeTip{
+		{ID: "custom_one", Title: "自定义", Theory: "<script>literal</script>"},
+		{ID: "custom_two", Title: "第二条", Theory: "正文", Design: "应用"},
+	}
+	err := manager.Save(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := manager.Load()
+	if err != nil || !reflect.DeepEqual(reloaded.CustomKnowledgeTips, value.CustomKnowledgeTips) {
+		t.Fatalf("round trip: %+v, %v", reloaded, err)
+	}
+	reset, err := manager.Reset("attention")
+	if err != nil || !reflect.DeepEqual(reset.CustomKnowledgeTips, value.CustomKnowledgeTips) {
+		t.Fatalf("unrelated reset lost knowledge: %+v, %v", reset, err)
+	}
+	reset, err = manager.Reset("all")
+	if err != nil || len(reset.CustomKnowledgeTips) != 0 {
+		t.Fatalf("reset all: %+v, %v", reset, err)
+	}
+}
+
+func TestInvalidCustomKnowledgeDoesNotOverwriteSavedSettings(t *testing.T) {
+	manager := NewManagerAt(filepath.Join(t.TempDir(), "settings.json"))
+	valid := Default()
+	valid.CustomKnowledgeTips = []CustomKnowledgeTip{{ID: "custom_good", Title: "标题", Theory: "正文"}}
+	err := manager.Save(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testList := []struct {
+		name string
+		tips []CustomKnowledgeTip
+	}{
+		{"built-in ID", []CustomKnowledgeTip{{ID: "kt_chunking", Title: "t", Theory: "b"}}},
+		{"empty ID", []CustomKnowledgeTip{{ID: "custom_", Title: "t", Theory: "b"}}},
+		{"whitespace ID", []CustomKnowledgeTip{{ID: "custom_  ", Title: "t", Theory: "b"}}},
+		{"blank title", []CustomKnowledgeTip{{ID: "custom_a", Title: " \n", Theory: "b"}}},
+		{"blank body", []CustomKnowledgeTip{{ID: "custom_a", Title: "t", Theory: "\t"}}},
+		{"duplicate ID", []CustomKnowledgeTip{{ID: "custom_a", Title: "t", Theory: "b"}, {ID: "custom_a", Title: "t2", Theory: "b2"}}},
+	}
+	for _, tc := range testList {
+		t.Run(tc.name, func(t *testing.T) {
+			invalid := valid
+			invalid.CustomKnowledgeTips = tc.tips
+			err := manager.Save(invalid)
+			if err == nil {
+				t.Fatal("accepted invalid knowledge")
+			}
+			saved, err := manager.Load()
+			if err != nil || !reflect.DeepEqual(saved.CustomKnowledgeTips, valid.CustomKnowledgeTips) {
+				t.Fatalf("changed on invalid save: %+v, %v", saved, err)
+			}
+		})
+	}
+	// A failed atomic replacement leaves the previous file intact.
+	err = os.Mkdir(manager.path+".tmp", 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := valid
+	changed.CustomKnowledgeTips = nil
+	err = manager.Save(changed)
+	if err == nil {
+		t.Fatal("expected write failure")
+	}
+	saved, err := manager.Load()
+	if err != nil || !reflect.DeepEqual(saved.CustomKnowledgeTips, valid.CustomKnowledgeTips) {
+		t.Fatalf("changed on write failure: %+v, %v", saved, err)
+	}
+}

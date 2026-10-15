@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,16 +33,38 @@ type TimeEstimate struct {
 	FallbackRatio     float64 `json:"fallback_ratio"`
 }
 
+// CustomKnowledgeTip is user-authored content added to the knowledge pool.
+type CustomKnowledgeTip struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Theory string `json:"theory"`
+	Design string `json:"design"`
+}
+
 type File struct {
-	DashboardRevision string       `json:"dashboard_revision,omitempty"`
-	Version           int          `json:"version"`
-	Dashboard         Dashboard    `json:"dashboard"`
-	Attention         Attention    `json:"attention"`
-	TimeEstimate      TimeEstimate `json:"time_estimate"`
+	CustomKnowledgeTips []CustomKnowledgeTip `json:"custom_knowledge_tips"`
+	DashboardRevision   string               `json:"dashboard_revision,omitempty"`
+	Version             int                  `json:"version"`
+	Dashboard           Dashboard            `json:"dashboard"`
+	Attention           Attention            `json:"attention"`
+	TimeEstimate        TimeEstimate         `json:"time_estimate"`
 }
 
 func Default() File {
-	return File{Version: Version, Dashboard: Dashboard{Window: "1d", MaxActive: 1, MaxInactive: 1, RefreshSeconds: 30, DailyBootEnabled: true}, Attention: Attention{ProtectMinutes: 5, FocusAddMinutes: 15, MaskStrength: 1}, TimeEstimate: TimeEstimate{MinutesPerMessage: 3, FallbackRatio: .3}}
+	return File{
+		Version: Version,
+		Dashboard: Dashboard{
+			Window: "1d", MaxActive: 1, MaxInactive: 1,
+			RefreshSeconds: 30, DailyBootEnabled: true,
+		},
+		Attention: Attention{
+			ProtectMinutes: 5, FocusAddMinutes: 15, MaskStrength: 1,
+		},
+		TimeEstimate: TimeEstimate{
+			MinutesPerMessage: 3, FallbackRatio: .3,
+		},
+		CustomKnowledgeTips: []CustomKnowledgeTip{},
+	}
 }
 
 type Manager struct {
@@ -126,6 +149,21 @@ func validate(value File) error {
 	}
 	if value.TimeEstimate.FallbackRatio < .05 || value.TimeEstimate.FallbackRatio > 1 {
 		return fmt.Errorf("time_estimate.fallback_ratio must be between 0.05 and 1")
+	}
+	seenIDMap := make(map[string]bool)
+	for i, tip := range value.CustomKnowledgeTips {
+		if !strings.HasPrefix(tip.ID, "custom_") ||
+			len(strings.TrimSpace(strings.TrimPrefix(tip.ID, "custom_"))) == 0 ||
+			strings.TrimSpace(tip.ID) != tip.ID {
+			return fmt.Errorf("自定义知识点 %d：标识需以 custom_ 开头且不能为空", i+1)
+		}
+		if seenIDMap[tip.ID] {
+			return fmt.Errorf("自定义知识点 %d：标识重复", i+1)
+		}
+		seenIDMap[tip.ID] = true
+		if strings.TrimSpace(tip.Title) == "" || strings.TrimSpace(tip.Theory) == "" {
+			return fmt.Errorf("自定义知识点 %d：标题和知识正文不能为空", i+1)
+		}
 	}
 	return nil
 }

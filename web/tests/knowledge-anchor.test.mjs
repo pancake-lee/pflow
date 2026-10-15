@@ -3,7 +3,8 @@ import vm from 'node:vm'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import ts from 'typescript'
-import { ref, computed, watch, reactive, nextTick, effectScope } from 'vue'
+import { ref, computed, watch, reactive, nextTick, effectScope, createSSRApp } from 'vue'
+import { renderToString } from 'vue/server-renderer'
 
 const source = readFileSync(new URL('../src/components/KnowledgeAnchor.vue', import.meta.url), 'utf8')
   .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
@@ -125,5 +126,45 @@ test('equivalent polling does not reshuffle or reset playback; associated change
   await nextTick()
   assert.equal(api.run('visibleTip.value.id'), 'new')
   assert.equal(api.run('rotationIndex.value'), 0)
+  api.dispose()
+})
+
+test('custom knowledge participates in selection, reacts to edits and disappears after deletion', async () => {
+  const api = anchor()
+  const custom = tip('custom_mine')
+  custom.theory = '<img src=x onerror=alert(1)>'
+  api.props.customTips = [custom]
+  await nextTick()
+  assert.equal(api.run('totalPages.value'), 3)
+  api.run('goPrev()')
+  assert.equal(api.run('visibleTip.value.id'), 'custom_mine')
+  assert.equal(api.run('visibleTip.value.theory'), custom.theory)
+  api.props.customTips[0].theory = 'edited'
+  await nextTick()
+  assert.equal(api.run('rotationTips.value.find(t => t.id === "custom_mine").theory'), 'edited')
+  api.props.customTips = []
+  await nextTick()
+  assert.equal(api.run('totalPages.value'), 2)
+  assert.equal(api.run('rotationTips.value.some(t => t.id === "custom_mine")'), false)
+  assert.ok(api.run('visibleTip.value'))
+  api.dispose()
+})
+
+test('the actual card template escapes custom text and omits an empty application section', async () => {
+  const api = anchor()
+  api.props.customTips = [{ ...tip('custom_html'), title: '<b>title</b>', theory: '<img src=x onerror=alert(1)>' }]
+  await nextTick()
+  api.run('goPrev()')
+  const template = readFileSync(new URL('../src/components/KnowledgeAnchor.vue', import.meta.url), 'utf8')
+    .match(/<template>([\s\S]*?)<\/template>/)[1]
+  const app = createSSRApp({
+    template,
+    setup: () => api.run('({ isHovered, manualPause, modeLabel, totalPages, currentPage, visibleTip, goPrev, goNext })'),
+  })
+  const html = await renderToString(app)
+  assert.match(html, /&lt;b&gt;title&lt;\/b&gt;/)
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/)
+  assert.equal(html.includes('<img'), false)
+  assert.equal(html.includes('ka-design'), false)
   api.dispose()
 })

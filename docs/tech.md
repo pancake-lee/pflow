@@ -221,6 +221,7 @@ Session 状态（waiting/busy/idle）
 | `~/.pflow/project_roots.json` | 项目根和 slot 映射 | `internal/project/` |
 | `~/.pflow/mappings.json` | tmux 与 Agent session 映射 | `internal/session/` |
 | `~/.pflow/focus.log` | tmux 焦点事件 | `internal/timetrack/` |
+| `~/.pflow/settings.json` | 显示偏好及自定义知识点 | `internal/settings/` |
 | `~/.pflow/schedules.json` | 实际日程、模板和日程执行记录 | `internal/schedule/` |
 | `~/.claude/sessions/` | Claude 目录扫描元数据 | `internal/session/` |
 | `~/.claude/projects/` | Claude transcript | `internal/claude/` |

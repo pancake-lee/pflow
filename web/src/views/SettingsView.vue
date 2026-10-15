@@ -2,7 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { NAlert, NButton, NInput, NInputNumber, NSelect, NSwitch, NTabPane, NTabs, useMessage } from 'naive-ui'
 
+import type { KnowledgeTip } from '../types/dashboard'
+
 type Settings = {
+  custom_knowledge_tips: KnowledgeTip[]
   version: number
   dashboard: { window: string; max_active: number; max_inactive: number; refresh_seconds: number; daily_boot_enabled: boolean }
   attention: { protect_minutes: number; focus_add_minutes: number; mask_strength: number }
@@ -30,6 +33,12 @@ const validationError = computed(() => {
   if (!current) return ''
   if (!windowOptions.some(option => option.value === current.dashboard.window)) return '请选择有效扫描范围'
   if (!refreshOptions.some(option => option.value === current.dashboard.refresh_seconds)) return '请选择有效刷新间隔'
+  const seen = new Set<string>()
+  for (const [index, tip] of current.custom_knowledge_tips.entries()) {
+    if (!tip.title.trim() || !tip.theory.trim()) return `自定义知识点 ${index + 1}：标题和知识正文不能为空`
+    if (!tip.id.startsWith('custom_') || !tip.id.slice(7).trim() || tip.id.trim() !== tip.id || seen.has(tip.id)) return `自定义知识点 ${index + 1}：标识无效或重复`
+    seen.add(tip.id)
+  }
   const ranges = [
     ['Active 会话上限', current.dashboard.max_active, 1, 10, true],
     ['Inactive 会话上限', current.dashboard.max_inactive, 0, 10, true],
@@ -64,8 +73,8 @@ async function load() {
     const { defaults: baseline, ...settings } = body
     await loadRoots()
     defaults.value = baseline
-    value.value = settings
-    loadedValue.value = clone(settings)
+    value.value = { ...settings, custom_knowledge_tips: settings.custom_knowledge_tips ?? [] }
+    loadedValue.value = clone(value.value)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '设置加载失败'
   } finally { loading.value = false }
@@ -78,10 +87,23 @@ async function save() {
     const options = { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value.value) }
     const response = await fetch('/api/v1/settings', options)
     value.value = await readResponse(response, '保存失败') as Settings
+    value.value.custom_knowledge_tips ??= []
     loadedValue.value = clone(value.value)
     message.success('已保存并立即生效')
     emit('saved')
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '保存失败' } finally { saving.value = false }
+}
+let knowledgeSequence = 0
+function addKnowledgeTip() {
+  if (!value.value || busy.value) return
+  const tips = value.value.custom_knowledge_tips
+  let id: string
+  do { id = `custom_${Date.now()}_${knowledgeSequence++}` } while (tips.some((tip) => tip.id === id))
+  tips.push({ id, title: '', theory: '', design: '' })
+}
+function removeKnowledgeTip(id: string) {
+  if (!value.value || busy.value) return
+  value.value.custom_knowledge_tips = value.value.custom_knowledge_tips.filter((tip) => tip.id !== id)
 }
 type Section = 'dashboard' | 'attention' | 'time_estimate'
 function reset(section: Section) {
@@ -161,6 +183,18 @@ onMounted(load)
         <div class="setting-field"><label>无消息保守估算比例 <NInputNumber v-model:value="value.time_estimate.fallback_ratio" :min="0.05" :max="1" :step="0.05" /><small class="hint">最后一层兜底：连消息条数都取不到时，按会话在线时长 × 该比例估算，避免把整段挂机算成工作时间。</small></label><small v-if="defaults" class="default-value">默认：{{ defaults.time_estimate.fallback_ratio }}<NButton size="tiny" quaternary @click="resetField('time_estimate', 'fallback_ratio')">恢复此项</NButton></small></div>
         <NButton @click="reset('time_estimate')">恢复本类默认值</NButton>
       </NTabPane>
+      <NTabPane name="knowledge" tab="自定义知识点">
+        <p>自定义知识点与全部内置知识共同组成候选池。优先选择行动建议关联的知识，再随机补足 5 条；添加后不保证每次入选。</p>
+        <p>修改后点击「保存设置」生效。每条知识点的应用说明可留空。</p>
+        <NButton :disabled="busy" @click="addKnowledgeTip">添加知识点</NButton>
+        <p v-if="value.custom_knowledge_tips.length === 0" class="knowledge-empty">尚未添加自定义知识点，当前使用内置知识池。</p>
+        <div v-for="(tip, index) in value.custom_knowledge_tips" :key="tip.id" class="knowledge-editor">
+          <div class="knowledge-heading"><strong>知识点 {{ index + 1 }}</strong><NButton size="small" type="error" secondary :disabled="busy" @click="removeKnowledgeTip(tip.id)">删除</NButton></div>
+          <label>标题（必填）<NInput v-model:value="tip.title" :disabled="busy" placeholder="例如：先完成最重要的一步" /></label>
+          <label>知识正文（必填）<NInput v-model:value="tip.theory" :disabled="busy" type="textarea" :autosize="{ minRows: 3 }" placeholder="填写希望轮播展示的知识内容" /></label>
+          <label>应用说明（选填）<NInput v-model:value="tip.design" :disabled="busy" type="textarea" :autosize="{ minRows: 2 }" placeholder="填写如何在工作中应用" /></label>
+        </div>
+      </NTabPane>
       <NTabPane name="projects" tab="项目管理">
         <p>项目调整即时保存，不影响其他未保存设置。</p>
         <p v-if="roots.length === 0">尚未标记项目，可在 Dashboard 卡片中标记后在此管理。</p>
@@ -175,6 +209,10 @@ onMounted(load)
 
 <style scoped>
 .settings { display: flex; flex-direction: column; gap: 16px; }
+.knowledge-editor { margin-top: 16px; padding: 16px; border: 1px solid var(--n-divider-color); border-radius: 8px; }
+.knowledge-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.knowledge-editor label { max-width: none; margin: 12px 0; }
+.knowledge-empty { padding-top: 16px; }
 .settings-controls { border: 0; margin: 0; padding: 0; min-width: 0; }
 .setting-field { max-width: 420px; margin: 18px 0 24px; }
 .setting-field label { margin: 0; }
