@@ -1,4 +1,4 @@
-.PHONY: build build-windows env clean vet test go dev run install start stop status
+.PHONY: build build-windows build-win env clean vet test go dev run install start stop status
 
 # Default target
 .DEFAULT_GOAL := build
@@ -22,6 +22,9 @@ build:
 # --------------------------------------------------
 # 以下都只处理go的
 # --------------------------------------------------
+
+## build-windows: documented Windows packaging entry
+build-windows: build-win
 
 ## build-win: bundle frontend and Windows desktop app
 build-win:

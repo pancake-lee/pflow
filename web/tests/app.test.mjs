@@ -8,16 +8,17 @@ import { ref } from 'vue'
 const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
   .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
   .replace(/import[\s\S]*?from\s+['"][^'"]+['"]/g, '')
+  .replaceAll('import.meta.env.VITE_PFLOW_DESKTOP', 'desktopBuild')
 
-function app(fetch) {
+function app(fetch, desktop = false) {
   let mounted
   const context = vm.createContext({
-    ref, fetch, onMounted: (callback) => { mounted = callback },
+    ref, fetch, desktopBuild: desktop ? '1' : undefined, onMounted: (callback) => { mounted = callback },
   })
   vm.runInContext(ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText, context)
-  return { mount: () => mounted(), run: (code) => vm.runInContext(code, context) }
+  return { mount: async () => { mounted(); await new Promise(setImmediate) }, run: (code) => vm.runInContext(code, context) }
 }
 
 test('disabled daily boot finishes startup without fetching the boot API', async () => {
@@ -86,4 +87,19 @@ test('settings modal updates respect the settings close guard', () => {
   instance.run('settingsView.value = { requestClose: () => { showSettings.value = false; return true } }')
   instance.run('updateSettingsVisibility(false)')
   assert.equal(instance.run('showSettings.value'), false)
+})
+
+
+test('desktop waits for the connection ready event before requesting remote settings', async () => {
+  const requests = []
+  const instance = app(async (url) => {
+    requests.push(url)
+    return { ok: true, json: async () => ({ dashboard: { daily_boot_enabled: false } }) }
+  }, true)
+  await instance.mount()
+  assert.deepEqual(requests, [])
+  assert.equal(instance.run('bootChecked.value'), false)
+  await instance.run('checkBoot()')
+  assert.deepEqual(requests, ['/api/v1/settings'])
+  assert.equal(instance.run('bootChecked.value && !showBoot.value'), true)
 })
