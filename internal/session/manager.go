@@ -319,9 +319,12 @@ func configureTmuxMouse(name string, tmuxArgs ...string) error {
 	if err != nil {
 		return fmt.Errorf("tmux list root bindings: %w (%s)", err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if !rootBindingPattern.MatchString(line) {
-			return fmt.Errorf("tmux emitted an invalid root binding: %q", line)
+	// An empty root table is valid; validate only existing binding commands.
+	if len(strings.TrimSpace(string(out))) > 0 {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if !rootBindingPattern.MatchString(line) {
+				return fmt.Errorf("tmux emitted an invalid root binding: %q", line)
+			}
 		}
 	}
 	bindings := rootBindingPattern.ReplaceAllString(

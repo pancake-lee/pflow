@@ -109,6 +109,24 @@ func TestConfigureTmuxMouseIsolatesManagedBindings(t *testing.T) {
 		}
 		t.Log(strings.TrimSpace(string(out)))
 	})
+	t.Run("empty root table", func(t *testing.T) {
+		run("unbind-key", "-a", "-T", "root")
+		err := configureTmuxMouse("managed", "-S", socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bindings := run("list-keys", "-T", managedKeyTable)
+		if !strings.Contains(bindings, "WheelUpPane") ||
+			!strings.Contains(bindings, "WheelDownPane") {
+			t.Fatalf("wheel dispatch missing: %s", bindings)
+		}
+		if got := run("list-keys", "-T", "root"); got != "" {
+			t.Fatal("empty user table was modified")
+		}
+		if got := run("list-keys", "-T", "prefix"); got != prefixBefore {
+			t.Fatal("prefix table was modified")
+		}
+	})
 	err = configureTmuxMouse("missing", "-S", socket)
 	if err == nil || !strings.Contains(err.Error(), "configure mouse") {
 		t.Fatalf("missing session error = %v", err)
