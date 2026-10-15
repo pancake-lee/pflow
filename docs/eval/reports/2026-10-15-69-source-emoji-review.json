@@ -1,0 +1,36 @@
+{
+  "report_id": "2026-10-15-69-source-emoji-review",
+  "backlog_id": "69",
+  "created_at": "2026-10-15T16:45:00Z",
+  "target": "#69 来源表情标识评估",
+  "overall": 8.6,
+  "per_task": {
+    "69": 8.6
+  },
+  "dimension_scores": {
+    "正确性": 9.0,
+    "健壮性": 8.5,
+    "准确性": 9.0,
+    "完整性": 8.5,
+    "可维护性": 8.5,
+    "简洁性": 9.0,
+    "惊喜度": 7.8,
+    "可用性": 8.8,
+    "交互体验": 8.5
+  },
+  "findings_for_backlog": [],
+  "verification_runtime": [
+    "已有脚本验证关联及内置切换时的 emoji，并使用真实 Vue SSR 模板验证自定义 aria-label 与 ✍️。",
+    "三档宽度实际遍历洗牌后的全部候选，标签统计为关联 7、内置 2、自定义 2；无会话时为 0/2/2。",
+    "最终 go test -race -count=1 ./...、go vet ./... 与 make build 通过。",
+    "最终前端 node --test tests/*.test.mjs 78/78 通过，其中知识点测试 13 项。"
+  ],
+  "verification_commits": {
+    "reviewed_head": "13dd673"
+  },
+  "rounds": [],
+  "limitations": [
+    "浏览器使用当前构建产物及拦截 API 的模拟数据，不启动用户服务、不修改真实设置。",
+    "历史规则替代、单用户本地阶段及当前明确的功能范围已纳入评分边界。"
+  ]
+}
