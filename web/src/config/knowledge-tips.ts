@@ -1,5 +1,7 @@
+import type { KnowledgeTip, Suggestion } from '../types/dashboard'
+
 // Knowledge tips for the KnowledgeAnchor component.
-// Used for general rotation when no suggestion has an associated knowledge_tip.
+// All tips participate in rotation; scenario associations are preferred.
 // See docs/design/10-tips.md §4 for the full content reference.
 
 export interface KnowledgeTipData {
@@ -97,6 +99,32 @@ export const ALL_TIPS: KnowledgeTipData[] = [
   },
 ]
 
-// Generic tips are those without specific scenario associations.
-// They are used for the default auto-rotation state.
-export const GENERIC_TIPS = ALL_TIPS.filter((t) => t.related_scenarios.length === 0)
+// Suggestions arrive in priority order. Shared knowledge is included once.
+export function getAssociatedTips(suggestions: Suggestion[]): KnowledgeTip[] {
+  const seen = new Set<string>()
+  return suggestions.flatMap(({ knowledge_tip: tip }) => {
+    if (!tip || seen.has(tip.id)) return []
+    seen.add(tip.id)
+    return [tip]
+  })
+}
+
+// Prefer associated knowledge, then sample the remaining pool without replacement.
+export function selectKnowledgeTips(
+  suggestions: Suggestion[],
+  pool: KnowledgeTip[] = ALL_TIPS,
+  random: () => number = Math.random,
+): KnowledgeTip[] {
+  const selected = getAssociatedTips(suggestions).slice(0, 5)
+  const seen = new Set(selected.map((tip) => tip.id))
+  const remaining = pool.filter((tip) => {
+    if (seen.has(tip.id)) return false
+    seen.add(tip.id)
+    return true
+  })
+  while (selected.length < 5 && remaining.length) {
+    const index = Math.floor(random() * remaining.length)
+    selected.push(remaining.splice(index, 1)[0]!)
+  }
+  return selected
+}

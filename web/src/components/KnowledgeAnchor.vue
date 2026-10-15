@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { Suggestion, KnowledgeTip } from '../types/dashboard'
-import { GENERIC_TIPS } from '../config/knowledge-tips'
+import { ALL_TIPS, getAssociatedTips, selectKnowledgeTips } from '../config/knowledge-tips'
 
 const props = defineProps<{
   suggestions: Suggestion[]
@@ -13,11 +13,9 @@ const manualPause = ref(false)
 let rotationTimer: ReturnType<typeof setInterval> | null = null
 let manualPauseTimer: ReturnType<typeof setTimeout> | null = null
 
-// All display and navigation use the same list, including associated tips.
-const rotationTips = computed<KnowledgeTip[]>(() => {
-  const associated = props.suggestions[0]?.knowledge_tip
-  return associated ? [associated] : GENERIC_TIPS
-})
+// Stable across polling responses that contain the same associated knowledge.
+const candidateKey = computed(() => JSON.stringify(getAssociatedTips(props.suggestions)))
+const rotationTips = ref<KnowledgeTip[]>([])
 const visibleTip = computed(() => rotationTips.value[rotationIndex.value] ?? null)
 const modeLabel = computed(() => '📖 知识库')
 const totalPages = computed(() => rotationTips.value.length)
@@ -59,10 +57,11 @@ function goPrev() {
   pauseRotation()
 }
 
-watch(rotationTips, () => {
+watch(candidateKey, () => {
+  rotationTips.value = selectKnowledgeTips(props.suggestions, ALL_TIPS)
   rotationIndex.value = 0
   if (!manualPause.value) startRotation()
-})
+}, { immediate: true })
 onMounted(startRotation)
 onUnmounted(() => {
   stopRotation()
