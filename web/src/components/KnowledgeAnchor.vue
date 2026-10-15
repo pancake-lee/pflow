@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { Suggestion, KnowledgeTip } from '../types/dashboard'
-import { ALL_TIPS, getAssociatedTips, selectKnowledgeTips } from '../config/knowledge-tips'
+import { ALL_TIPS, getAssociatedTips, selectKnowledgeTips, shuffleKnowledgeTips } from '../config/knowledge-tips'
 
 const props = defineProps<{
   suggestions: Suggestion[]
@@ -15,13 +15,23 @@ let rotationTimer: ReturnType<typeof setInterval> | null = null
 let manualPauseTimer: ReturnType<typeof setTimeout> | null = null
 
 // Stable across polling responses that contain the same associated knowledge.
-const knowledgePool = computed(() => [...ALL_TIPS, ...(props.customTips ?? [])])
 const candidateKey = computed(() => JSON.stringify({
   associated: getAssociatedTips(props.suggestions),
-  pool: knowledgePool.value,
+  builtIn: ALL_TIPS,
+  custom: props.customTips ?? [],
 }))
 const rotationTips = ref<KnowledgeTip[]>([])
 const visibleTip = computed(() => rotationTips.value[rotationIndex.value] ?? null)
+const visibleTipKind = computed(() => {
+  const id = visibleTip.value?.id
+  if (id && props.suggestions.some((suggestion) => suggestion.knowledge_tip?.id === id)) {
+    return { emoji: '🔗', label: '行动建议关联知识' }
+  }
+  if (id && props.customTips?.some((tip) => tip.id === id)) {
+    return { emoji: '✍️', label: '自定义知识' }
+  }
+  return { emoji: '📚', label: '内置知识' }
+})
 const modeLabel = computed(() => '📖 知识库')
 const totalPages = computed(() => rotationTips.value.length)
 const currentPage = computed(() => totalPages.value ? rotationIndex.value + 1 : 0)
@@ -63,7 +73,8 @@ function goPrev() {
 }
 
 watch(candidateKey, () => {
-  rotationTips.value = selectKnowledgeTips(props.suggestions, knowledgePool.value)
+  const selected = selectKnowledgeTips(props.suggestions, ALL_TIPS, props.customTips ?? [])
+  rotationTips.value = shuffleKnowledgeTips(selected)
   rotationIndex.value = 0
   if (!manualPause.value) startRotation()
 }, { immediate: true })
@@ -84,7 +95,7 @@ onUnmounted(() => {
     <!-- Header -->
     <div class="ka-header">
       <span class="ka-mode-label">{{ modeLabel }}</span>
-      <span class="ka-controls" v-if="isHovered || manualPause">
+      <span class="ka-controls" :class="{ 'is-hidden': !isHovered && !manualPause }">
         <button
           class="ka-nav-btn"
           @click="goPrev"
@@ -108,7 +119,7 @@ onUnmounted(() => {
     <!-- Content -->
     <Transition name="ka-fade" mode="out-in">
       <div class="ka-body" :key="visibleTip.id" v-if="visibleTip">
-        <div class="ka-title">🧠 {{ visibleTip.title }}</div>
+        <div class="ka-title"><span :title="visibleTipKind.label" role="img" :aria-label="visibleTipKind.label">{{ visibleTipKind.emoji }}</span> {{ visibleTip.title }}</div>
         <div class="ka-theory">{{ visibleTip.theory }}</div>
         <div class="ka-design" v-if="visibleTip.design">
           <span class="ka-design-icon">⚙️</span>
@@ -163,6 +174,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Reserve the controls' natural height even while they are hidden. */
+.ka-controls.is-hidden {
+  visibility: hidden;
 }
 
 .ka-nav-btn {

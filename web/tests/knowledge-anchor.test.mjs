@@ -17,16 +17,18 @@ vm.runInContext(ts.transpileModule(knowledgeSource, {
 }).outputText, knowledge)
 const selectKnowledgeTips = vm.runInContext('selectKnowledgeTips', knowledge)
 const getAssociatedTips = vm.runInContext('getAssociatedTips', knowledge)
+const shuffleKnowledgeTips = vm.runInContext('shuffleKnowledgeTips', knowledge)
 const tip = (id) => ({ id, title: id, theory: `Theory ${id}`, design: '' })
-function anchor(suggestions = []) {
+function anchor(suggestions = [], shuffleRandom = () => 0.999999) {
   const intervals = new Map(), timeouts = new Map()
-  let serial = 0, mount, unmount
+  let serial = 0, mount, unmount, shuffleCount = 0
   const props = reactive({ suggestions })
   const scope = effectScope()
   const context = vm.createContext({
     ref, computed, watch, defineProps: () => props,
     ALL_TIPS: [tip('a'), tip('b')], getAssociatedTips,
-    selectKnowledgeTips: (suggestions, pool) => selectKnowledgeTips(suggestions, pool, () => 0),
+    selectKnowledgeTips: (suggestions, builtIn, custom) => selectKnowledgeTips(suggestions, builtIn, custom, () => 0),
+    shuffleKnowledgeTips: (tips) => { shuffleCount++; return shuffleKnowledgeTips(tips, shuffleRandom) },
     onMounted: (fn) => { mount = fn }, onUnmounted: (fn) => { unmount = fn },
     setInterval: (fn, delay) => { intervals.set(++serial, { fn, delay }); return serial },
     clearInterval: (id) => intervals.delete(id),
@@ -39,6 +41,7 @@ function anchor(suggestions = []) {
   mount()
   return {
     props, intervals, timeouts,
+    get shuffleCount() { return shuffleCount },
     run: (code) => vm.runInContext(code, context),
     dispose() { unmount(); scope.stop() },
     tick() { for (const { fn } of [...intervals.values()]) fn() },
@@ -74,9 +77,11 @@ test('rotation, wraparound navigation, pause timing and cleanup use one list', (
 test('associated content and changing lists keep navigation and page counts consistent', async () => {
   const api = anchor([{ knowledge_tip: tip('associated') }])
   assert.equal(api.run('visibleTip.value.id'), 'associated')
+  assert.equal(api.run('visibleTipKind.value.emoji'), '🔗')
   assert.equal(api.run('totalPages.value'), 3)
   api.run('goNext()')
   assert.equal(api.run('currentPage.value'), 2)
+  assert.equal(api.run('visibleTipKind.value.emoji'), '📚')
   api.props.suggestions = []
   await nextTick()
   assert.equal(api.run('totalPages.value'), 2)
@@ -94,24 +99,52 @@ test('associated content and changing lists keep navigation and page counts cons
 })
 
 const plain = (value) => JSON.parse(JSON.stringify(value))
-test('all suggestions are considered, deduplicated, preferred and capped at five', () => {
+test('associated knowledge is deduplicated, followed by two built-in and two custom tips', () => {
   const pool = Array.from({ length: 12 }, (_, index) => tip(String(index)))
+  const custom = Array.from({ length: 8 }, (_, index) => tip(`custom_${index}`))
   const suggestions = [{}, { knowledge_tip: pool[3] }, { knowledge_tip: pool[3] }, { knowledge_tip: pool[8] }]
-  const result = plain(selectKnowledgeTips(suggestions, pool, () => 0))
-  assert.deepEqual(result.map((t) => t.id), ['3', '8', '0', '1', '2'])
-  assert.deepEqual(plain(selectKnowledgeTips(pool.map((knowledge_tip) => ({ knowledge_tip })), pool)), pool.slice(0, 5))
-  assert.deepEqual(plain(selectKnowledgeTips([], [pool[0], pool[0]])), [pool[0]])
-  assert.deepEqual(plain(selectKnowledgeTips([], [])), [])
+  const result = plain(selectKnowledgeTips(suggestions, pool, custom, () => 0))
+  assert.deepEqual(result.map((t) => t.id), ['3', '8', '0', '1', 'custom_0', 'custom_1'])
+  const associated = pool.slice(0, 8).map((knowledge_tip) => ({ knowledge_tip }))
+  const uncapped = plain(selectKnowledgeTips(associated, pool, custom, () => 0))
+  assert.equal(uncapped.length, 12)
+  assert.deepEqual(uncapped, [...pool.slice(0, 10), ...custom.slice(0, 2)])
+  const allAssociated = pool.map((knowledge_tip) => ({ knowledge_tip }))
+  assert.deepEqual(plain(selectKnowledgeTips(allAssociated, pool, custom, () => 0)), [...pool, ...custom.slice(0, 2)])
+})
+
+test('each supplement uses available unique tips, without borrowing from the other pool', () => {
+  const a = tip('a'), b = tip('b'), custom = tip('custom_one')
+  assert.deepEqual(plain(selectKnowledgeTips([], [a, a], [custom, custom])), [a, custom])
+  assert.deepEqual(plain(selectKnowledgeTips([], [], [])), [])
+  assert.deepEqual(plain(selectKnowledgeTips([], [a, b], [], () => 0)), [a, b])
+  assert.deepEqual(plain(selectKnowledgeTips([], [], [custom])), [custom])
+  assert.deepEqual(plain(selectKnowledgeTips([{ knowledge_tip: a }], [a], [])), [a])
+  assert.deepEqual(plain(selectKnowledgeTips([{ knowledge_tip: custom }], [a], [custom])), [custom, a])
 })
 
 test('every built-in tip can be sampled without suggestions, including scenario tips', () => {
   const pool = vm.runInContext('ALL_TIPS', knowledge)
   for (let index = 0; index < pool.length; index++) {
-    const result = selectKnowledgeTips([], pool, () => (index + 0.1) / pool.length)
-    assert.equal(result.length, 5)
-    assert.equal(new Set(result.map((t) => t.id)).size, 5)
+    const result = selectKnowledgeTips([], pool, [], () => (index + 0.1) / pool.length)
+    assert.equal(result.length, 2)
+    assert.equal(new Set(result.map((t) => t.id)).size, 2)
     assert.equal(result[0].id, pool[index].id)
   }
+})
+
+test('without suggestions both pools contribute two random entries and remain unchanged', () => {
+  const builtIn = Array.from({ length: 6 }, (_, index) => tip(`built_${index}`))
+  const custom = Array.from({ length: 6 }, (_, index) => tip(`custom_${index}`))
+  for (let index = 0; index < custom.length; index++) {
+    const result = selectKnowledgeTips([], builtIn, custom, () => (index + 0.1) / custom.length)
+    assert.equal(result.length, 4)
+    assert.equal(new Set(result.map((t) => t.id)).size, 4)
+    assert.equal(result[0].id, builtIn[index].id)
+    assert.equal(result[2].id, custom[index].id)
+  }
+  assert.equal(builtIn.length, 6)
+  assert.equal(custom.length, 6)
 })
 
 test('equivalent polling does not reshuffle or reset playback; associated changes do', async () => {
@@ -159,12 +192,47 @@ test('the actual card template escapes custom text and omits an empty applicatio
     .match(/<template>([\s\S]*?)<\/template>/)[1]
   const app = createSSRApp({
     template,
-    setup: () => api.run('({ isHovered, manualPause, modeLabel, totalPages, currentPage, visibleTip, goPrev, goNext })'),
+    setup: () => api.run('({ isHovered, manualPause, modeLabel, totalPages, currentPage, visibleTip, visibleTipKind, goPrev, goNext })'),
   })
   const html = await renderToString(app)
   assert.match(html, /&lt;b&gt;title&lt;\/b&gt;/)
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/)
   assert.equal(html.includes('<img'), false)
   assert.equal(html.includes('ka-design'), false)
+  assert.match(html, /aria-label="自定义知识">✍️<\/span>/)
+  api.dispose()
+})
+
+test('one shuffle mixes the selected list without changing its members or the input', () => {
+  const original = ['associated_a', 'associated_b', 'built_a', 'built_b', 'custom_a', 'custom_b'].map(tip)
+  const before = plain(original)
+  const shuffled = plain(shuffleKnowledgeTips(original, () => 0.5))
+  assert.deepEqual(shuffled.map(t => t.id), ['associated_a', 'custom_b', 'associated_b', 'custom_a', 'built_a', 'built_b'])
+  assert.deepEqual([...shuffled].sort((a, b) => a.id.localeCompare(b.id)), [...before].sort((a, b) => a.id.localeCompare(b.id)))
+  assert.deepEqual(original, before)
+  assert.deepEqual(plain(shuffleKnowledgeTips([])), [])
+  assert.deepEqual(plain(shuffleKnowledgeTips([tip('single')])), [tip('single')])
+})
+
+test('shuffle only runs for new candidates, never for rotation, navigation or identical polling', async () => {
+  const suggestions = [{ knowledge_tip: tip('associated') }]
+  const api = anchor(suggestions, () => 0)
+  assert.equal(api.shuffleCount, 1)
+  assert.deepEqual(plain(api.run('rotationTips.value.map(t => t.id)')), ['a', 'b', 'associated'])
+  const before = api.run('rotationTips.value')
+  for (let count = 0; count < 9; count++) api.tick()
+  api.run('goNext(); goPrev()')
+  api.resume()
+  api.props.suggestions = plain(suggestions)
+  await nextTick()
+  assert.equal(api.run('rotationTips.value'), before)
+  assert.equal(api.shuffleCount, 1)
+  api.props.customTips = [tip('custom_new')]
+  await nextTick()
+  assert.equal(api.shuffleCount, 2)
+  assert.equal(api.run('rotationTips.value.some(t => t.id === "custom_new")'), true)
+  api.props.customTips = [tip('custom_new')]
+  await nextTick()
+  assert.equal(api.shuffleCount, 2)
   api.dispose()
 })

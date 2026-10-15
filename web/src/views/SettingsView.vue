@@ -184,7 +184,7 @@ onMounted(load)
         <NButton @click="reset('time_estimate')">恢复本类默认值</NButton>
       </NTabPane>
       <NTabPane name="knowledge" tab="自定义知识点">
-        <p>自定义知识点与全部内置知识共同组成候选池。优先选择行动建议关联的知识，再随机补足 5 条；添加后不保证每次入选。</p>
+        <p>候选列表包含：全部行动建议关联的知识（去重）、随机 2 条未重复的内置知识、随机 2 条自定义知识，总数不限。每类不足 2 条时取全部可用内容。选好候选后统一打乱一次，后续按该顺序循环播放。</p>
         <p>修改后点击「保存设置」生效。每条知识点的应用说明可留空。</p>
         <NButton :disabled="busy" @click="addKnowledgeTip">添加知识点</NButton>
         <p v-if="value.custom_knowledge_tips.length === 0" class="knowledge-empty">尚未添加自定义知识点，当前使用内置知识池。</p>

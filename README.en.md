@@ -12,7 +12,7 @@ English | [中文](./README.md)
 
 pflow aggregates the state of all these AI sessions onto a single dashboard. Like a general looking at a sandtable, you see at a glance which front is fighting, which is waiting, and where you need to go.
 
-Knowledge cards rotate through five candidates: knowledge linked to all current action suggestions is deduplicated and preferred, then the full pool fills remaining slots at random. Without suggestions, all five are sampled randomly. In Settings, open **自定义知识点**, add a title and body with an optional application note, then click **保存设置**. Custom knowledge joins the pool and can be edited or deleted; selection is not guaranteed every time. Content is persisted in the server's `~/.pflow/settings.json`.
+Knowledge card candidates include all unique tips linked to current action suggestions, two randomly selected, nonduplicate built-in tips and two randomly selected custom tips, with no total cap. Each supplement uses all available entries when fewer than two remain. Each newly selected list is shuffled once; subsequent rotation and navigation preserve that order. In Settings, open **自定义知识点**, add a title and body with an optional application note, then click **保存设置**. Custom knowledge can be edited or deleted and is sampled independently of the number of associated tips. Content is persisted in the server's `~/.pflow/settings.json`.
 
 ## Dashboard Preview
 

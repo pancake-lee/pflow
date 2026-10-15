@@ -109,22 +109,45 @@ export function getAssociatedTips(suggestions: Suggestion[]): KnowledgeTip[] {
   })
 }
 
-// Prefer associated knowledge, then sample the remaining pool without replacement.
+// Keep all associated knowledge, then independently sample each supplement.
 export function selectKnowledgeTips(
   suggestions: Suggestion[],
-  pool: KnowledgeTip[] = ALL_TIPS,
+  builtInTips: KnowledgeTip[] = ALL_TIPS,
+  customTips: KnowledgeTip[] = [],
   random: () => number = Math.random,
 ): KnowledgeTip[] {
-  const selected = getAssociatedTips(suggestions).slice(0, 5)
+  const selected = getAssociatedTips(suggestions)
   const seen = new Set(selected.map((tip) => tip.id))
-  const remaining = pool.filter((tip) => {
-    if (seen.has(tip.id)) return false
-    seen.add(tip.id)
-    return true
-  })
-  while (selected.length < 5 && remaining.length) {
-    const index = Math.floor(random() * remaining.length)
-    selected.push(remaining.splice(index, 1)[0]!)
+
+  function appendRandomTips(pool: KnowledgeTip[]) {
+    const poolIDs = new Set<string>()
+    const remaining = pool.filter((tip) => {
+      if (seen.has(tip.id) || poolIDs.has(tip.id)) return false
+      poolIDs.add(tip.id)
+      return true
+    })
+    for (let count = 0; count < 2 && remaining.length; count++) {
+      const index = Math.floor(random() * remaining.length)
+      const tip = remaining.splice(index, 1)[0]!
+      selected.push(tip)
+      seen.add(tip.id)
+    }
   }
+
+  appendRandomTips(builtInTips)
+  appendRandomTips(customTips)
   return selected
+}
+
+// Shuffle a newly selected list once; playback keeps the resulting order.
+export function shuffleKnowledgeTips(
+  tips: KnowledgeTip[],
+  random: () => number = Math.random,
+): KnowledgeTip[] {
+  const shuffled = [...tips]
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const target = Math.floor(random() * (index + 1))
+    ;[shuffled[index], shuffled[target]] = [shuffled[target]!, shuffled[index]!]
+  }
+  return shuffled
 }
