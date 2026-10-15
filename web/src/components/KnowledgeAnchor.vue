@@ -7,139 +7,67 @@ const props = defineProps<{
   suggestions: Suggestion[]
 }>()
 
-// ── State ──────────────────────────────────────────────────────────
-
 const isHovered = ref(false)
 const rotationIndex = ref(0)
 const manualPause = ref(false)
-const currentTipId = ref<string>('default') // for transition key
 let rotationTimer: ReturnType<typeof setInterval> | null = null
 let manualPauseTimer: ReturnType<typeof setTimeout> | null = null
 
-// ── Derived ────────────────────────────────────────────────────────
-
-// Highest-priority suggestion (array is sorted by priority ascending)
-const topSuggestion = computed<Suggestion | null>(() => {
-  if (props.suggestions.length === 0) return null
-  return props.suggestions[0]
+// All display and navigation use the same list, including associated tips.
+const rotationTips = computed<KnowledgeTip[]>(() => {
+  const associated = props.suggestions[0]?.knowledge_tip
+  return associated ? [associated] : GENERIC_TIPS
 })
+const visibleTip = computed(() => rotationTips.value[rotationIndex.value] ?? null)
+const modeLabel = computed(() => '📖 知识库')
+const totalPages = computed(() => rotationTips.value.length)
+const currentPage = computed(() => totalPages.value ? rotationIndex.value + 1 : 0)
 
-// Whether we are in "associated" mode (following a suggestion's tip)
-const associatedTip = computed<KnowledgeTip | null>(() => {
-  const top = topSuggestion.value
-  if (top && top.knowledge_tip) {
-    return top.knowledge_tip
-  }
-  return null
-})
-
-// The list of tips to rotate through when not associated
-// Uses generic tips (those without scenario association)
-const rotationTips = computed(() => {
-  return GENERIC_TIPS.map((t) => ({
-    id: t.id,
-    title: t.title,
-    theory: t.theory,
-    design: t.design,
-  }))
-})
-
-// The currently visible tip
-const visibleTip = computed(() => {
-  if (associatedTip.value) {
-    return associatedTip.value
-  }
-  if (rotationTips.value.length === 0) return null
-  return rotationTips.value[rotationIndex.value % rotationTips.value.length]
-})
-
-// Display mode label
-const modeLabel = computed(() => {
-  if (associatedTip.value) return '📡 关联行动建议'
-  return '📖 知识库'
-})
-
-// Total pages for rotation
-const totalPages = computed(() => Math.max(rotationTips.value.length, 1))
-const currentPage = computed(() => (rotationIndex.value % totalPages.value) + 1)
-
-// ── Rotation logic ─────────────────────────────────────────────────
+function stopRotation() {
+  if (rotationTimer !== null) clearInterval(rotationTimer)
+  rotationTimer = null
+}
 
 function startRotation() {
   stopRotation()
+  if (rotationTips.value.length < 2) return
   rotationTimer = setInterval(() => {
-    rotationIndex.value++
+    rotationIndex.value = (rotationIndex.value + 1) % rotationTips.value.length
   }, 15000)
-}
-
-function stopRotation() {
-  if (rotationTimer) {
-    clearInterval(rotationTimer)
-    rotationTimer = null
-  }
 }
 
 function pauseRotation() {
   stopRotation()
-  // Resume after 30s of no manual interaction
-  if (manualPauseTimer) clearTimeout(manualPauseTimer)
+  manualPause.value = true
+  if (manualPauseTimer !== null) clearTimeout(manualPauseTimer)
   manualPauseTimer = setTimeout(() => {
+    manualPauseTimer = null
     manualPause.value = false
-    if (!associatedTip.value) {
-      startRotation()
-    }
+    startRotation()
   }, 30000)
 }
 
 function goNext() {
-  rotationIndex.value++
+  if (rotationTips.value.length < 2) return
+  rotationIndex.value = (rotationIndex.value + 1) % rotationTips.value.length
   pauseRotation()
 }
 
 function goPrev() {
-  rotationIndex.value = Math.max(0, rotationIndex.value - 1)
+  if (rotationTips.value.length < 2) return
+  rotationIndex.value = (rotationIndex.value - 1 + rotationTips.value.length) % rotationTips.value.length
   pauseRotation()
 }
 
-// ── Lifecycle ──────────────────────────────────────────────────────
-
-onMounted(() => {
-  if (!associatedTip.value) {
-    startRotation()
-  }
+watch(rotationTips, () => {
+  rotationIndex.value = 0
+  if (!manualPause.value) startRotation()
 })
-
+onMounted(startRotation)
 onUnmounted(() => {
   stopRotation()
-  if (manualPauseTimer) clearTimeout(manualPauseTimer)
+  if (manualPauseTimer !== null) clearTimeout(manualPauseTimer)
 })
-
-// Watch for changes in associated tip
-watch(
-  () => associatedTip.value?.id ?? null,
-  (newId, oldId) => {
-    if (newId !== oldId) {
-      currentTipId.value = newId ?? 'rotation'
-    }
-    if (newId) {
-      // Associated mode: stop rotation
-      stopRotation()
-    } else if (!manualPause.value) {
-      // No associated tip, resume rotation
-      startRotation()
-    }
-  }
-)
-
-// Watch top suggestion scenario change to trigger animation
-watch(
-  () => topSuggestion.value?.scenario_id,
-  (newSid, oldSid) => {
-    if (newSid !== oldSid) {
-      currentTipId.value = newSid ?? 'rotation'
-    }
-  }
-)
 </script>
 
 <template>
@@ -156,13 +84,14 @@ watch(
         <button
           class="ka-nav-btn"
           @click="goPrev"
-          :disabled="rotationIndex === 0"
+          :disabled="totalPages < 2"
           title="上一条"
         >
           ◀
         </button>
         <button
           class="ka-nav-btn"
+          :disabled="totalPages < 2"
           @click="goNext"
           title="下一条"
         >
@@ -174,10 +103,10 @@ watch(
 
     <!-- Content -->
     <Transition name="ka-fade" mode="out-in">
-      <div class="ka-body" :key="currentTipId" v-if="visibleTip">
+      <div class="ka-body" :key="visibleTip.id" v-if="visibleTip">
         <div class="ka-title">🧠 {{ visibleTip.title }}</div>
         <div class="ka-theory">{{ visibleTip.theory }}</div>
-        <div class="ka-design">
+        <div class="ka-design" v-if="visibleTip.design">
           <span class="ka-design-icon">⚙️</span>
           <span>{{ visibleTip.design }}</span>
         </div>
