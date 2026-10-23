@@ -38,7 +38,7 @@ pflow 托管会话会在运行时配置鼠标滚动：应用自行处理鼠标�
 
 ## Windows 桌面版
 
-桌面版在原生 Windows 上运行，通过 HTTP/HTTPS 连接 Linux 上的 `pflow serve`。Agent 扫描、项目、日程与偏好在 Linux 端处理，exe 仅保存连接地址和日志。本轮支持单个服务，本地 Agent 与多个远端融合展示的后续方向见 [backlog #55](./docs/backlog.md#55-future本地与多远端会话融合)。
+桌面版在原生 Windows 上运行，通过 HTTP/HTTPS 连接 Linux 上的 `pflow serve`。Agent 扫描、项目、日程与偏好在 Linux 端处理，exe 仅保存连接地址和日志。本轮支持单个服务，本地 Agent 与多个远端融合展示的后续方向见 [Future #55](./docs/design/99_future.md)。
 
 在 Linux 构建环境安装系统 Go、pnpm 与 MinGW-w64 交叉编译器（`x86_64-w64-mingw32-gcc`），安装项目依赖后执行：
 

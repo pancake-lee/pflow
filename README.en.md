@@ -47,7 +47,7 @@ Copy `bin/pflow.exe` to Windows and double-click it. WebView2 Runtime is require
 - Local WSL: run pflow in the Agent distribution; Windows can usually connect to `http://127.0.0.1:10002`.
 - Remote Linux: use an existing protected HTTP/HTTPS endpoint or your own SSH tunnel. For example, run `ssh -N -L 127.0.0.1:11002:127.0.0.1:10002 user@host` and connect to `http://127.0.0.1:11002`. The remote port must be reachable from the SSH host; stop the tunnel with Ctrl+C. The desktop does not manage SSH processes.
 
-The current API has no authentication, so use local port publishing, an existing protected network or an SSH tunnel. This release connects to one service and disables desktop Web terminals; use your existing terminal for Agent interactions. Linux browser terminals continue to work. Future local Agent and multiple remote source fusion is tracked in [backlog #55](./docs/backlog.md#55-future本地与多远端会话融合).
+The current API has no authentication, so use local port publishing, an existing protected network or an SSH tunnel. This release connects to one service and disables desktop Web terminals; use your existing terminal for Agent interactions. Linux browser terminals continue to work. Future local Agent and multiple remote source fusion is recorded in [Future #55](./docs/design/99_future.md).
 
 ## Core Experience
 
