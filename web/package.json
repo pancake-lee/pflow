@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "test:knowledge": "node --test tests/knowledge-*.test.mjs",
-    "test:schedule": "node --test tests/schedule-editor.test.mjs",
+    "test:schedule": "node --test tests/schedule-editor.test.mjs tests/schedule-panel.test.mjs",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview"
   },

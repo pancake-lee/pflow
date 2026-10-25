@@ -10,8 +10,8 @@ const source = readFileSync(new URL('../src/components/SchedulePanel.vue', impor
 function panel(fetch) {
   const errors = []
   const context = vm.createContext({
-    ref, computed, fetch, document: { visibilityState: 'visible' }, onMounted: () => {}, onUnmounted: () => {},
-    defineEmits: () => () => {}, useMessage: () => ({ error: message => errors.push(message) }),
+    ref, computed, fetch, document: { visibilityState: 'visible' }, setInterval, clearInterval, onMounted: () => {}, onUnmounted: () => {},
+    defineEmits: () => () => {}, useMessage: () => ({ error: message => errors.push(message), success: () => {} }),
     highlightToMarquee: () => ({ visible: false }),
   })
   vm.runInContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context)
@@ -66,4 +66,90 @@ test('automatic start retries after failure and restarts after a pause', async (
   api.run('maybeAutoStart()')
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(posts, 3)
+})
+
+test('review date change saves the previous day note before loading the next day', async () => {
+  const notes = { '2026-10-13': '原备注', '2026-10-14': '次日备注' }
+  const calls = []
+  const api = panel(async (url, options) => {
+    if (options?.method === 'PUT') {
+      const body = JSON.parse(options.body)
+      calls.push(`save:${body.date}`)
+      notes[body.date] = body.note
+      return { ok: true, json: async () => ({ note: body.note }) }
+    }
+    const date = new URL(url, 'http://localhost').searchParams.get('date')
+    calls.push(`load:${date}`)
+    return { ok: true, json: async () => ({ review: { score: 0 }, note: notes[date] ?? '' }) }
+  })
+  api.run("reviewDate.value = '2026-10-13'; review.value = {score: 0}; reviewNote.value = '原备注'; storedReviewNote.value = '原备注'")
+  api.run("reviewNote.value = '改后备注'")
+  await api.run("changeReviewDate('2026-10-14')")
+  assert.deepEqual(calls, ['save:2026-10-13', 'load:2026-10-14'])
+  assert.equal(notes['2026-10-13'], '改后备注')
+  assert.equal(api.run('reviewNote.value'), '次日备注')
+  assert.equal(api.run('reviewDate.value'), '2026-10-14')
+})
+
+test('review stays on the original day when automatic save fails', async () => {
+  let reads = 0
+  const api = panel(async (_, options) => {
+    if (options?.method === 'PUT') return { ok: false }
+    reads++
+    return { ok: true, json: async () => ({ review: { score: 0 }, note: '' }) }
+  })
+  api.run("reviewDate.value = '2026-10-13'; reviewNote.value = '未保存'; storedReviewNote.value = ''; showReview.value = true")
+  await api.run("changeReviewDate('2026-10-14')")
+  await api.run('setReviewVisible(false)')
+  assert.equal(api.run('reviewDate.value'), '2026-10-13')
+  assert.equal(api.run('showReview.value'), true)
+  assert.equal(reads, 0)
+  assert.equal(api.errors.length, 2)
+})
+
+test('parking note stays yellow until processed and disappears only when deleted', async () => {
+  const entries = []
+  const actions = []
+  const api = panel(async (url, options) => {
+    if (url.endsWith('/parking')) {
+      const body = JSON.parse(options.body)
+      actions.push(options.method)
+      if (options.method === 'POST') entries.push({ id: 'note-1', content: body.content, created_at: '2026-10-13T09:00:00Z' })
+      if (options.method === 'PATCH') entries[0].processed_at = '2026-10-13T09:10:00Z'
+      if (options.method === 'DELETE') entries.splice(0, 1)
+      return { ok: true }
+    }
+    return { ok: true, json: async () => ({ day: { date: '2026-10-13', parking: [...entries] }, current: { id: 'a', title: 'A' }, phase: 'focus' }) }
+  })
+  api.run("parkingText.value = '待处理便签'")
+  await api.run('addParking()')
+  assert.equal(api.run('parkingProcessed(parking.value[0])'), false)
+  assert.equal(api.run('current.value.id'), 'a')
+  await api.run("processParking('note-1')")
+  assert.equal(api.run('parkingProcessed(parking.value[0])'), true)
+  await api.run("deleteParking('note-1')")
+  assert.equal(api.run('parking.value.length'), 0)
+  assert.deepEqual(actions, ['POST', 'PATCH', 'DELETE'])
+})
+
+test('leave remains active after reload until the return action succeeds', async () => {
+  let away = false
+  const leave = { id: 'leave-1', task_id: 'a', action: 'leave', time: '2026-10-13T09:00:00Z', note: '接电话' }
+  const api = panel(async (url, options) => {
+    if (url.endsWith('/action')) {
+      const action = JSON.parse(options.body).action
+      if (action === 'leave') away = true
+      if (action === 'return') away = false
+      return { ok: true, json: async () => ({ events: action === 'leave' ? [leave] : [] }) }
+    }
+    return { ok: true, json: async () => ({ day: { date: '2026-10-13', items: [{ id: 'a', title: 'A' }] }, current: { id: 'a', title: 'A' }, active_leave: away ? leave : null, phase: 'focus' }) }
+  })
+  api.run('openLeave()')
+  await api.run("act('leave', 'a', '接电话')")
+  assert.equal(api.run('activeLeave.value.note'), '接电话')
+  assert.equal(api.run('leaveOpen.value'), false)
+  await api.run('load()')
+  assert.equal(api.run('activeLeave.value.id'), 'leave-1')
+  await api.run("act('return', 'a')")
+  assert.equal(api.run('activeLeave.value'), null)
 })
