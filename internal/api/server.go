@@ -154,6 +154,8 @@ func NewServerWithOptions(staticFS fs.FS, sessionMgr *session.Manager, options S
 	s.HandleFunc("DELETE /api/v1/schedule-templates", s.handleDeleteTemplate)
 	s.HandleFunc("POST /api/v1/schedules/action", s.handleScheduleAction)
 	s.HandleFunc("PUT /api/v1/schedules/review", s.handlePutScheduleReview)
+	s.HandleFunc("POST /api/v1/schedules/parking", s.handlePostScheduleParking)
+	s.HandleFunc("PATCH /api/v1/schedules/parking", s.handlePatchScheduleParking)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -245,6 +247,60 @@ func (s *Server) handlePutScheduleReview(w http.ResponseWriter, r *http.Request)
 			return fmt.Errorf("schedule not found: %w", errScheduleNotFound)
 		}
 		day.ReviewNote = strings.TrimSpace(req.Note)
+		file.Days[req.Date] = day
+		return nil
+	})
+	if err != nil {
+		writeScheduleError(w, err)
+		return
+	}
+	writeJSON(w, 200, updated.Days[req.Date])
+}
+
+func (s *Server) handlePostScheduleParking(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Date    string `json:"date"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err := s.scheduleMgr.Update(func(file *schedule.File) error {
+		day, exists := file.Days[req.Date]
+		if !exists {
+			return fmt.Errorf("schedule not found: %w", errScheduleNotFound)
+		}
+		if addErr := schedule.AddParking(&day, req.Content, time.Now()); addErr != nil {
+			return addErr
+		}
+		file.Days[req.Date] = day
+		return nil
+	})
+	if err != nil {
+		writeScheduleError(w, err)
+		return
+	}
+	writeJSON(w, 200, updated.Days[req.Date])
+}
+
+func (s *Server) handlePatchScheduleParking(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Date string `json:"date"`
+		ID   string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err := s.scheduleMgr.Update(func(file *schedule.File) error {
+		day, exists := file.Days[req.Date]
+		if !exists {
+			return fmt.Errorf("schedule not found: %w", errScheduleNotFound)
+		}
+		if processErr := schedule.ProcessParking(&day, req.ID, time.Now()); processErr != nil {
+			return processErr
+		}
 		file.Days[req.Date] = day
 		return nil
 	})

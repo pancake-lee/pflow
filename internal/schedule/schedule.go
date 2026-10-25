@@ -30,12 +30,21 @@ type Item struct {
 	CompletedAt  time.Time `json:"completed_at,omitempty"`
 }
 type Day struct {
-	Date         string   `json:"date"`
-	Items        []Item   `json:"items"`
-	CurrentID    string   `json:"current_id,omitempty"`
-	RuntimeOrder []string `json:"runtime_order,omitempty"`
-	Events       []Event  `json:"events,omitempty"`
-	ReviewNote   string   `json:"review_note,omitempty"`
+	Date         string        `json:"date"`
+	Items        []Item        `json:"items"`
+	CurrentID    string        `json:"current_id,omitempty"`
+	RuntimeOrder []string      `json:"runtime_order,omitempty"`
+	Events       []Event       `json:"events,omitempty"`
+	ReviewNote   string        `json:"review_note,omitempty"`
+	Parking      []ParkingItem `json:"parking,omitempty"`
+}
+
+// ParkingItem captures a thought without replacing the current schedule item.
+type ParkingItem struct {
+	ID          string    `json:"id"`
+	Content     string    `json:"content"`
+	CreatedAt   time.Time `json:"created_at"`
+	ProcessedAt time.Time `json:"processed_at,omitempty"`
 }
 
 // ReviewSummary is derived from recorded actions, never from guessed history.
@@ -195,6 +204,7 @@ func PrepareDaySave(previous Day, next Day, replaceRecorded bool) (Day, error) {
 	prepared.RuntimeOrder = append([]string(nil), previous.RuntimeOrder...)
 	prepared.Events = append([]Event(nil), previous.Events...)
 	prepared.ReviewNote = previous.ReviewNote
+	prepared.Parking = append([]ParkingItem(nil), previous.Parking...)
 	return prepared, nil
 }
 
@@ -535,6 +545,37 @@ func SummarizeReview(day Day) ReviewSummary {
 		}
 	}
 	return summary
+}
+
+// AddParking stores a short thought alongside the day without moving its cursor.
+func AddParking(day *Day, content string, now time.Time) error {
+	content = strings.TrimSpace(content)
+	if content == "" || len([]rune(content)) > 300 {
+		return fmt.Errorf("%w: parking content must contain 1-300 characters", ErrInvalidAction)
+	}
+	current, _ := Current(*day, now)
+	day.Parking = append(day.Parking, ParkingItem{
+		ID:      fmt.Sprintf("%d-%d", now.UnixNano(), len(day.Parking)),
+		Content: content, CreatedAt: now,
+	})
+	appendEvent(day, current.ID, "park", content, now, nil)
+	return nil
+}
+
+// ProcessParking marks a parked thought handled once and records the action.
+func ProcessParking(day *Day, id string, now time.Time) error {
+	for i := range day.Parking {
+		if day.Parking[i].ID != id {
+			continue
+		}
+		if !day.Parking[i].ProcessedAt.IsZero() {
+			return nil
+		}
+		day.Parking[i].ProcessedAt = now
+		appendEvent(day, "", "parking_processed", day.Parking[i].Content, now, nil)
+		return nil
+	}
+	return fmt.Errorf("%w: parking item not found", ErrInvalidAction)
 }
 
 func timelineMinute(item Item) int {

@@ -6,6 +6,7 @@ import { highlightToMarquee } from '../composables/useReminderScores'
 type Item = { id: string; start: string; day_offset?: number; title: string; focus_minutes: number; break_minutes: number; status?: string }
 type Event = { id: string; task_id?: string; time: string; action: string; duration_seconds?: number; note?: string }
 type ReviewSummary = { score: number; completed_count: number; deviation_count: number; total_duration_seconds: number; incomplete_legacy_items: boolean }
+type ParkingItem = { id: string; content: string; created_at: string; processed_at?: string }
 
 const day = ref('')
 const current = ref<Item | null>(null)
@@ -26,6 +27,10 @@ const review = ref<ReviewSummary | null>(null)
 const reviewNote = ref('')
 const showReview = ref(false)
 const savingReview = ref(false)
+const parking = ref<ParkingItem[]>([])
+const parkingText = ref('')
+const parkingOpen = ref(false)
+const parkingBusy = ref(false)
 const emit = defineEmits<{ edit: [] }>()
 const message = useMessage()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -47,10 +52,47 @@ async function load() {
     events.value = payload.day.events ?? []
     runtimeOrder.value = payload.day.runtime_order ?? []
     review.value = payload.review ?? null
+    parking.value = payload.day.parking ?? []
     if (!showReview.value) reviewNote.value = payload.day.review_note ?? ''
     loadError.value = ''
   } catch {
     loadError.value = '读取今日日程失败，操作暂不可用。'
+  }
+}
+
+async function addParking() {
+  const content = parkingText.value.trim()
+  if (!day.value || !content || parkingBusy.value) return
+  parkingBusy.value = true
+  try {
+    const response = await fetch('/api/v1/schedules/parking', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: day.value, content }),
+    })
+    if (!response.ok) throw new Error('收纳失败')
+    parkingText.value = ''
+    await load()
+  } catch {
+    message.error('收纳失败，请重试')
+  } finally {
+    parkingBusy.value = false
+  }
+}
+
+async function processParking(id: string) {
+  if (!day.value || parkingBusy.value) return
+  parkingBusy.value = true
+  try {
+    const response = await fetch('/api/v1/schedules/parking', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: day.value, id }),
+    })
+    if (!response.ok) throw new Error('更新失败')
+    await load()
+  } catch {
+    message.error('更新停车场失败，请重试')
+  } finally {
+    parkingBusy.value = false
   }
 }
 
@@ -118,6 +160,7 @@ const elapsed = computed(() => {
 const actionLabel: Record<string, string> = {
   start: '开始', completed: '完成', skipped: '跳过',
   early: '提前', reorder: '调序', delay: '拖延', note: '备注',
+  park: '收纳', parking_processed: '处理停车场',
 }
 
 // Break drives the current card's orange marquee at full intensity.
@@ -174,6 +217,7 @@ onUnmounted(() => {
         <span class="s-label">今日日程 · 当前</span>
         <div class="s-actions">
           <NButton size="small" quaternary @click="emit('edit')">编辑</NButton>
+          <NButton v-if="items.length" size="small" quaternary @click="parkingOpen = !parkingOpen">停车场</NButton>
           <template v-if="current.id">
             <NButton size="small" :disabled="acting || !!elapsed || !!loadError" @click="act('start')">开始</NButton>
             <NButton size="small" :loading="acting" :disabled="!!loadError" @click="act('completed')">完成</NButton>
@@ -186,6 +230,16 @@ onUnmounted(() => {
         <span class="s-title">{{ phase === 'break' ? `☕ 休息中（约 ${breakRemainingMinutes} 分钟）：` : '' }}{{ current.title }}</span>
         <small class="s-meta">{{ current.id ? `${itemTime(current)} · ${current.focus_minutes} 分钟` : '自由安排时间' }}</small>
         <small v-if="elapsed" class="s-meta">{{ elapsed }}</small>
+      </div>
+    </div>
+    <div v-if="parkingOpen && items.length" class="s-parking">
+      <div class="s-extra-row">
+        <NInput v-model:value="parkingText" size="small" placeholder="先记下这件事，继续当前项" maxlength="300" @keyup.enter="addParking" />
+        <NButton size="small" :disabled="!parkingText.trim() || parkingBusy" @click="addParking">收纳</NButton>
+      </div>
+      <div v-for="entry in parking" :key="entry.id" class="s-parking-item">
+        <span :class="{ 's-parking-done': !!entry.processed_at }">{{ entry.content }}</span>
+        <NButton v-if="!entry.processed_at" size="tiny" quaternary :disabled="parkingBusy" @click="processParking(entry.id)">已处理</NButton>
       </div>
     </div>
     <div v-if="next" class="s-card s-card--next" :style="nextStyle">
@@ -287,6 +341,9 @@ onUnmounted(() => {
 .s-meta { color: #aaa; }
 .s-extra { padding: 0 4px; }
 .s-review { padding: 0 4px; font-size: 13px; color: #ccc; }
+.s-parking { display: grid; gap: 8px; padding: 8px 4px; }
+.s-parking-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.s-parking-done { color: #888; text-decoration: line-through; }
 .s-extra-content { display: grid; gap: 8px; margin-top: 6px; }
 .s-extra-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .s-extra-row .n-input { max-width: 300px; }

@@ -246,6 +246,31 @@ func TestSummarizeReviewKeepsLegacyGapVisible(t *testing.T) {
 	}
 }
 
+func TestParkingKeepsCurrentAndHandlesOnce(t *testing.T) {
+	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{{
+		ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30,
+	}}}
+	now := time.Date(2026, 10, 25, 9, 15, 0, 0, time.UTC)
+	if err := AddParking(&day, "  发票  ", now); err != nil {
+		t.Fatal(err)
+	}
+	if day.CurrentID != "a" || len(day.Parking) != 1 || day.Parking[0].Content != "发票" {
+		t.Fatalf("day=%+v", day)
+	}
+	if err := AddParking(&day, " ", now); !errors.Is(err, ErrInvalidAction) {
+		t.Fatalf("empty content err=%v", err)
+	}
+	id := day.Parking[0].ID
+	for i := 0; i < 2; i++ {
+		if err := ProcessParking(&day, id, now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(day.Events) != 2 || day.Parking[0].ProcessedAt.IsZero() {
+		t.Fatalf("day=%+v", day)
+	}
+}
+
 func TestPrepareDaySavePreservesUnchangedRecordAndRequiresReplacementConfirmation(t *testing.T) {
 	completedAt := time.Date(2026, 9, 11, 9, 50, 0, 0, time.UTC)
 	previous := Day{Date: "2026-09-11", CurrentID: "b", Items: []Item{
