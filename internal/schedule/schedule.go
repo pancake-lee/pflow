@@ -35,7 +35,7 @@ type Day struct {
 	CurrentID    string        `json:"current_id,omitempty"`
 	RuntimeOrder []string      `json:"runtime_order,omitempty"`
 	Events       []Event       `json:"events,omitempty"`
-	ReviewNote   string        `json:"review_note,omitempty"`
+	ReviewNote   string        `json:"review_note,omitempty"` // Legacy note, read when no date note exists.
 	Parking      []ParkingItem `json:"parking,omitempty"`
 }
 
@@ -71,9 +71,10 @@ type Template struct {
 	Items []Item `json:"items"`
 }
 type File struct {
-	Version   int            `json:"version"`
-	Days      map[string]Day `json:"days"`
-	Templates []Template     `json:"templates"`
+	Version     int               `json:"version"`
+	Days        map[string]Day    `json:"days"`
+	ReviewNotes map[string]string `json:"review_notes,omitempty"`
+	Templates   []Template        `json:"templates"`
 }
 type Manager struct {
 	mu   sync.Mutex
@@ -608,6 +609,17 @@ func ProcessParking(day *Day, id string, now time.Time) error {
 		day.Parking[i].ProcessedAt = now
 		appendEvent(day, "", "parking_processed", day.Parking[i].Content, now, nil)
 		return nil
+	}
+	return fmt.Errorf("%w: parking item not found", ErrInvalidAction)
+}
+
+// DeleteParking removes a note from the parking list.
+func DeleteParking(day *Day, id string) error {
+	for i := range day.Parking {
+		if day.Parking[i].ID == id {
+			day.Parking = append(day.Parking[:i], day.Parking[i+1:]...)
+			return nil
+		}
 	}
 	return fmt.Errorf("%w: parking item not found", ErrInvalidAction)
 }

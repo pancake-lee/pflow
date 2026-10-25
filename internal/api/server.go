@@ -153,9 +153,11 @@ func NewServerWithOptions(staticFS fs.FS, sessionMgr *session.Manager, options S
 	s.HandleFunc("PUT /api/v1/schedule-templates", s.handlePutTemplate)
 	s.HandleFunc("DELETE /api/v1/schedule-templates", s.handleDeleteTemplate)
 	s.HandleFunc("POST /api/v1/schedules/action", s.handleScheduleAction)
+	s.HandleFunc("GET /api/v1/schedules/review", s.handleGetScheduleReview)
 	s.HandleFunc("PUT /api/v1/schedules/review", s.handlePutScheduleReview)
 	s.HandleFunc("POST /api/v1/schedules/parking", s.handlePostScheduleParking)
 	s.HandleFunc("PATCH /api/v1/schedules/parking", s.handlePatchScheduleParking)
+	s.HandleFunc("DELETE /api/v1/schedules/parking", s.handleDeleteScheduleParking)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -175,9 +177,19 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	if date == "" {
 		date = now.Format("2006-01-02")
-		previousDate := now.AddDate(0, 0, -1).Format("2006-01-02")
-		if previousDay, exists := f.Days[previousDate]; exists && schedule.HasNextDayPending(previousDay, date) {
-			date = previousDate
+		var latestLeave *schedule.Event
+		for dayDate, candidate := range f.Days {
+			leave := schedule.ActiveLeave(candidate.Events)
+			if leave != nil && (latestLeave == nil || leave.Time.After(latestLeave.Time)) {
+				date = dayDate
+				latestLeave = leave
+			}
+		}
+		if latestLeave == nil {
+			previousDate := now.AddDate(0, 0, -1).Format("2006-01-02")
+			if previousDay, exists := f.Days[previousDate]; exists && schedule.HasNextDayPending(previousDay, date) {
+				date = previousDate
+			}
 		}
 	}
 	day, ok := f.Days[date]
@@ -228,6 +240,28 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events), "review": schedule.SummarizeReview(day), "active_leave": schedule.ActiveLeave(day.Events)})
 }
 
+func (s *Server) handleGetScheduleReview(w http.ResponseWriter, r *http.Request) {
+	date := r.URL.Query().Get("date")
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid date"})
+		return
+	}
+	f, err := s.scheduleMgr.Load()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	day := f.Days[date]
+	note, exists := f.ReviewNotes[date]
+	if !exists {
+		note = day.ReviewNote
+	}
+	writeJSON(w, 200, map[string]any{
+		"date": date, "review": schedule.SummarizeReview(day),
+		"events": day.Events, "items": day.Items, "note": note,
+	})
+}
+
 func (s *Server) handlePutScheduleReview(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Date string `json:"date"`
@@ -241,20 +275,24 @@ func (s *Server) handlePutScheduleReview(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 400, map[string]string{"error": "review note is too long"})
 		return
 	}
+	if _, err := time.Parse("2006-01-02", req.Date); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid date"})
+		return
+	}
 	updated, err := s.scheduleMgr.Update(func(file *schedule.File) error {
-		day, exists := file.Days[req.Date]
-		if !exists {
-			return fmt.Errorf("schedule not found: %w", errScheduleNotFound)
+		if file.ReviewNotes == nil {
+			file.ReviewNotes = make(map[string]string)
 		}
-		day.ReviewNote = strings.TrimSpace(req.Note)
-		file.Days[req.Date] = day
+		file.ReviewNotes[req.Date] = strings.TrimSpace(req.Note)
 		return nil
 	})
 	if err != nil {
 		writeScheduleError(w, err)
 		return
 	}
-	writeJSON(w, 200, updated.Days[req.Date])
+	writeJSON(w, 200, map[string]string{
+		"date": req.Date, "note": updated.ReviewNotes[req.Date],
+	})
 }
 
 func (s *Server) handlePostScheduleParking(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +338,33 @@ func (s *Server) handlePatchScheduleParking(w http.ResponseWriter, r *http.Reque
 		}
 		if processErr := schedule.ProcessParking(&day, req.ID, time.Now()); processErr != nil {
 			return processErr
+		}
+		file.Days[req.Date] = day
+		return nil
+	})
+	if err != nil {
+		writeScheduleError(w, err)
+		return
+	}
+	writeJSON(w, 200, updated.Days[req.Date])
+}
+
+func (s *Server) handleDeleteScheduleParking(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Date string `json:"date"`
+		ID   string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err := s.scheduleMgr.Update(func(file *schedule.File) error {
+		day, exists := file.Days[req.Date]
+		if !exists {
+			return fmt.Errorf("schedule not found: %w", errScheduleNotFound)
+		}
+		if deleteErr := schedule.DeleteParking(&day, req.ID); deleteErr != nil {
+			return deleteErr
 		}
 		file.Days[req.Date] = day
 		return nil

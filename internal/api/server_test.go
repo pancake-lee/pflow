@@ -125,26 +125,118 @@ func TestScheduleActionPersistsOnceAndRejectsDistantCompletion(t *testing.T) {
 	}
 }
 
-func TestScheduleReviewNotePersists(t *testing.T) {
+func TestActiveLeaveRemainsVisibleAfterScheduleDateChanges(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	today := time.Now().Format("2006-01-02")
+	past := time.Now().AddDate(0, 0, -2).Format("2006-01-02")
+	file := schedule.File{Days: map[string]schedule.Day{
+		past: {
+			Date: past, CurrentID: "a",
+			Items:  []schedule.Item{{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30}},
+			Events: []schedule.Event{{ID: "leave-1", TaskID: "a", Action: "leave", Note: "返回线索", Time: time.Now().AddDate(0, 0, -2)}},
+		},
+		today: {Date: today, Items: []schedule.Item{}},
+	}}
+	if err := server.scheduleMgr.Save(file); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil))
+	var got struct {
+		Day         schedule.Day    `json:"day"`
+		ActiveLeave *schedule.Event `json:"active_leave"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil ||
+		response.Code != http.StatusOK || got.Day.Date != past || got.ActiveLeave == nil {
+		t.Fatalf("active leave=%s err=%v", response.Body.String(), err)
+	}
+	response = httptest.NewRecorder()
+	requestBody := fmt.Sprintf(`{"date":"%s","id":"a","action":"return"}`, past)
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodPost, "/api/v1/schedules/action", bytes.NewBufferString(requestBody),
+	))
+	if response.Code != http.StatusOK {
+		t.Fatalf("return status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil))
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil ||
+		got.Day.Date != today || got.ActiveLeave != nil {
+		t.Fatalf("after return=%s err=%v", response.Body.String(), err)
+	}
+}
+
+func TestScheduleReviewNotePersistsByDate(t *testing.T) {
 	server := NewServer(nil, nil)
 	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
 	day := schedule.Day{Date: "2026-10-25", Items: []schedule.Item{{
 		ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30,
-	}}}
+	}}, ReviewNote: "旧备注"}
 	if err := server.scheduleMgr.Save(schedule.File{Days: map[string]schedule.Day{day.Date: day}}); err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodGet, "/api/v1/schedules/review?date=2026-10-25", nil,
+	))
+	var review struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &review); err != nil || review.Note != "旧备注" {
+		t.Fatalf("legacy review=%s err=%v", response.Body.String(), err)
+	}
+
+	// A date without a schedule can still hold its own review note.
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
 		http.MethodPut, "/api/v1/schedules/review",
-		bytes.NewBufferString(`{"date":"2026-10-25","note":"  明天提前开始  "}`),
+		bytes.NewBufferString(`{"date":"2026-10-24","note":"  明天提前开始  "}`),
 	))
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	loaded, err := server.scheduleMgr.Load()
-	if err != nil || loaded.Days[day.Date].ReviewNote != "明天提前开始" {
-		t.Fatalf("loaded=%+v err=%v", loaded.Days[day.Date], err)
+	if err != nil || loaded.ReviewNotes["2026-10-24"] != "明天提前开始" || loaded.Days[day.Date].ReviewNote != "旧备注" {
+		t.Fatalf("loaded=%+v err=%v", loaded, err)
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodGet, "/api/v1/schedules/review?date=2026-10-24", nil,
+	))
+	var saved struct {
+		Note   string                 `json:"note"`
+		Review schedule.ReviewSummary `json:"review"`
+		Events []schedule.Event       `json:"events"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil ||
+		response.Code != http.StatusOK || saved.Note != "明天提前开始" ||
+		saved.Review.Score != 0 || len(saved.Events) != 0 {
+		t.Fatalf("saved review=%s err=%v", response.Body.String(), err)
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodPut, "/api/v1/schedules/review",
+		bytes.NewBufferString(`{"date":"2026-10-25","note":"新备注"}`),
+	))
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodGet, "/api/v1/schedules/review?date=2026-10-25", nil,
+	))
+	if err := json.Unmarshal(response.Body.Bytes(), &review); err != nil || review.Note != "新备注" {
+		t.Fatalf("updated review=%s err=%v", response.Body.String(), err)
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodPut, "/api/v1/schedules/review",
+		bytes.NewBufferString(`{"date":"2026-10-25","note":""}`),
+	))
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodGet, "/api/v1/schedules/review?date=2026-10-25", nil,
+	))
+	if err := json.Unmarshal(response.Body.Bytes(), &review); err != nil || review.Note != "" {
+		t.Fatalf("cleared review=%s err=%v", response.Body.String(), err)
 	}
 }
 
@@ -169,6 +261,31 @@ func TestScheduleParkingPersistsWithoutAdvancing(t *testing.T) {
 	if err != nil || loaded.Days[day.Date].CurrentID != "a" ||
 		len(loaded.Days[day.Date].Parking) != 1 {
 		t.Fatalf("loaded=%+v err=%v", loaded.Days[day.Date], err)
+	}
+	id := loaded.Days[day.Date].Parking[0].ID
+	body := fmt.Sprintf(`{"date":"%s","id":"%s"}`, day.Date, id)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodPatch, "/api/v1/schedules/parking", bytes.NewBufferString(body),
+	))
+	if response.Code != http.StatusOK {
+		t.Fatalf("process status=%d body=%s", response.Code, response.Body.String())
+	}
+	loaded, err = server.scheduleMgr.Load()
+	if err != nil || loaded.Days[day.Date].Parking[0].ProcessedAt.IsZero() {
+		t.Fatalf("processed=%+v err=%v", loaded.Days[day.Date], err)
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodDelete, "/api/v1/schedules/parking", bytes.NewBufferString(body),
+	))
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
+	}
+	loaded, err = server.scheduleMgr.Load()
+	if err != nil || loaded.Days[day.Date].CurrentID != "a" || len(loaded.Days[day.Date].Parking) != 0 ||
+		len(loaded.Days[day.Date].Events) != 2 {
+		t.Fatalf("deleted=%+v err=%v", loaded.Days[day.Date], err)
 	}
 }
 
