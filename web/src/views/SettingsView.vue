@@ -207,7 +207,7 @@ onMounted(load)
         <p>项目调整即时保存，不影响其他未保存设置。</p>
         <p v-if="roots.length === 0">尚未标记项目，可在 Dashboard 卡片中标记后在此管理。</p>
         <div class="add-project"><NInput v-model:value="newPath" placeholder="/path/to/project" /><NButton @click="addRoot">添加项目</NButton></div>
-        <div v-for="root in roots" :key="root.path" class="project"><code>{{ root.path }}</code><span>{{ root.priority }}{{ root.slot ? ` · ${root.slot}` : '' }}</span><NButton size="tiny" @click="setSlot(root.path, 'primary')">主线</NButton><NButton size="tiny" @click="setSlot(root.path, 'secondary_1')">支线 1</NButton><NButton size="tiny" @click="setSlot(root.path, 'secondary_2')">支线 2</NButton><NButton size="small" type="error" secondary @click="removeRoot(root.path)">移除</NButton></div>
+        <div v-for="root in roots" :key="root.path" class="project"><code>{{ root.path }}</code><span>{{ root.priority }}{{ root.slot ? ` · ${root.slot}` : '' }}</span><NButton size="tiny" @click="setSlot(root.path, 'primary')">主线</NButton><NButton size="tiny" @click="setSlot(root.path, 'secondary_1')">支线</NButton><NButton size="small" type="error" secondary @click="removeRoot(root.path)">移除</NButton></div>
       </NTabPane>
     </NTabs>
     <footer v-if="value"><span>{{ dirty ? '有未保存修改' : '已保存' }}</span><NButton @click="requestClose">关闭</NButton><NButton type="primary" :loading="saving" :disabled="!!validationError" @click="save">保存设置</NButton></footer>

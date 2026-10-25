@@ -392,12 +392,9 @@ const primaryGroup = computed(() => {
   if (!path) return null
   return groupedSessions.value.find(g => g.fullPath === path) ?? null
 })
-const secondaryGroups = computed(() => {
-  const slot1Path = slotsMap.value['secondary_1'] ?? null
-  const slot2Path = slotsMap.value['secondary_2'] ?? null
-  const findGroup = (p: string | null): SessionGroup | null =>
-    p ? groupedSessions.value.find(g => g.fullPath === p) ?? null : null
-  return [findGroup(slot1Path), findGroup(slot2Path)]
+const secondaryGroup = computed(() => {
+  const path = slotsMap.value['secondary_1']
+  return path ? groupedSessions.value.find(g => g.fullPath === path) ?? null : null
 })
 const normalGroups = computed(() =>
   groupedSessions.value.filter(g => g.priority === 'normal'),
@@ -905,31 +902,7 @@ function rowProps(row: DashboardEntry) {
         <div v-if="loading && !data" class="refresh-hint">正在获取数据…</div>
           <div v-if="groupedSessions.length > 0" class="groups-container">
 
-            <!-- ⭐ 主线项目 — full-width card, always visible (header now inside PrimaryCard) -->
-            <div class="zone-section zone-section--primary">
-              <PrimaryCard
-                :group="primaryGroup"
-                :main-session="primaryMainSession"
-                :starred-session-id="primaryGroup ? getStarredSessionId(primaryGroup.key) : null"
-                :disabled="projectRootLoading"
-                :highlight="primaryGroup ? (getGroupScore(primaryGroup.key)?.highlight ?? 0) : 0"
-                :fog-pct="primaryGroup ? (getGroupScore(primaryGroup.key)?.fog_pct ?? 0) : 0"
-                :project-options="projectSelectOptions"
-                :focus-active="focusActive"
-                :focus-focused-project="focusFocusedProject"
-                :focus-loading="focusLoading"
-                :focus-countdown="focusCountdown"
-                :compact-sessions="compactSessions"
-                @star-session="(sid: string) => primaryGroup && handleStarSession(primaryGroup.key, sid)"
-                @row-click="openDetail"
-                @open-terminal="handleOpenTerminalFromCard"
-                @select-project="handleSelectPrimary"
-                @focus-extend="(key: string) => focusExtend(key)"
-                @focus-stop="focusStop"
-              />
-            </div>
-
-            <!-- 🎯 今日目标 — standalone goal sentence between primary and suggest -->
+            <!-- 🎯 今日目标 — standalone goal sentence -->
             <div v-if="todayGoal" class="zone-section">
               <div class="goal-card">
                 <div class="goal-card-content">
@@ -955,28 +928,49 @@ function rowProps(row: DashboardEntry) {
               <KnowledgeAnchor :suggestions="suggestions" :custom-tips="data?.custom_knowledge_tips ?? []" />
             </div>
 
-            <!-- 🚩 支线项目 — 2 cards side by side, each with own title -->
+            <!-- ⭐ 主线项目 — full-width card, always visible (header now inside PrimaryCard) -->
+            <div class="zone-section zone-section--primary">
+              <PrimaryCard
+                :group="primaryGroup"
+                :main-session="primaryMainSession"
+                :starred-session-id="primaryGroup ? getStarredSessionId(primaryGroup.key) : null"
+                :disabled="projectRootLoading"
+                :highlight="primaryGroup ? (getGroupScore(primaryGroup.key)?.highlight ?? 0) : 0"
+                :fog-pct="primaryGroup ? (getGroupScore(primaryGroup.key)?.fog_pct ?? 0) : 0"
+                :project-options="projectSelectOptions"
+                :focus-active="focusActive"
+                :focus-focused-project="focusFocusedProject"
+                :focus-loading="focusLoading"
+                :focus-countdown="focusCountdown"
+                :compact-sessions="compactSessions"
+                @star-session="(sid: string) => primaryGroup && handleStarSession(primaryGroup.key, sid)"
+                @row-click="openDetail"
+                @open-terminal="handleOpenTerminalFromCard"
+                @select-project="handleSelectPrimary"
+                @focus-extend="(key: string) => focusExtend(key)"
+                @focus-stop="focusStop"
+              />
+            </div>
+
+            <!-- 🚩 支线项目 -->
             <div class="zone-section">
               <div class="secondary-grid">
                 <SecondaryCard
-                  v-for="(group, idx) in secondaryGroups"
-                  :key="group ? group.key : 'empty-secondary-' + idx"
-                  :group="group"
+                  :group="secondaryGroup"
                   :project-options="projectSelectOptions"
-                  :main-session="group ? getMainSession(group) : null"
-                  :starred-session-id="group ? getStarredSessionId(group.key) : null"
+                  :main-session="secondaryGroup ? getMainSession(secondaryGroup) : null"
+                  :starred-session-id="secondaryGroup ? getStarredSessionId(secondaryGroup.key) : null"
                   :disabled="projectRootLoading"
-                  :index="idx"
-                  :highlight="group ? (getGroupScore(group.key)?.highlight ?? 0) : 0"
-                  :fog-pct="group ? (getGroupScore(group.key)?.fog_pct ?? 0) : 0"
+                  :highlight="secondaryGroup ? (getGroupScore(secondaryGroup.key)?.highlight ?? 0) : 0"
+                  :fog-pct="secondaryGroup ? (getGroupScore(secondaryGroup.key)?.fog_pct ?? 0) : 0"
                   :focus-active="focusActive"
                   :focus-focused-project="focusFocusedProject"
                   :focus-minutes="focusMinutes"
                   :focus-loading="focusLoading"
                   :focus-countdown="focusCountdown"
                   :compact-sessions="compactSessions"
-                  @select-project="(path: string) => handleSelectSecondary(path, idx === 0 ? 'secondary_1' : 'secondary_2')"
-                  @star-session="(sid: string) => group && handleStarSession(group.key, sid)"
+                  @select-project="(path: string) => handleSelectSecondary(path, 'secondary_1')"
+                  @star-session="(sid: string) => secondaryGroup && handleStarSession(secondaryGroup.key, sid)"
                   @row-click="openDetail"
                   @open-terminal="handleOpenTerminalFromCard"
                   @focus-extend="(key: string) => focusExtend(key)"
@@ -1035,7 +1029,7 @@ function rowProps(row: DashboardEntry) {
 
             <!-- All-unmatched hint -->
             <div
-              v-if="!primaryGroup && secondaryGroups.every(g => !g) && normalGroups.length === 0 && unmatchedGroups.length > 0"
+              v-if="!primaryGroup && !secondaryGroup && normalGroups.length === 0 && unmatchedGroups.length > 0"
               class="zone-hint"
             >
               <p>💡 Use the dropdowns in the ⭐ primary / 🚩 secondary cards above to assign projects to priority slots. Or check the ☐ box next to a directory below to mark it as a project root first.</p>
@@ -1420,8 +1414,7 @@ function rowProps(row: DashboardEntry) {
 /* Secondary grid */
 .secondary-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* Empty */

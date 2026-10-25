@@ -19,7 +19,7 @@ func (m *Manager) SetSlot(path string, slot SlotID) error {
 
 	// Validate slot
 	if !isValidSlot(slot) {
-		return fmt.Errorf("invalid slot %q: must be primary, secondary_1, or secondary_2", slot)
+		return fmt.Errorf("invalid slot %q: must be primary or secondary_1", slot)
 	}
 
 	rf, err := m.Load()
@@ -141,11 +141,7 @@ func (m *Manager) SetPriority(path string, priority Priority) error {
 		// Route to SetSlot
 		return m.SetSlot(path, SlotPrimary)
 	case PrioritySecondary:
-		// Route to SetSlot — use first available secondary slot
-		if _, occupied := rf.Slots[SlotSecondary1]; !occupied {
-			return m.SetSlot(path, SlotSecondary1)
-		}
-		return m.SetSlot(path, SlotSecondary2)
+		return m.SetSlot(path, SlotSecondary1)
 	case PriorityNormal:
 		// Demote: clear any slot this path occupies
 		for slotID, slotPath := range rf.Slots {
@@ -323,7 +319,7 @@ func slotToPriority(slot SlotID) Priority {
 	switch slot {
 	case SlotPrimary:
 		return PriorityPrimary
-	case SlotSecondary1, SlotSecondary2:
+	case SlotSecondary1:
 		return PrioritySecondary
 	default:
 		return PriorityNormal

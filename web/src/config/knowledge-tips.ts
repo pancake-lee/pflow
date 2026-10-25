@@ -59,7 +59,7 @@ export const ALL_TIPS: KnowledgeTipData[] = [
     id: 'kt_primary_secondary_strategy',
     title: '为何强制设定 1 个主线',
     theory: '工作记忆容量有限（约 4 个组块），超出容量的多线程管理本身就是认知负担。',
-    design: '强制设定 1 主线 + 最多 2 支线，把「排序」决策前置化，避免工作过程中反复纠结优先级。',
+    design: '设定 1 主线 + 1 支线，把「排序」决策前置化，减少工作过程中反复纠结优先级。',
     related_scenarios: ['scenario_010', 'scenario_011', 'scenario_018'],
   },
   {

@@ -59,7 +59,7 @@ type DashboardEntry struct {
 type ProjectRootJSON struct {
 	Path     string `json:"path"`
 	Priority string `json:"priority"`
-	Slot     string `json:"slot,omitempty"` // "primary", "secondary_1", "secondary_2", or ""
+	Slot     string `json:"slot,omitempty"` // "primary", "secondary_1", or ""
 }
 
 // SuggestionJSON is the JSON representation of a suggest.Suggestion.
@@ -1086,18 +1086,7 @@ func (s *Server) handlePutProjectRoot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case project.PrioritySecondary:
-		// Legacy: "secondary" with no slot specified.
-		// Use first empty secondary slot, or secondary_2 (replacing it) as fallback.
-		rf, loadErr := s.projectMgr.Load()
-		if loadErr != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": loadErr.Error()})
-			return
-		}
-		slot := project.SlotSecondary1
-		if _, occupied := rf.Slots[project.SlotSecondary1]; occupied {
-			slot = project.SlotSecondary2
-		}
-		if err := s.projectMgr.SetSlot(req.Path, slot); err != nil {
+		if err := s.projectMgr.SetSlot(req.Path, project.SlotSecondary1); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1135,7 +1124,7 @@ func (s *Server) handleDeleteProjectRoot(w http.ResponseWriter, r *http.Request)
 
 type putProjectSlotReq struct {
 	Path string `json:"path"`
-	Slot string `json:"slot"` // "primary", "secondary_1", "secondary_2"
+	Slot string `json:"slot"` // "primary", "secondary_1"
 }
 
 // handlePutProjectSlot handles PUT /api/v1/project-roots/slot.

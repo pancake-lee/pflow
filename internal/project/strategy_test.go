@@ -144,76 +144,23 @@ func TestSetSlot_ReplaceExistingSlot(t *testing.T) {
 	}
 }
 
-func TestSetSlot_TwoSecondarySlots(t *testing.T) {
+func TestSetSlot_RejectsLegacySecondSecondarySlot(t *testing.T) {
 	m := newTestManager(t)
-
-	// Assign projectA to secondary_1, projectB to secondary_2
 	if err := m.SetSlot("/home/user/code/projectA", SlotSecondary1); err != nil {
 		t.Fatalf("SetSlot secondary_1 failed: %v", err)
 	}
-	if err := m.SetSlot("/home/user/code/projectB", SlotSecondary2); err != nil {
-		t.Fatalf("SetSlot secondary_2 failed: %v", err)
-	}
-
-	rf, err := m.Load()
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	if rf.Slots[SlotSecondary1] != "/home/user/code/projectA" {
-		t.Errorf("secondary_1 = %q, want projectA", rf.Slots[SlotSecondary1])
-	}
-	if rf.Slots[SlotSecondary2] != "/home/user/code/projectB" {
-		t.Errorf("secondary_2 = %q, want projectB", rf.Slots[SlotSecondary2])
-	}
-
-	// Replace secondary_2 with projectC
-	if err := m.SetSlot("/home/user/code/projectC", SlotSecondary2); err != nil {
-		t.Fatalf("SetSlot replace secondary_2 failed: %v", err)
-	}
-
-	rf, err = m.Load()
-	if err != nil {
-		t.Fatalf("Load after replace failed: %v", err)
-	}
-
-	// secondary_1 should be unchanged
-	if rf.Slots[SlotSecondary1] != "/home/user/code/projectA" {
-		t.Errorf("secondary_1 = %q, want projectA (unchanged)", rf.Slots[SlotSecondary1])
-	}
-	// secondary_2 should now be projectC
-	if rf.Slots[SlotSecondary2] != "/home/user/code/projectC" {
-		t.Errorf("secondary_2 = %q, want projectC", rf.Slots[SlotSecondary2])
-	}
-	// projectB should be demoted to normal
-	foundB := false
-	for _, r := range rf.Roots {
-		if r.Path == "/home/user/code/projectB" {
-			foundB = true
-			if r.Priority != PriorityNormal {
-				t.Errorf("projectB priority = %q, want normal (demoted)", r.Priority)
-			}
-		}
-	}
-	if !foundB {
-		t.Error("projectB not found after demotion")
+	if err := m.SetSlot("/home/user/code/projectB", SlotSecondary2); err == nil {
+		t.Fatal("legacy second secondary slot accepted")
 	}
 }
 
 func TestSetSlot_CrossSlotMove(t *testing.T) {
 	m := newTestManager(t)
-
-	// Assign projectA to secondary_1, projectB to secondary_2
 	if err := m.SetSlot("/home/user/code/projectA", SlotSecondary1); err != nil {
 		t.Fatalf("SetSlot secondary_1 failed: %v", err)
 	}
-	if err := m.SetSlot("/home/user/code/projectB", SlotSecondary2); err != nil {
-		t.Fatalf("SetSlot secondary_2 failed: %v", err)
-	}
-
-	// Move projectA from secondary_1 to secondary_2
-	if err := m.SetSlot("/home/user/code/projectA", SlotSecondary2); err != nil {
-		t.Fatalf("SetSlot move to secondary_2 failed: %v", err)
+	if err := m.SetSlot("/home/user/code/projectA", SlotPrimary); err != nil {
+		t.Fatalf("SetSlot primary failed: %v", err)
 	}
 
 	rf, err := m.Load()
@@ -221,13 +168,11 @@ func TestSetSlot_CrossSlotMove(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// secondary_1 should be empty (projectB demoted when projectA moved to secondary_2)
 	if _, ok := rf.Slots[SlotSecondary1]; ok {
 		t.Errorf("secondary_1 should be empty, got %q", rf.Slots[SlotSecondary1])
 	}
-	// secondary_2 should be projectA
-	if rf.Slots[SlotSecondary2] != "/home/user/code/projectA" {
-		t.Errorf("secondary_2 = %q, want projectA", rf.Slots[SlotSecondary2])
+	if rf.Slots[SlotPrimary] != "/home/user/code/projectA" {
+		t.Errorf("primary = %q, want projectA", rf.Slots[SlotPrimary])
 	}
 }
 
@@ -352,7 +297,7 @@ func TestSetPriority_LegacySecondaryRouting(t *testing.T) {
 		t.Errorf("secondary_1 = %q, want /home/user/code/projectA", rf.Slots[SlotSecondary1])
 	}
 
-	// Second legacy call should fill secondary_2
+	// A second secondary assignment replaces the sole secondary slot.
 	err = m.SetPriority("/home/user/code/projectB", PrioritySecondary)
 	if err != nil {
 		t.Fatalf("SetPriority second secondary failed: %v", err)
@@ -363,11 +308,11 @@ func TestSetPriority_LegacySecondaryRouting(t *testing.T) {
 		t.Fatalf("Load after second call failed: %v", err)
 	}
 
-	if rf.Slots[SlotSecondary2] != "/home/user/code/projectB" {
-		t.Errorf("secondary_2 = %q, want /home/user/code/projectB", rf.Slots[SlotSecondary2])
+	if rf.Slots[SlotSecondary1] != "/home/user/code/projectB" {
+		t.Errorf("secondary_1 = %q, want /home/user/code/projectB", rf.Slots[SlotSecondary1])
 	}
 
-	// Third legacy call: both slots occupied, falls through to secondary_2 (replaces it)
+	// A third assignment replaces the second without deleting prior roots.
 	err = m.SetPriority("/home/user/code/projectC", PrioritySecondary)
 	if err != nil {
 		t.Fatalf("SetPriority third secondary failed: %v", err)
@@ -378,13 +323,15 @@ func TestSetPriority_LegacySecondaryRouting(t *testing.T) {
 		t.Fatalf("Load after third call failed: %v", err)
 	}
 
-	// secondary_1 should be unchanged (still projectA)
-	if rf.Slots[SlotSecondary1] != "/home/user/code/projectA" {
-		t.Errorf("secondary_1 = %q, want /home/user/code/projectA (unchanged)", rf.Slots[SlotSecondary1])
+	if rf.Slots[SlotSecondary1] != "/home/user/code/projectC" {
+		t.Errorf("secondary_1 = %q, want /home/user/code/projectC", rf.Slots[SlotSecondary1])
 	}
-	// secondary_2 replaced with projectC
-	if rf.Slots[SlotSecondary2] != "/home/user/code/projectC" {
-		t.Errorf("secondary_2 = %q, want /home/user/code/projectC", rf.Slots[SlotSecondary2])
+	for _, root := range rf.Roots {
+		if root.Path == "/home/user/code/projectA" || root.Path == "/home/user/code/projectB" {
+			if root.Priority != PriorityNormal || root.Slot != "" {
+				t.Errorf("previous secondary project was not demoted: %+v", root)
+			}
+		}
 	}
 }
 
@@ -526,14 +473,14 @@ func TestMigrateV1ToV2_OnlyOneSecondary(t *testing.T) {
 func TestMigrateV1ToV2_EmptyFile(t *testing.T) {
 	m := newTestManager(t)
 
-	// Empty file (no file exists) should return empty v2 structure
+	// Empty file (no file exists) should return the current structure.
 	rf, err := m.Load()
 	if err != nil {
 		t.Fatalf("Load empty file failed: %v", err)
 	}
 
-	if rf.Version != 2 {
-		t.Errorf("version = %d, want 2", rf.Version)
+	if rf.Version != 3 {
+		t.Errorf("version = %d, want 3", rf.Version)
 	}
 	if len(rf.Slots) != 0 {
 		t.Errorf("slots should be empty, got %d entries", len(rf.Slots))
@@ -560,8 +507,8 @@ func TestLoad_MigrateV1File(t *testing.T) {
 		t.Fatalf("Load v1 file failed: %v", err)
 	}
 
-	if rf.Version != 2 {
-		t.Errorf("version = %d, want 2", rf.Version)
+	if rf.Version != 3 {
+		t.Errorf("version = %d, want 3", rf.Version)
 	}
 	if rf.Slots[SlotPrimary] != "/a" {
 		t.Errorf("primary = %q, want /a", rf.Slots[SlotPrimary])
@@ -569,7 +516,38 @@ func TestLoad_MigrateV1File(t *testing.T) {
 	if rf.Slots[SlotSecondary1] != "/b" {
 		t.Errorf("secondary_1 = %q, want /b", rf.Slots[SlotSecondary1])
 	}
-	if rf.Slots[SlotSecondary2] != "/c" {
-		t.Errorf("secondary_2 = %q, want /c", rf.Slots[SlotSecondary2])
+	if _, ok := rf.Slots[SlotSecondary2]; ok {
+		t.Errorf("secondary_2 survived migration: %+v", rf.Slots)
+	}
+	for _, root := range rf.Roots {
+		if root.Path == "/c" && (root.Priority != PriorityNormal || root.Slot != "") {
+			t.Errorf("former second secondary was not preserved as normal: %+v", root)
+		}
+	}
+}
+
+func TestLoad_MigrateV2SecondSecondaryToNormal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "project_roots.json")
+	legacy := `{"version":2,"slots":{"secondary_1":"/first","secondary_2":"/second"},"roots":[{"path":"/first","priority":"secondary","slot":"secondary_1"},{"path":"/second","priority":"secondary","slot":"secondary_2"}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{filePath: path}
+	rf, err := m.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rf.Version != 3 || rf.Slots[SlotSecondary1] != "/first" || len(rf.Roots) != 2 {
+		t.Fatalf("migrated roots=%+v", rf)
+	}
+	if _, ok := rf.Slots[SlotSecondary2]; ok || rf.Roots[1].Priority != PriorityNormal || rf.Roots[1].Slot != "" {
+		t.Fatalf("second secondary was not demoted: %+v", rf)
+	}
+	if err := m.Save(rf); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := m.Load()
+	if err != nil || reloaded.Roots[1].Priority != PriorityNormal {
+		t.Fatalf("migrated state not durable: %+v %v", reloaded, err)
 	}
 }

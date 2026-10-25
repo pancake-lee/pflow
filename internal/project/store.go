@@ -28,12 +28,12 @@ type SlotID string
 const (
 	SlotPrimary    SlotID = "primary"
 	SlotSecondary1 SlotID = "secondary_1"
-	SlotSecondary2 SlotID = "secondary_2"
+	SlotSecondary2 SlotID = "secondary_2" // legacy slot, retained only for migration
 )
 
 // ValidSlotIDs returns all valid slot identifiers.
 func ValidSlotIDs() []SlotID {
-	return []SlotID{SlotPrimary, SlotSecondary1, SlotSecondary2}
+	return []SlotID{SlotPrimary, SlotSecondary1}
 }
 
 // Slots maps slot identifiers to project paths.
@@ -77,7 +77,7 @@ func pflowDir() string {
 
 // Load reads the project roots from disk.
 // Returns an empty RootsFile if the file doesn't exist.
-// Automatically migrates v1 files to v2 (slot-based) format.
+// Automatically migrates legacy files to the single-secondary slot format.
 func (m *Manager) Load() (*RootsFile, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -85,7 +85,7 @@ func (m *Manager) Load() (*RootsFile, error) {
 	data, err := os.ReadFile(m.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &RootsFile{Version: 2, Slots: Slots{}, Roots: []Root{}}, nil
+			return &RootsFile{Version: 3, Slots: Slots{}, Roots: []Root{}}, nil
 		}
 		return nil, fmt.Errorf("read project roots: %w", err)
 	}
@@ -99,6 +99,7 @@ func (m *Manager) Load() (*RootsFile, error) {
 	if rf.Version < 2 {
 		rf = migrateV1ToV2(rf)
 	}
+	migrateV2ToV3(&rf)
 
 	if rf.Slots == nil {
 		rf.Slots = Slots{}
@@ -107,6 +108,17 @@ func (m *Manager) Load() (*RootsFile, error) {
 		rf.Roots = []Root{}
 	}
 	return &rf, nil
+}
+
+func migrateV2ToV3(rf *RootsFile) {
+	delete(rf.Slots, SlotSecondary2)
+	for i := range rf.Roots {
+		if rf.Roots[i].Slot == SlotSecondary2 {
+			rf.Roots[i].Slot = ""
+			rf.Roots[i].Priority = PriorityNormal
+		}
+	}
+	rf.Version = 3
 }
 
 // migrateV1ToV2 converts a v1 flat list to v2 slot-based format.
@@ -142,8 +154,9 @@ func (m *Manager) Save(rf *RootsFile) error {
 	defer m.mu.Unlock()
 
 	if rf.Version < 2 {
-		rf.Version = 2
+		*rf = migrateV1ToV2(*rf)
 	}
+	migrateV2ToV3(rf)
 	if rf.Slots == nil {
 		rf.Slots = Slots{}
 	}

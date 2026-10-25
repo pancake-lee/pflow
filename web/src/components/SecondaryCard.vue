@@ -39,7 +39,6 @@ const props = defineProps<{
   mainSession: DashboardEntry | null
   starredSessionId: string | null
   disabled: boolean
-  index: number
   highlight?: number
   fogPct?: number
   focusActive?: boolean
@@ -238,8 +237,7 @@ function rowProps(row: DashboardEntry) {
     <div class="card-header">
       <div class="card-header-content">
         <div class="project-summary">
-          <!-- Slot title: 🚩 支线项目1 / 🚩 支线项目2 -->
-          <span class="slot-title">🚩 支线项目{{ index + 1 }}</span>
+          <span class="slot-title">🚩 支线项目</span>
 
           <!-- Project dropdown (replaces text, shows selected project) -->
           <NSelect
