@@ -201,6 +201,9 @@ func TestExecutionEventsAndRuntimeOrder(t *testing.T) {
 	if len(day.Events) != count || Score(day.Events) != 14 {
 		t.Fatal("duplicate action changed events or score")
 	}
+	if err := ApplyAction(&day, "a", "completed", "", now); !errors.Is(err, ErrInvalidAction) {
+		t.Fatalf("conflicting completion after skip: %v", err)
+	}
 }
 
 func TestActionRejectsOutOfOrderCompletion(t *testing.T) {

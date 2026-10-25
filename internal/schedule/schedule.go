@@ -434,7 +434,7 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		return nil
 	}
 	if item.Status != "" {
-		if action == "completed" || action == "skipped" {
+		if action == item.Status {
 			return nil
 		}
 		return fmt.Errorf("%w: item already handled", ErrInvalidAction)
