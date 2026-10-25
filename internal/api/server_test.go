@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/schedule"
 	"github.com/pancake-lee/pflow/internal/settings"
 )
@@ -47,6 +48,29 @@ func TestSettingsAPIExposesDefaultsAndSavedRevision(t *testing.T) {
 	}
 	if response.Code != http.StatusOK || saved.DashboardRevision == "" || saved.Dashboard.Window != "7d" {
 		t.Fatalf("save=%s", response.Body.String())
+	}
+}
+
+func TestDashboardFirstRequestUsesOnlyMatchingCachedResult(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.settingsMgr = settings.NewManagerAt(filepath.Join(t.TempDir(), "settings.json"))
+	server.dashboardCacheKey = dashboardCacheKey{window: 24 * time.Hour, maxActive: 1, maxInactive: 1, source: config.DefaultHermesSourceFilter}
+	server.dashboardCache = &DashboardResponse{Now: time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC), Window: "1d"}
+
+	hit := httptest.NewRecorder()
+	server.ServeHTTP(hit, httptest.NewRequest(http.MethodGet, "/api/v1/dashboard?first=1&window=1d&max_active=1&max_inactive=1", nil))
+	if hit.Code != http.StatusOK || hit.Header().Get("X-Pflow-Cache") != "hit" {
+		t.Fatalf("cache hit: status=%d header=%q body=%s", hit.Code, hit.Header().Get("X-Pflow-Cache"), hit.Body.String())
+	}
+	var cached DashboardResponse
+	if err := json.Unmarshal(hit.Body.Bytes(), &cached); err != nil || !cached.Now.Equal(server.dashboardCache.Now) {
+		t.Fatalf("cached response=%+v err=%v", cached, err)
+	}
+
+	miss := httptest.NewRecorder()
+	server.ServeHTTP(miss, httptest.NewRequest(http.MethodGet, "/api/v1/dashboard?first=1&window=7d&max_active=1&max_inactive=1", nil))
+	if miss.Header().Get("X-Pflow-Cache") == "hit" {
+		t.Fatal("different scan window returned cached data")
 	}
 }
 

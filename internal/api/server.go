@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"os"
@@ -87,6 +88,11 @@ type DashboardResponse struct {
 // Server is the pflow HTTP API server.
 type Server struct {
 	http.ServeMux
+	dashboardCacheMu     sync.RWMutex
+	dashboardCacheKey    dashboardCacheKey
+	dashboardCache       *DashboardResponse
+	dashboardScanSeq     uint64
+	dashboardCacheSeq    uint64
 	staticFS             fs.FS // optional embedded static files (web/dist)
 	sessionMgr           *session.Manager
 	projectMgr           *project.Manager
@@ -94,6 +100,14 @@ type Server struct {
 	settingsMgr          *settings.Manager
 	scheduleMgr          *schedule.Manager
 	attentionDiagnostics bool
+}
+
+type dashboardCacheKey struct {
+	window           time.Duration
+	maxActive        int
+	maxInactive      int
+	source           string
+	settingsRevision string
 }
 
 // ServerOptions controls optional HTTP server behavior.
@@ -627,6 +641,23 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts := parseQueryParams(r, settingsValue)
+	cacheKey := dashboardCacheKey{opts.Window, opts.MaxActive, opts.MaxInactive, opts.SourceFilter, settingsValue.DashboardRevision}
+	if r.URL.Query().Get("first") == "1" {
+		s.dashboardCacheMu.RLock()
+		cached := s.dashboardCache
+		matches := cached != nil && s.dashboardCacheKey == cacheKey
+		s.dashboardCacheMu.RUnlock()
+		if matches {
+			w.Header().Set("X-Pflow-Cache", "hit")
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusOK, cached)
+			return
+		}
+	}
+	s.dashboardCacheMu.Lock()
+	s.dashboardScanSeq++
+	scanSeq := s.dashboardScanSeq
+	s.dashboardCacheMu.Unlock()
 
 	// Load project roots
 	rootsFile, rootsErr := s.projectMgr.Load()
@@ -937,7 +968,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if len(errors) > 0 {
 		resp.Errors = errors
 	}
+	s.dashboardCacheMu.Lock()
+	if scanSeq >= s.dashboardCacheSeq {
+		s.dashboardCacheKey = cacheKey
+		s.dashboardCache = &resp
+		s.dashboardCacheSeq = scanSeq
+	}
+	s.dashboardCacheMu.Unlock()
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }

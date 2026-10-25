@@ -13,7 +13,6 @@ import {
   NDescriptionsItem,
   NSpace,
   NIcon,
-  NSpin,
   NAlert,
   NTooltip,
   NModal,
@@ -687,8 +686,13 @@ onMounted(async () => {
       if (settings.dashboard?.agent_filter) agentFilter.value = settings.dashboard.agent_filter
       if (settings.dashboard?.refresh_seconds !== undefined) refreshInterval.value = settings.dashboard.refresh_seconds as RefreshInterval
     }
-  } finally {
-    refresh()
+  } catch {
+    message.error('读取 Dashboard 设置失败，已使用默认显示选项')
+  }
+  const cached = await fetchDashboard(scanOpts.value, true)
+  if (cached) {
+    await nextTick()
+    void fetchDashboard(scanOpts.value)
   }
 })
 usePolling(refresh, refreshInterval)
@@ -864,7 +868,6 @@ function rowProps(row: DashboardEntry) {
             size="small"
             quaternary
             @click="refresh"
-            :loading="loading"
           >
             <template #icon>
               <NIcon><RefreshOutline /></NIcon>
@@ -901,7 +904,7 @@ function rowProps(row: DashboardEntry) {
         <SchedulePanel @edit="emit('openSchedule')" />
 
         <!-- Main content -->
-        <NSpin :show="loading && !data">
+        <div v-if="loading && !data" class="refresh-hint">正在获取数据…</div>
           <div v-if="groupedSessions.length > 0" class="groups-container">
 
             <!-- ⭐ 主线项目 — full-width card, always visible (header now inside PrimaryCard) -->
@@ -1049,11 +1052,10 @@ function rowProps(row: DashboardEntry) {
           </div>
 
           <!-- Empty state -->
-          <div v-if="!loading && !error && filteredSessions.length === 0" class="empty-state">
+          <div v-if="data && filteredSessions.length === 0" class="empty-state">
             <p>No active sessions found in the selected time window.</p>
             <p class="hint">Try increasing the window or checking if agents are running.</p>
           </div>
-        </NSpin>
       </div>
     </NLayoutContent>
 
@@ -1285,6 +1287,12 @@ function rowProps(row: DashboardEntry) {
   padding: 6px 24px;
   max-width: 1400px;
   margin: 0 auto;
+}
+
+.refresh-hint {
+  padding: 8px 0;
+  color: var(--n-text-color-3);
+  font-size: 12px;
 }
 
 /* Zone layout */
