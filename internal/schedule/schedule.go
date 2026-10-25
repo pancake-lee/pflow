@@ -394,6 +394,17 @@ var ErrInvalidAction = errors.New("invalid schedule action")
 func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 	items := orderedItems(*day)
 	current, next := Current(*day, now)
+	if action == "return" {
+		leave := ActiveLeave(day.Events)
+		if leave == nil {
+			return fmt.Errorf("%w: no active leave", ErrInvalidAction)
+		}
+		appendEvent(day, leave.TaskID, action, "", now, nil)
+		return nil
+	}
+	if ActiveLeave(day.Events) != nil {
+		return fmt.Errorf("%w: return from leave first", ErrInvalidAction)
+	}
 	index := -1
 	for i := range day.Items {
 		if day.Items[i].ID == taskID {
@@ -405,6 +416,16 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		return fmt.Errorf("%w: item not found", ErrInvalidAction)
 	}
 	item := &day.Items[index]
+	if action == "leave" {
+		if current.ID != taskID || item.Status != "" {
+			return fmt.Errorf("%w: item is not current", ErrInvalidAction)
+		}
+		if ActiveLeave(day.Events) != nil {
+			return nil
+		}
+		appendEvent(day, taskID, action, strings.TrimSpace(note), now, nil)
+		return nil
+	}
 	if action == "note" {
 		if strings.TrimSpace(note) == "" {
 			return fmt.Errorf("%w: note is empty", ErrInvalidAction)
@@ -477,6 +498,19 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		}
 	default:
 		return fmt.Errorf("%w: unknown action", ErrInvalidAction)
+	}
+	return nil
+}
+
+// ActiveLeave returns the unmatched leave event, if the user has not returned.
+func ActiveLeave(events []Event) *Event {
+	for i := len(events) - 1; i >= 0; i-- {
+		switch events[i].Action {
+		case "return":
+			return nil
+		case "leave":
+			return &events[i]
+		}
 	}
 	return nil
 }

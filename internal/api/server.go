@@ -225,7 +225,7 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 		fog = 1 - reminder/100
 	}
-	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events), "review": schedule.SummarizeReview(day)})
+	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events), "review": schedule.SummarizeReview(day), "active_leave": schedule.ActiveLeave(day.Events)})
 }
 
 func (s *Server) handlePutScheduleReview(w http.ResponseWriter, r *http.Request) {

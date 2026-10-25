@@ -271,6 +271,31 @@ func TestParkingKeepsCurrentAndHandlesOnce(t *testing.T) {
 	}
 }
 
+func TestLeaveAndReturnPreserveCurrentAndScore(t *testing.T) {
+	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{{
+		ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30,
+	}}}
+	now := time.Date(2026, 10, 25, 9, 15, 0, 0, time.UTC)
+	if err := ApplyAction(&day, "a", "leave", "去接电话", now); err != nil {
+		t.Fatal(err)
+	}
+	if leave := ActiveLeave(day.Events); leave == nil || leave.Note != "去接电话" {
+		t.Fatalf("leave=%+v", leave)
+	}
+	if err := ApplyAction(&day, "a", "completed", "", now); !errors.Is(err, ErrInvalidAction) {
+		t.Fatalf("completed while away: %v", err)
+	}
+	if err := ApplyAction(&day, "a", "return", "", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if ActiveLeave(day.Events) != nil || day.CurrentID != "a" || Score(day.Events) != 0 {
+		t.Fatalf("day=%+v", day)
+	}
+	if err := ApplyAction(&day, "a", "return", "", now); !errors.Is(err, ErrInvalidAction) {
+		t.Fatalf("duplicate return: %v", err)
+	}
+}
+
 func TestPrepareDaySavePreservesUnchangedRecordAndRequiresReplacementConfirmation(t *testing.T) {
 	completedAt := time.Date(2026, 9, 11, 9, 50, 0, 0, time.UTC)
 	previous := Day{Date: "2026-09-11", CurrentID: "b", Items: []Item{

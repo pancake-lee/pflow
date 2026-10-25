@@ -31,10 +31,15 @@ const parking = ref<ParkingItem[]>([])
 const parkingText = ref('')
 const parkingOpen = ref(false)
 const parkingBusy = ref(false)
+const activeLeave = ref<Event | null>(null)
+const leaveOpen = ref(false)
+const leaveIntent = ref('')
+const leaveRemaining = ref(10)
 const emit = defineEmits<{ edit: [] }>()
 const message = useMessage()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let clockTimer: ReturnType<typeof setInterval> | null = null
+let leaveTimer: ReturnType<typeof setInterval> | null = null
 
 async function load() {
   try {
@@ -53,6 +58,7 @@ async function load() {
     runtimeOrder.value = payload.day.runtime_order ?? []
     review.value = payload.review ?? null
     parking.value = payload.day.parking ?? []
+    activeLeave.value = payload.active_leave ?? null
     if (!showReview.value) reviewNote.value = payload.day.review_note ?? ''
     loadError.value = ''
   } catch {
@@ -127,11 +133,37 @@ async function act(action: string, id = current.value?.id, actionNote = '') {
     if (!response.ok) throw new Error('更新日程状态失败，请重试')
     await load()
     if (action === 'note') note.value = ''
+    if (action === 'leave') {
+      leaveOpen.value = false
+      leaveIntent.value = ''
+      stopLeaveTimer()
+    }
   } catch {
     message.error('更新日程状态失败，请重试')
   } finally {
     acting.value = false
   }
+}
+
+function stopLeaveTimer() {
+  if (leaveTimer) clearInterval(leaveTimer)
+  leaveTimer = null
+}
+
+function openLeave() {
+  leaveIntent.value = ''
+  leaveRemaining.value = 10
+  leaveOpen.value = true
+  stopLeaveTimer()
+  leaveTimer = setInterval(() => {
+    leaveRemaining.value = Math.max(0, leaveRemaining.value - 1)
+    if (leaveRemaining.value === 0) stopLeaveTimer()
+  }, 1_000)
+}
+
+function closeLeave() {
+  leaveOpen.value = false
+  stopLeaveTimer()
 }
 
 const pending = computed(() => {
@@ -161,6 +193,7 @@ const actionLabel: Record<string, string> = {
   start: '开始', completed: '完成', skipped: '跳过',
   early: '提前', reorder: '调序', delay: '拖延', note: '备注',
   park: '收纳', parking_processed: '处理停车场',
+  leave: '暂离', return: '返回',
 }
 
 // Break drives the current card's orange marquee at full intensity.
@@ -201,6 +234,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
   if (clockTimer) clearInterval(clockTimer)
+  stopLeaveTimer()
 })
 </script>
 
@@ -219,10 +253,11 @@ onUnmounted(() => {
           <NButton size="small" quaternary @click="emit('edit')">编辑</NButton>
           <NButton v-if="items.length" size="small" quaternary @click="parkingOpen = !parkingOpen">停车场</NButton>
           <template v-if="current.id">
-            <NButton size="small" :disabled="acting || !!elapsed || !!loadError" @click="act('start')">开始</NButton>
-            <NButton size="small" :loading="acting" :disabled="!!loadError" @click="act('completed')">完成</NButton>
-            <NButton size="small" :disabled="acting || !!loadError" @click="act('skipped')">跳过</NButton>
-            <NButton size="small" quaternary :disabled="acting || !!loadError" @click="act('delay')">拖延</NButton>
+            <NButton size="small" :disabled="acting || !!elapsed || !!loadError || !!activeLeave" @click="act('start')">开始</NButton>
+            <NButton size="small" :loading="acting" :disabled="!!loadError || !!activeLeave" @click="act('completed')">完成</NButton>
+            <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="act('skipped')">跳过</NButton>
+            <NButton size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="act('delay')">拖延</NButton>
+            <NButton size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="openLeave">暂离</NButton>
           </template>
         </div>
       </div>
@@ -231,6 +266,19 @@ onUnmounted(() => {
         <small class="s-meta">{{ current.id ? `${itemTime(current)} · ${current.focus_minutes} 分钟` : '自由安排时间' }}</small>
         <small v-if="elapsed" class="s-meta">{{ elapsed }}</small>
       </div>
+    </div>
+    <div v-if="leaveOpen" class="s-leave">
+      <div>现在切去做什么？写一句即可暂离；也可以等待 {{ leaveRemaining }} 秒。</div>
+      <NInput v-model:value="leaveIntent" size="small" placeholder="切换意图或返回线索，可留空" maxlength="200" />
+      <div class="s-extra-row">
+        <NButton size="small" :disabled="(!leaveIntent.trim() && leaveRemaining > 0) || acting" @click="act('leave', current?.id, leaveIntent)">确认暂离</NButton>
+        <NButton size="small" quaternary @click="closeLeave">取消</NButton>
+      </div>
+    </div>
+    <div v-if="activeLeave" class="s-leave">
+      <div>暂离中 · 回来继续：{{ items.find(item => item.id === activeLeave?.task_id)?.title ?? '当前日程' }}</div>
+      <div v-if="activeLeave.note">切换意图：{{ activeLeave.note }}</div>
+      <NButton size="small" :disabled="acting" @click="act('return', activeLeave.task_id)">我回来了</NButton>
     </div>
     <div v-if="parkingOpen && items.length" class="s-parking">
       <div class="s-extra-row">
@@ -245,7 +293,7 @@ onUnmounted(() => {
     <div v-if="next" class="s-card s-card--next" :style="nextStyle">
       <div class="s-head">
         <span class="s-label">下一项</span>
-        <NButton v-if="current?.id" size="small" quaternary :disabled="acting || !!loadError" @click="act('completed', next.id)">提前完成</NButton>
+        <NButton v-if="current?.id" size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="act('completed', next.id)">提前完成</NButton>
       </div>
       <div class="s-body">
         <span class="s-title">{{ next.title }}</span>
@@ -257,11 +305,11 @@ onUnmounted(() => {
       <div v-if="showMore" class="s-extra-content">
         <div v-if="pending.length" class="s-extra-row">
           <span>调序到：</span>
-          <NButton v-for="item in pending" :key="item.id" size="tiny" :disabled="acting" @click="act('reorder', item.id)">{{ item.title }}</NButton>
+          <NButton v-for="item in pending" :key="item.id" size="tiny" :disabled="acting || !!activeLeave" @click="act('reorder', item.id)">{{ item.title }}</NButton>
         </div>
         <div v-if="current?.id" class="s-extra-row">
           <NInput v-model:value="note" size="small" placeholder="可选备注" maxlength="200" />
-          <NButton size="tiny" :disabled="!note.trim() || acting" @click="act('note', current?.id, note)">追加</NButton>
+          <NButton size="tiny" :disabled="!note.trim() || acting || !!activeLeave" @click="act('note', current?.id, note)">追加</NButton>
         </div>
         <div v-if="events.length" class="s-events">
           <div v-for="event in [...events].reverse()" :key="event.id">
@@ -344,6 +392,7 @@ onUnmounted(() => {
 .s-parking { display: grid; gap: 8px; padding: 8px 4px; }
 .s-parking-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .s-parking-done { color: #888; text-decoration: line-through; }
+.s-leave { display: grid; gap: 8px; padding: 10px; border: 1px solid rgba(240, 160, 32, .4); border-radius: 8px; font-size: 13px; }
 .s-extra-content { display: grid; gap: 8px; margin-top: 6px; }
 .s-extra-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .s-extra-row .n-input { max-width: 300px; }
