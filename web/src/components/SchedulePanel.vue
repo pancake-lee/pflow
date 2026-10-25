@@ -35,6 +35,7 @@ const activeLeave = ref<Event | null>(null)
 const leaveOpen = ref(false)
 const leaveIntent = ref('')
 const leaveRemaining = ref(10)
+const mobileIntent = ref('')
 const emit = defineEmits<{ edit: [] }>()
 const message = useMessage()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -136,6 +137,7 @@ async function act(action: string, id = current.value?.id, actionNote = '') {
     if (action === 'leave') {
       leaveOpen.value = false
       leaveIntent.value = ''
+      mobileIntent.value = ''
       stopLeaveTimer()
     }
   } catch {
@@ -280,6 +282,10 @@ onUnmounted(() => {
       <div v-if="activeLeave.note">切换意图：{{ activeLeave.note }}</div>
       <NButton size="small" :disabled="acting" @click="act('return', activeLeave.task_id)">我回来了</NButton>
     </div>
+    <div v-if="current?.id && !activeLeave" class="s-mobile-cue">
+      <NInput v-model:value="mobileIntent" size="small" placeholder="记下当前意图或返回线索" maxlength="200" />
+      <NButton size="small" :disabled="!mobileIntent.trim() || acting" @click="act('leave', current?.id, mobileIntent)">记录并暂离</NButton>
+    </div>
     <div v-if="parkingOpen && items.length" class="s-parking">
       <div class="s-extra-row">
         <NInput v-model:value="parkingText" size="small" placeholder="先记下这件事，继续当前项" maxlength="300" @keyup.enter="addParking" />
@@ -393,6 +399,7 @@ onUnmounted(() => {
 .s-parking-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .s-parking-done { color: #888; text-decoration: line-through; }
 .s-leave { display: grid; gap: 8px; padding: 10px; border: 1px solid rgba(240, 160, 32, .4); border-radius: 8px; font-size: 13px; }
+.s-mobile-cue { display: none; }
 .s-extra-content { display: grid; gap: 8px; margin-top: 6px; }
 .s-extra-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .s-extra-row .n-input { max-width: 300px; }
@@ -410,5 +417,10 @@ onUnmounted(() => {
   opacity: 1;
 }
 
-@media (max-width: 760px) { .s-head { flex-direction: column; align-items: flex-start; } }
+@media (max-width: 760px) {
+  .s-head { flex-direction: column; align-items: flex-start; }
+  .s-actions { flex-wrap: wrap; }
+  .s-mobile-cue { display: flex; gap: 8px; align-items: center; }
+  .s-mobile-cue .n-input { flex: 1; min-width: 0; }
+}
 </style>
