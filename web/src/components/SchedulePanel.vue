@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed } from 'vue'
-import { NAlert, NButton, NInput, useMessage } from 'naive-ui'
+import { NAlert, NButton, NInput, NModal, NSelect, useMessage } from 'naive-ui'
 import { highlightToMarquee } from '../composables/useReminderScores'
 
 type Item = { id: string; start: string; day_offset?: number; title: string; focus_minutes: number; break_minutes: number; status?: string }
@@ -20,11 +20,11 @@ const acting = ref(false)
 const items = ref<Item[]>([])
 const events = ref<Event[]>([])
 const runtimeOrder = ref<string[]>([])
-const showMore = ref(false)
 const note = ref('')
 const now = ref(Date.now())
 const review = ref<ReviewSummary | null>(null)
 const reviewNote = ref('')
+const storedReviewNote = ref('')
 const showReview = ref(false)
 const savingReview = ref(false)
 const parking = ref<ParkingItem[]>([])
@@ -41,6 +41,7 @@ const message = useMessage()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let clockTimer: ReturnType<typeof setInterval> | null = null
 let leaveTimer: ReturnType<typeof setInterval> | null = null
+let autoStartAttempted = ''
 
 async function load() {
   try {
@@ -60,11 +61,18 @@ async function load() {
     review.value = payload.review ?? null
     parking.value = payload.day.parking ?? []
     activeLeave.value = payload.active_leave ?? null
-    if (!showReview.value) reviewNote.value = payload.day.review_note ?? ''
+    storedReviewNote.value = payload.day.review_note ?? ''
+    if (!showReview.value) reviewNote.value = storedReviewNote.value
     loadError.value = ''
+    maybeAutoStart()
   } catch {
     loadError.value = '读取今日日程失败，操作暂不可用。'
   }
+}
+
+function openReview() {
+  reviewNote.value = storedReviewNote.value
+  showReview.value = true
 }
 
 async function addParking() {
@@ -124,6 +132,7 @@ async function saveReview() {
 async function act(action: string, id = current.value?.id, actionNote = '') {
   if (!id || acting.value || loadError.value) return
   acting.value = true
+  let succeeded = false
   try {
     const options = {
       method: 'POST',
@@ -133,6 +142,7 @@ async function act(action: string, id = current.value?.id, actionNote = '') {
     const response = await fetch('/api/v1/schedules/action', options)
     if (!response.ok) throw new Error('更新日程状态失败，请重试')
     await load()
+    succeeded = true
     if (action === 'note') note.value = ''
     if (action === 'leave') {
       leaveOpen.value = false
@@ -144,7 +154,22 @@ async function act(action: string, id = current.value?.id, actionNote = '') {
     message.error('更新日程状态失败，请重试')
   } finally {
     acting.value = false
+    if (succeeded && action !== 'start') maybeAutoStart()
   }
+}
+
+function maybeAutoStart() {
+  const id = current.value?.id
+  if (!id || acting.value || activeLeave.value ||
+      document.visibilityState === 'hidden' || elapsed.value) return
+  const key = `${day.value}:${id}`
+  if (autoStartAttempted === key) return
+  autoStartAttempted = key
+  void act('start', id)
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') void load()
 }
 
 function stopLeaveTimer() {
@@ -175,6 +200,13 @@ const pending = computed(() => {
     : items.value
   return ordered.filter(item => !item.status && item.id !== current.value?.id && item.id !== next.value?.id)
 })
+const reorderOptions = computed(() => pending.value.map(item => ({
+  label: item.title, value: item.id,
+})))
+
+function selectReorder(value: string | null) {
+  if (value) void act('reorder', value)
+}
 
 const elapsed = computed(() => {
   const id = current.value?.id
@@ -185,7 +217,7 @@ const elapsed = computed(() => {
     if (event.action === 'completed' || event.action === 'skipped') return ''
     if (event.action === 'start') {
       const seconds = Math.max(0, Math.floor((now.value - Date.parse(event.time)) / 1000))
-      return `已用 ${Math.floor(seconds / 60)} 分钟`
+      return `已计时 ${Math.floor(seconds / 60)} 分钟`
     }
   }
   return ''
@@ -229,11 +261,13 @@ function itemTime(item: Item) { return `${item.day_offset === 1 ? '次日 ' : ''
 
 onMounted(() => {
   void load()
+  document.addEventListener('visibilitychange', onVisibilityChange)
   refreshTimer = setInterval(() => void load(), 30_000)
   clockTimer = setInterval(() => { now.value = Date.now() }, 1_000)
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   if (refreshTimer) clearInterval(refreshTimer)
   if (clockTimer) clearInterval(clockTimer)
   stopLeaveTimer()
@@ -243,6 +277,24 @@ onUnmounted(() => {
 <template>
   <section v-if="current || loadError" class="schedule">
     <NAlert v-if="loadError" type="error">{{ loadError }}</NAlert>
+    <div class="s-toolbar">
+      <strong>今日日程</strong>
+      <div class="s-toolbar-actions">
+        <NButton size="small" quaternary @click="emit('edit')">编辑</NButton>
+        <NButton v-if="items.length" size="small" quaternary @click="parkingOpen = !parkingOpen">停车场</NButton>
+        <NSelect
+          v-if="items.length"
+          :value="null"
+          :options="reorderOptions"
+          size="small"
+          placeholder="调序"
+          class="s-reorder"
+          :disabled="!reorderOptions.length || acting || !!activeLeave || !!loadError"
+          @update:value="selectReorder"
+        />
+        <NButton v-if="items.length || events.length" size="small" quaternary @click="openReview">日对账</NButton>
+      </div>
+    </div>
     <div
       v-if="current"
       class="s-card s-card--current"
@@ -250,12 +302,9 @@ onUnmounted(() => {
       :style="currentStyle"
     >
       <div class="s-head">
-        <span class="s-label">今日日程 · 当前</span>
+        <span class="s-label">当前日程</span>
         <div class="s-actions">
-          <NButton size="small" quaternary @click="emit('edit')">编辑</NButton>
-          <NButton v-if="items.length" size="small" quaternary @click="parkingOpen = !parkingOpen">停车场</NButton>
           <template v-if="current.id">
-            <NButton size="small" :disabled="acting || !!elapsed || !!loadError || !!activeLeave" @click="act('start')">开始</NButton>
             <NButton size="small" :loading="acting" :disabled="!!loadError || !!activeLeave" @click="act('completed')">完成</NButton>
             <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="act('skipped')">跳过</NButton>
             <NButton size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="act('delay')">拖延</NButton>
@@ -267,6 +316,16 @@ onUnmounted(() => {
         <span class="s-title">{{ phase === 'break' ? `☕ 休息中（约 ${breakRemainingMinutes} 分钟）：` : '' }}{{ current.title }}</span>
         <small class="s-meta">{{ current.id ? `${itemTime(current)} · ${current.focus_minutes} 分钟` : '自由安排时间' }}</small>
         <small v-if="elapsed" class="s-meta">{{ elapsed }}</small>
+      </div>
+    </div>
+    <div v-if="next" class="s-card s-card--next" :style="nextStyle">
+      <div class="s-head">
+        <span class="s-label">下一项</span>
+        <NButton v-if="current?.id" size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="act('completed', next.id)">提前完成</NButton>
+      </div>
+      <div class="s-body">
+        <span class="s-title">{{ next.title }}</span>
+        <small class="s-meta">{{ itemTime(next) }} · {{ next.focus_minutes }} 分钟</small>
       </div>
     </div>
     <div v-if="leaveOpen" class="s-leave">
@@ -296,55 +355,40 @@ onUnmounted(() => {
         <NButton v-if="!entry.processed_at" size="tiny" quaternary :disabled="parkingBusy" @click="processParking(entry.id)">已处理</NButton>
       </div>
     </div>
-    <div v-if="next" class="s-card s-card--next" :style="nextStyle">
-      <div class="s-head">
-        <span class="s-label">下一项</span>
-        <NButton v-if="current?.id" size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="act('completed', next.id)">提前完成</NButton>
-      </div>
-      <div class="s-body">
-        <span class="s-title">{{ next.title }}</span>
-        <small class="s-meta">{{ itemTime(next) }} · {{ next.focus_minutes }} 分钟</small>
-      </div>
-    </div>
-    <div v-if="current?.id || events.length" class="s-extra">
-      <NButton size="tiny" quaternary @click="showMore = !showMore">{{ showMore ? '收起' : '更多操作与日志' }}</NButton>
-      <div v-if="showMore" class="s-extra-content">
-        <div v-if="pending.length" class="s-extra-row">
-          <span>调序到：</span>
-          <NButton v-for="item in pending" :key="item.id" size="tiny" :disabled="acting || !!activeLeave" @click="act('reorder', item.id)">{{ item.title }}</NButton>
-        </div>
-        <div v-if="current?.id" class="s-extra-row">
-          <NInput v-model:value="note" size="small" placeholder="可选备注" maxlength="200" />
-          <NButton size="tiny" :disabled="!note.trim() || acting || !!activeLeave" @click="act('note', current?.id, note)">追加</NButton>
-        </div>
-        <div v-if="events.length" class="s-events">
-          <div v-for="event in [...events].reverse()" :key="event.id">
-            {{ new Date(event.time).toLocaleTimeString() }} · {{ items.find(item => item.id === event.task_id)?.title ?? '日程' }} · {{ actionLabel[event.action] ?? event.action }}<span v-if="event.duration_seconds != null"> · {{ Math.floor(event.duration_seconds / 60) }} 分钟</span><span v-if="event.note"> · {{ event.note }}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div v-if="items.length" class="s-review">
-      <NButton size="tiny" quaternary @click="showReview = !showReview">{{ showReview ? '收起对账' : '日对账' }}</NButton>
-      <div v-if="showReview && review" class="s-extra-content">
-        <div>总分 {{ review.score }} · 完成 {{ review.completed_count }} 项 · 偏离 {{ review.deviation_count }} 次 · 可计算耗时 {{ Math.floor(review.total_duration_seconds / 60) }} 分钟</div>
+    <NModal
+      v-model:show="showReview"
+      preset="card"
+      title="日对账"
+      :style="{ width: 'min(680px, calc(100vw - 32px))' }"
+      closable
+    >
+      <div v-if="review" class="s-review-content">
+        <div>总分 {{ review.score }} · 完成 {{ review.completed_count }} 项 · 偏离 {{ review.deviation_count }} 次 · 累计计时 {{ Math.floor(review.total_duration_seconds / 60) }} 分钟</div>
         <NAlert v-if="review.incomplete_legacy_items" type="warning">旧日程缺少动作记录，历史积分和耗时未补算。</NAlert>
         <div v-if="events.length" class="s-events">
           <div v-for="event in events" :key="event.id">
             {{ new Date(event.time).toLocaleTimeString() }} · {{ items.find(item => item.id === event.task_id)?.title ?? '日程' }} · {{ actionLabel[event.action] ?? event.action }}<span v-if="event.duration_seconds != null"> · {{ Math.floor(event.duration_seconds / 60) }} 分钟</span><span v-if="event.note"> · {{ event.note }}</span>
           </div>
         </div>
+        <div v-if="current?.id" class="s-extra-row">
+          <NInput v-model:value="note" size="small" placeholder="给当前项追加备注" maxlength="200" />
+          <NButton size="small" :disabled="!note.trim() || acting || !!activeLeave" @click="act('note', current?.id, note)">追加备注</NButton>
+        </div>
         <div class="s-extra-row">
           <NInput v-model:value="reviewNote" size="small" placeholder="明天只改一个变量，可留空" maxlength="300" />
           <NButton size="tiny" :loading="savingReview" @click="saveReview">保存</NButton>
         </div>
       </div>
-    </div>
+    </NModal>
   </section>
 </template>
 
 <style scoped>
-.schedule { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
+.schedule { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; padding: 14px; border: 1px solid rgba(94, 163, 240, .28); border-radius: 12px; background: rgba(32, 128, 240, .025); }
+.s-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.s-toolbar strong { color: #8bbdff; font-size: 14px; }
+.s-toolbar-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.s-reorder { width: 140px; }
 .s-card { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border: 1px solid rgba(94, 163, 240, .35); border-radius: 10px; background: rgba(32, 128, 240, .08); }
 .s-card--next { background: rgba(32, 128, 240, .04); }
 .s-card--break { --hl-stroke: rgba(240, 160, 32, 1); border-color: rgba(240, 160, 32, .5); }
@@ -393,17 +437,15 @@ onUnmounted(() => {
 .s-title { color: #8bbdff; font-weight: 600; }
 .s-card--next .s-title { color: #ccc; }
 .s-meta { color: #aaa; }
-.s-extra { padding: 0 4px; }
-.s-review { padding: 0 4px; font-size: 13px; color: #ccc; }
+.s-review-content { display: grid; gap: 12px; font-size: 13px; color: #ccc; }
 .s-parking { display: grid; gap: 8px; padding: 8px 4px; }
 .s-parking-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .s-parking-done { color: #888; text-decoration: line-through; }
 .s-leave { display: grid; gap: 8px; padding: 10px; border: 1px solid rgba(240, 160, 32, .4); border-radius: 8px; font-size: 13px; }
 .s-mobile-cue { display: none; }
-.s-extra-content { display: grid; gap: 8px; margin-top: 6px; }
 .s-extra-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .s-extra-row .n-input { max-width: 300px; }
-.s-events { max-height: 150px; overflow: auto; font-size: 12px; color: #aaa; }
+.s-events { max-height: 320px; overflow: auto; font-size: 12px; color: #aaa; }
 
 /* ── Next card fog: blur + haze from 迷雾分, hover to peek ── */
 .s-card--next .s-body {
