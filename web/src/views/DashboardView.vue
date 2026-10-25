@@ -4,7 +4,6 @@ import {
   NLayout,
   NLayoutHeader,
   NLayoutContent,
-  NLayoutFooter,
   NTag,
   NButton,
   NDrawer,
@@ -1059,13 +1058,6 @@ function rowProps(row: DashboardEntry) {
       </div>
     </NLayoutContent>
 
-    <!-- Footer -->
-    <NLayoutFooter bordered>
-      <div class="footer">
-        <span>🟢 active &nbsp; 🟡 waiting &nbsp; ⚪ idle &nbsp; ⚫ inactive</span>
-      </div>
-    </NLayoutFooter>
-
     <!-- Session Detail Drawer -->
     <NDrawer v-model:show="showDetail" :width="drawerWidth" placement="right">
       <NDrawerContent v-if="selectedSession" title="Session Detail" closable>
@@ -1456,17 +1448,6 @@ function rowProps(row: DashboardEntry) {
   bottom: 0;
   z-index: 100;
   background: var(--n-color-target);
-}
-
-.footer {
-  display: flex;
-  justify-content: center;
-  gap: 24px;
-  padding: 0 24px;
-  height: 36px;
-  align-items: center;
-  font-size: 12px;
-  color: var(--n-text-color-4);
 }
 
 /* Detail drawer */
