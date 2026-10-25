@@ -838,7 +838,6 @@ function rowProps(row: DashboardEntry) {
       <div class="header">
         <div class="header-left">
           <h1 class="title">⚔️ pflow</h1>
-          <span class="subtitle">Agent Activity Dashboard</span>
         </div>
 
         <!-- Stats in header -->
@@ -1205,11 +1204,6 @@ function rowProps(row: DashboardEntry) {
   margin: 0;
   font-size: 20px;
   font-weight: 700;
-}
-
-.subtitle {
-  color: var(--n-text-color-3);
-  font-size: 14px;
 }
 
 /* Stats in header */
