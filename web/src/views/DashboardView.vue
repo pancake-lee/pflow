@@ -6,8 +6,6 @@ import {
   NLayoutContent,
   NLayoutFooter,
   NTag,
-  NSelect,
-  NInputNumber,
   NButton,
   NDrawer,
   NDrawerContent,
@@ -230,79 +228,11 @@ async function focusStop() {
 }
 
 // Filter params
-const windowOptions = [
-  { label: '1 hour', value: '1h' },
-  { label: '3 hours', value: '3h' },
-  { label: '6 hours', value: '6h' },
-  { label: '1 day', value: '1d' },
-  { label: '3 days', value: '3d' },
-  { label: '7 days', value: '7d' },
-]
 const selectedWindow = ref('1d')
 const maxActive = ref(1)
 const maxInactive = ref(1)
 const agentFilter = ref<AgentFilter>('all')
 const refreshInterval = ref<RefreshInterval>(30)
-const FILTER_PREFERENCES_KEY = 'pflow:dashboard-filters'
-const filterPreferencesLoaded = ref(false)
-const dashboardRevision = ref('')
-
-type FilterPreferences = {
-  dashboardRevision?: string
-  window?: string
-  maxActive?: number
-  maxInactive?: number
-  agentFilter?: AgentFilter
-  refreshInterval?: RefreshInterval
-}
-
-function loadFilterPreferences(): FilterPreferences {
-  try {
-    const raw = localStorage.getItem(FILTER_PREFERENCES_KEY)
-    if (!raw) return {}
-    const stored = JSON.parse(raw) as FilterPreferences
-    const sameRevision = (stored.dashboardRevision ?? '') === dashboardRevision.value
-    return {
-      window: sameRevision && windowOptions.some((option) => option.value === stored.window) ? stored.window : undefined,
-      maxActive: sameRevision && typeof stored.maxActive === 'number' && stored.maxActive >= 1 && stored.maxActive <= 10 ? stored.maxActive : undefined,
-      maxInactive: sameRevision && typeof stored.maxInactive === 'number' && stored.maxInactive >= 0 && stored.maxInactive <= 10 ? stored.maxInactive : undefined,
-      agentFilter: agentFilterOptions.some((option) => option.value === stored.agentFilter) ? stored.agentFilter : undefined,
-      refreshInterval: sameRevision && refreshOptions.some((option) => option.value === stored.refreshInterval) ? stored.refreshInterval : undefined,
-    }
-  } catch {
-    return {}
-  }
-}
-
-function persistFilterPreferences() {
-  if (!filterPreferencesLoaded.value) return
-  try {
-    localStorage.setItem(FILTER_PREFERENCES_KEY, JSON.stringify({
-      dashboardRevision: dashboardRevision.value,
-      window: selectedWindow.value,
-      maxActive: maxActive.value,
-      maxInactive: maxInactive.value,
-      agentFilter: agentFilter.value,
-      refreshInterval: refreshInterval.value,
-    }))
-  } catch { /* ignore unavailable browser storage */ }
-}
-
-const agentFilterOptions = [
-  { label: 'All Agents', value: 'all' },
-  { label: 'Claude Code', value: 'claude' },
-  { label: 'Hermes', value: 'hermes' },
-  { label: 'Codex', value: 'codex' },
-]
-
-const refreshOptions = [
-  { label: 'Off', value: 0 },
-  { label: '10s', value: 10 },
-  { label: '30s', value: 30 },
-  { label: '60s', value: 60 },
-]
-
-watch([selectedWindow, maxActive, maxInactive, agentFilter, refreshInterval], persistFilterPreferences)
 
 // Detail drawer
 const showDetail = ref(false)
@@ -750,21 +680,14 @@ onMounted(async () => {
   try {
     const response = await fetch('/api/v1/settings')
     if (response.ok) {
-      const settings = await response.json() as { dashboard_revision?: string; dashboard?: { window?: string; max_active?: number; max_inactive?: number; refresh_seconds?: number } }
-      dashboardRevision.value = settings.dashboard_revision ?? ''
+      const settings = await response.json() as { dashboard?: { window?: string; max_active?: number; max_inactive?: number; agent_filter?: AgentFilter; refresh_seconds?: number } }
       if (settings.dashboard?.window) selectedWindow.value = settings.dashboard.window
       if (settings.dashboard?.max_active !== undefined) maxActive.value = settings.dashboard.max_active
       if (settings.dashboard?.max_inactive !== undefined) maxInactive.value = settings.dashboard.max_inactive
+      if (settings.dashboard?.agent_filter) agentFilter.value = settings.dashboard.agent_filter
       if (settings.dashboard?.refresh_seconds !== undefined) refreshInterval.value = settings.dashboard.refresh_seconds as RefreshInterval
     }
   } finally {
-    const stored = loadFilterPreferences()
-    if (stored.window) selectedWindow.value = stored.window
-    if (stored.maxActive !== undefined) maxActive.value = stored.maxActive
-    if (stored.maxInactive !== undefined) maxInactive.value = stored.maxInactive
-    if (stored.agentFilter) agentFilter.value = stored.agentFilter
-    if (stored.refreshInterval !== undefined) refreshInterval.value = stored.refreshInterval
-    filterPreferencesLoaded.value = true
     refresh()
   }
 })
@@ -948,6 +871,7 @@ function rowProps(row: DashboardEntry) {
             </template>
             Refresh
           </NButton>
+          <span v-if="data" class="header-updated">Last updated: {{ new Date(data.now).toLocaleTimeString() }}</span>
           <NButton
             size="small"
             quaternary
@@ -974,56 +898,7 @@ function rowProps(row: DashboardEntry) {
           style="margin-bottom: 16px"
         />
 
-        <!-- Filter bar -->
         <SchedulePanel @edit="emit('openSchedule')" />
-        <div class="filter-bar">
-          <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
-          <NSpace align="center" wrap>
-            <span class="filter-label">Window:</span>
-            <NSelect
-              v-model:value="selectedWindow"
-              :options="windowOptions"
-              size="small"
-              style="width: 120px"
-              @update:value="refresh"
-            />
-            <span class="filter-label">Active:</span>
-            <NInputNumber
-              v-model:value="maxActive"
-              size="small"
-              :min="0"
-              :max="10"
-              style="width: 80px"
-              @update:value="refresh"
-            />
-            <span class="filter-label">Inactive:</span>
-            <NInputNumber
-              v-model:value="maxInactive"
-              size="small"
-              :min="0"
-              :max="10"
-              style="width: 80px"
-              @update:value="refresh"
-            />
-            <span class="filter-label">Agent:</span>
-            <NSelect
-              v-model:value="agentFilter"
-              :options="agentFilterOptions"
-              size="small"
-              style="width: 130px"
-            />
-            <span class="filter-label">Refresh:</span>
-            <NSelect
-              v-model:value="refreshInterval"
-              :options="refreshOptions"
-              size="small"
-              style="width: 80px"
-            />
-            <span v-if="data" class="filter-note">
-              Last updated: {{ new Date(data.now).toLocaleTimeString() }}
-            </span>
-          </NSpace>
-        </div>
 
         <!-- Main content -->
         <NSpin :show="loading && !data">
@@ -1398,32 +1273,18 @@ function rowProps(row: DashboardEntry) {
   gap: 8px;
 }
 
+.header-updated {
+  font-size: 12px;
+  color: var(--n-text-color-3);
+  white-space: nowrap;
+}
+
 /* ── Content ────────────────────────────────── */
 
 .content {
   padding: 6px 24px;
   max-width: 1400px;
   margin: 0 auto;
-}
-
-/* Filters */
-.filter-bar {
-  margin-bottom: 6px;
-  padding: 0px 0px;
-  background: var(--n-color-target);
-  border-radius: 8px;
-}
-
-.filter-label {
-  font-size: 13px;
-  color: var(--n-text-color-3);
-  margin-right: -8px;
-}
-
-.filter-note {
-  font-size: 12px;
-  color: var(--n-text-color-3);
-  margin-left: 12px;
 }
 
 /* Zone layout */
@@ -1695,7 +1556,6 @@ function rowProps(row: DashboardEntry) {
 
 /* Containers that hold focus overlays need positioning */
 .header-stats,
-.filter-bar,
 .zone-collapse-wrap {
   position: relative;
 }

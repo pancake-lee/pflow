@@ -9,7 +9,7 @@ const source = readFileSync(new URL('../src/views/SettingsView.vue', import.meta
   .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
 const baseline = {
   version: 1,
-  dashboard: { window: '1d', max_active: 1, max_inactive: 1, refresh_seconds: 30, daily_boot_enabled: true },
+  dashboard: { window: '1d', max_active: 1, max_inactive: 1, agent_filter: 'all', refresh_seconds: 30, daily_boot_enabled: true },
   attention: { protect_minutes: 5, focus_add_minutes: 15, mask_strength: 1 },
   time_estimate: { minutes_per_message: 3, fallback_ratio: .3 },
 }
@@ -37,6 +37,16 @@ test('explicit settings save clears dirty state and emits a dashboard refresh', 
   assert.equal(api.run('dirty.value'), true)
   await api.run('save()')
   assert.equal(api.run('dirty.value'), false)
+  assert.deepEqual(api.events, ['saved'])
+})
+test('Agent type is saved as a shared dashboard setting', async () => {
+  const api = settings()
+  await api.run('load()')
+  api.run("value.value.dashboard.agent_filter = 'codex'")
+  await api.run('save()')
+  const saved = JSON.parse(api.requests.at(-1).options.body)
+  assert.equal(saved.dashboard.agent_filter, 'codex')
+  assert.equal(api.run('value.value.dashboard.agent_filter'), 'codex')
   assert.deepEqual(api.events, ['saved'])
 })
 test('category and individual restore modify only the draft until explicit save', async () => {

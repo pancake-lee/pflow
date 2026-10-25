@@ -7,7 +7,7 @@ import type { KnowledgeTip } from '../types/dashboard'
 type Settings = {
   custom_knowledge_tips: KnowledgeTip[]
   version: number
-  dashboard: { window: string; max_active: number; max_inactive: number; refresh_seconds: number; daily_boot_enabled: boolean }
+  dashboard: { window: string; max_active: number; max_inactive: number; agent_filter: string; refresh_seconds: number; daily_boot_enabled: boolean }
   attention: { protect_minutes: number; focus_add_minutes: number; mask_strength: number }
   time_estimate: { minutes_per_message: number; fallback_ratio: number }
 }
@@ -27,12 +27,19 @@ const busy = computed(() => loading.value || saving.value || projectBusy.value)
 const dirty = computed(() => JSON.stringify(value.value) !== JSON.stringify(loadedValue.value))
 const windowOptions = ['1h', '3h', '6h', '1d', '3d', '7d'].map(value => ({ label: value, value }))
 const refreshOptions = [0, 10, 30, 60].map(value => ({ label: value === 0 ? '关闭' : `${value}s`, value }))
+const agentFilterOptions = [
+  { label: '全部 Agent', value: 'all' },
+  { label: 'Claude Code', value: 'claude' },
+  { label: 'Hermes', value: 'hermes' },
+  { label: 'Codex', value: 'codex' },
+]
 const newPath = ref('')
 const validationError = computed(() => {
   const current = value.value
   if (!current) return ''
   if (!windowOptions.some(option => option.value === current.dashboard.window)) return '请选择有效扫描范围'
   if (!refreshOptions.some(option => option.value === current.dashboard.refresh_seconds)) return '请选择有效刷新间隔'
+  if (!agentFilterOptions.some(option => option.value === current.dashboard.agent_filter)) return '请选择有效 Agent 类型'
   const seen = new Set<string>()
   for (const [index, tip] of current.custom_knowledge_tips.entries()) {
     if (!tip.title.trim() || !tip.theory.trim()) return `自定义知识点 ${index + 1}：标题和知识正文不能为空`
@@ -166,6 +173,7 @@ onMounted(load)
         <div class="setting-field"><label>扫描范围 <NSelect v-model:value="value.dashboard.window" :options="windowOptions" /></label><small v-if="defaults" class="default-value">默认：{{ defaults.dashboard.window }}<NButton size="tiny" quaternary @click="resetField('dashboard', 'window')">恢复此项</NButton></small></div>
         <div class="setting-field"><label>Active 会话上限<NInputNumber v-model:value="value.dashboard.max_active" :min="1" :max="10" /><small class="hint">每个项目最多展示的活跃会话数，至少保留 1 个。</small></label><small v-if="defaults" class="default-value">默认：{{ defaults.dashboard.max_active }}<NButton size="tiny" quaternary @click="resetField('dashboard', 'max_active')">恢复此项</NButton></small></div>
         <div class="setting-field"><label>Inactive 会话上限（0 为不展示）<NInputNumber v-model:value="value.dashboard.max_inactive" :min="0" :max="10" /></label><small v-if="defaults" class="default-value">默认：{{ defaults.dashboard.max_inactive }}<NButton size="tiny" quaternary @click="resetField('dashboard', 'max_inactive')">恢复此项</NButton></small></div>
+        <div class="setting-field"><label>Agent 类型 <NSelect v-model:value="value.dashboard.agent_filter" :options="agentFilterOptions" /></label><small v-if="defaults" class="default-value">默认：{{ agentFilterOptions.find(option => option.value === defaults?.dashboard.agent_filter)?.label }}<NButton size="tiny" quaternary @click="resetField('dashboard', 'agent_filter')">恢复此项</NButton></small></div>
         <div class="setting-field"><label>自动刷新 <NSelect v-model:value="value.dashboard.refresh_seconds" :options="refreshOptions" /></label><small v-if="defaults" class="default-value">默认：{{ defaults.dashboard.refresh_seconds }}<NButton size="tiny" quaternary @click="resetField('dashboard', 'refresh_seconds')">恢复此项</NButton></small></div>
         <div class="setting-field"><label class="switch">每日引导 <NSwitch v-model:value="value.dashboard.daily_boot_enabled" /></label><small v-if="defaults" class="default-value">默认：{{ defaults.dashboard.daily_boot_enabled ? '开启' : '关闭' }}<NButton size="tiny" quaternary @click="resetField('dashboard', 'daily_boot_enabled')">恢复此项</NButton></small></div>
         <NButton @click="reset('dashboard')">恢复本类默认值</NButton>

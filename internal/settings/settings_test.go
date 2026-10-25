@@ -82,6 +82,7 @@ func TestManagerDefaultsAndRoundTrip(t *testing.T) {
 		t.Fatalf("defaults=%+v", got)
 	}
 	got.Dashboard.RefreshSeconds = 60
+	got.Dashboard.AgentFilter = "codex"
 	if _, err := m.Update(got); err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +92,23 @@ func TestManagerDefaultsAndRoundTrip(t *testing.T) {
 	}
 	if reloaded.Dashboard.RefreshSeconds != 60 {
 		t.Fatalf("refresh=%d", reloaded.Dashboard.RefreshSeconds)
+	}
+	if reloaded.Dashboard.AgentFilter != "codex" {
+		t.Fatalf("agent filter=%s", reloaded.Dashboard.AgentFilter)
+	}
+}
+
+func TestAgentFilterDefaultsAndValidation(t *testing.T) {
+	manager := NewManagerAt(filepath.Join(t.TempDir(), "settings.json"))
+	value := Default()
+	value.Dashboard.AgentFilter = ""
+	saved, err := manager.Update(value)
+	if err != nil || saved.Dashboard.AgentFilter != "all" {
+		t.Fatalf("legacy filter normalization: %+v %v", saved.Dashboard, err)
+	}
+	value.Dashboard.AgentFilter = "unknown"
+	if err := manager.Save(value); err == nil {
+		t.Fatal("unknown agent filter accepted")
 	}
 }
 

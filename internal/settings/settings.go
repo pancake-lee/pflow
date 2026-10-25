@@ -18,6 +18,7 @@ type Dashboard struct {
 	Window           string `json:"window"`
 	MaxActive        int    `json:"max_active"`
 	MaxInactive      int    `json:"max_inactive"`
+	AgentFilter      string `json:"agent_filter"`
 	RefreshSeconds   int    `json:"refresh_seconds"`
 	DailyBootEnabled bool   `json:"daily_boot_enabled"`
 }
@@ -54,7 +55,7 @@ func Default() File {
 	return File{
 		Version: Version,
 		Dashboard: Dashboard{
-			Window: "1d", MaxActive: 1, MaxInactive: 1,
+			Window: "1d", MaxActive: 1, MaxInactive: 1, AgentFilter: "all",
 			RefreshSeconds: 30, DailyBootEnabled: true,
 		},
 		Attention: Attention{
@@ -106,6 +107,7 @@ func (m *Manager) loadLocked() (File, error) {
 	}
 	stored.Version = Version
 	normalizeMaxActive(&stored)
+	normalizeAgentFilter(&stored)
 	err = validate(stored)
 	if err != nil {
 		return File{}, err
@@ -122,6 +124,12 @@ func normalizeMaxActive(value *File) {
 	}
 }
 
+func normalizeAgentFilter(value *File) {
+	if value.Dashboard.AgentFilter == "" {
+		value.Dashboard.AgentFilter = "all"
+	}
+}
+
 func validate(value File) error {
 	if value.Dashboard.Window != "1h" && value.Dashboard.Window != "3h" && value.Dashboard.Window != "6h" && value.Dashboard.Window != "1d" && value.Dashboard.Window != "3d" && value.Dashboard.Window != "7d" {
 		return fmt.Errorf("invalid dashboard.window")
@@ -131,6 +139,9 @@ func validate(value File) error {
 	}
 	if value.Dashboard.MaxActive < 1 || value.Dashboard.MaxActive > 10 {
 		return fmt.Errorf("dashboard.max_active must be between 1 and 10")
+	}
+	if value.Dashboard.AgentFilter != "all" && value.Dashboard.AgentFilter != "claude" && value.Dashboard.AgentFilter != "hermes" && value.Dashboard.AgentFilter != "codex" {
+		return fmt.Errorf("invalid dashboard.agent_filter")
 	}
 	if value.Dashboard.RefreshSeconds != 0 && value.Dashboard.RefreshSeconds != 10 && value.Dashboard.RefreshSeconds != 30 && value.Dashboard.RefreshSeconds != 60 {
 		return fmt.Errorf("invalid dashboard.refresh_seconds")
@@ -173,6 +184,7 @@ func (m *Manager) Save(value File) error {
 	defer m.mu.Unlock()
 	value.Version = Version
 	normalizeMaxActive(&value)
+	normalizeAgentFilter(&value)
 	if err := validate(value); err != nil {
 		return err
 	}
