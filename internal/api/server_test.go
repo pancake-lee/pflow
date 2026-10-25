@@ -125,6 +125,29 @@ func TestScheduleActionPersistsOnceAndRejectsDistantCompletion(t *testing.T) {
 	}
 }
 
+func TestScheduleReviewNotePersists(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	day := schedule.Day{Date: "2026-10-25", Items: []schedule.Item{{
+		ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30,
+	}}}
+	if err := server.scheduleMgr.Save(schedule.File{Days: map[string]schedule.Day{day.Date: day}}); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodPut, "/api/v1/schedules/review",
+		bytes.NewBufferString(`{"date":"2026-10-25","note":"  明天提前开始  "}`),
+	))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	loaded, err := server.scheduleMgr.Load()
+	if err != nil || loaded.Days[day.Date].ReviewNote != "明天提前开始" {
+		t.Fatalf("loaded=%+v err=%v", loaded.Days[day.Date], err)
+	}
+}
+
 func TestConcurrentScheduleAndTemplateUpdatesDoNotOverwrite(t *testing.T) {
 	server := NewServer(nil, nil)
 	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))

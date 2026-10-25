@@ -227,6 +227,25 @@ func TestPlanEditPreservesExecutionEvents(t *testing.T) {
 	}
 }
 
+func TestSummarizeReviewKeepsLegacyGapVisible(t *testing.T) {
+	seconds := int64(90)
+	day := Day{Items: []Item{
+		{ID: "a", Status: "completed"},
+		{ID: "b", Status: "skipped"},
+		{ID: "legacy", Status: "completed"},
+	}, Events: []Event{
+		{TaskID: "a", Action: "completed", DurationSeconds: &seconds},
+		{TaskID: "b", Action: "skipped"},
+		{TaskID: "a", Action: "reorder"},
+	}}
+	summary := SummarizeReview(day)
+	if summary.Score != 4 || summary.CompletedCount != 1 ||
+		summary.DeviationCount != 2 || summary.TotalDurationSeconds != 90 ||
+		!summary.IncompleteLegacyItems {
+		t.Fatalf("summary=%+v", summary)
+	}
+}
+
 func TestPrepareDaySavePreservesUnchangedRecordAndRequiresReplacementConfirmation(t *testing.T) {
 	completedAt := time.Date(2026, 9, 11, 9, 50, 0, 0, time.UTC)
 	previous := Day{Date: "2026-09-11", CurrentID: "b", Items: []Item{

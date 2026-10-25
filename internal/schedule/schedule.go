@@ -35,6 +35,16 @@ type Day struct {
 	CurrentID    string   `json:"current_id,omitempty"`
 	RuntimeOrder []string `json:"runtime_order,omitempty"`
 	Events       []Event  `json:"events,omitempty"`
+	ReviewNote   string   `json:"review_note,omitempty"`
+}
+
+// ReviewSummary is derived from recorded actions, never from guessed history.
+type ReviewSummary struct {
+	Score                 int   `json:"score"`
+	CompletedCount        int   `json:"completed_count"`
+	DeviationCount        int   `json:"deviation_count"`
+	TotalDurationSeconds  int64 `json:"total_duration_seconds"`
+	IncompleteLegacyItems bool  `json:"incomplete_legacy_items"`
 }
 
 // Event is one immutable action in a day's execution history.
@@ -184,6 +194,7 @@ func PrepareDaySave(previous Day, next Day, replaceRecorded bool) (Day, error) {
 	}
 	prepared.RuntimeOrder = append([]string(nil), previous.RuntimeOrder...)
 	prepared.Events = append([]Event(nil), previous.Events...)
+	prepared.ReviewNote = previous.ReviewNote
 	return prepared, nil
 }
 
@@ -496,6 +507,34 @@ func Score(events []Event) int {
 		}
 	}
 	return score
+}
+
+// SummarizeReview calculates the daily review from stored execution events.
+func SummarizeReview(day Day) ReviewSummary {
+	summary := ReviewSummary{Score: Score(day.Events)}
+	handled := make(map[string]bool, len(day.Events))
+	for _, event := range day.Events {
+		switch event.Action {
+		case "completed":
+			summary.CompletedCount++
+			handled[event.TaskID] = true
+		case "skipped":
+			summary.DeviationCount++
+			handled[event.TaskID] = true
+		case "reorder":
+			summary.DeviationCount++
+		}
+		if event.DurationSeconds != nil &&
+			(event.Action == "completed" || event.Action == "skipped") {
+			summary.TotalDurationSeconds += *event.DurationSeconds
+		}
+	}
+	for _, item := range day.Items {
+		if item.Status != "" && !handled[item.ID] {
+			summary.IncompleteLegacyItems = true
+		}
+	}
+	return summary
 }
 
 func timelineMinute(item Item) int {

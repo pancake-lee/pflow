@@ -153,6 +153,7 @@ func NewServerWithOptions(staticFS fs.FS, sessionMgr *session.Manager, options S
 	s.HandleFunc("PUT /api/v1/schedule-templates", s.handlePutTemplate)
 	s.HandleFunc("DELETE /api/v1/schedule-templates", s.handleDeleteTemplate)
 	s.HandleFunc("POST /api/v1/schedules/action", s.handleScheduleAction)
+	s.HandleFunc("PUT /api/v1/schedules/review", s.handlePutScheduleReview)
 
 	// Serve static files if embedded, falling back to index.html for SPA routing.
 	if staticFS != nil {
@@ -222,7 +223,36 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 		fog = 1 - reminder/100
 	}
-	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events)})
+	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events), "review": schedule.SummarizeReview(day)})
+}
+
+func (s *Server) handlePutScheduleReview(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Date string `json:"date"`
+		Note string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	if len([]rune(req.Note)) > 300 {
+		writeJSON(w, 400, map[string]string{"error": "review note is too long"})
+		return
+	}
+	updated, err := s.scheduleMgr.Update(func(file *schedule.File) error {
+		day, exists := file.Days[req.Date]
+		if !exists {
+			return fmt.Errorf("schedule not found: %w", errScheduleNotFound)
+		}
+		day.ReviewNote = strings.TrimSpace(req.Note)
+		file.Days[req.Date] = day
+		return nil
+	})
+	if err != nil {
+		writeScheduleError(w, err)
+		return
+	}
+	writeJSON(w, 200, updated.Days[req.Date])
 }
 
 func (s *Server) handlePutSchedule(w http.ResponseWriter, r *http.Request) {

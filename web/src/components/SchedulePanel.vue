@@ -5,6 +5,7 @@ import { highlightToMarquee } from '../composables/useReminderScores'
 
 type Item = { id: string; start: string; day_offset?: number; title: string; focus_minutes: number; break_minutes: number; status?: string }
 type Event = { id: string; task_id?: string; time: string; action: string; duration_seconds?: number; note?: string }
+type ReviewSummary = { score: number; completed_count: number; deviation_count: number; total_duration_seconds: number; incomplete_legacy_items: boolean }
 
 const day = ref('')
 const current = ref<Item | null>(null)
@@ -21,6 +22,10 @@ const runtimeOrder = ref<string[]>([])
 const showMore = ref(false)
 const note = ref('')
 const now = ref(Date.now())
+const review = ref<ReviewSummary | null>(null)
+const reviewNote = ref('')
+const showReview = ref(false)
+const savingReview = ref(false)
 const emit = defineEmits<{ edit: [] }>()
 const message = useMessage()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -41,9 +46,29 @@ async function load() {
     items.value = payload.day.items ?? []
     events.value = payload.day.events ?? []
     runtimeOrder.value = payload.day.runtime_order ?? []
+    review.value = payload.review ?? null
+    if (!showReview.value) reviewNote.value = payload.day.review_note ?? ''
     loadError.value = ''
   } catch {
     loadError.value = '读取今日日程失败，操作暂不可用。'
+  }
+}
+
+async function saveReview() {
+  if (!day.value || savingReview.value) return
+  savingReview.value = true
+  try {
+    const response = await fetch('/api/v1/schedules/review', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: day.value, note: reviewNote.value }),
+    })
+    if (!response.ok) throw new Error('保存对账失败')
+    message.success('已保存明日调整点')
+    await load()
+  } catch {
+    message.error('保存对账失败，请重试')
+  } finally {
+    savingReview.value = false
   }
 }
 
@@ -191,6 +216,22 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+    <div v-if="items.length" class="s-review">
+      <NButton size="tiny" quaternary @click="showReview = !showReview">{{ showReview ? '收起对账' : '日对账' }}</NButton>
+      <div v-if="showReview && review" class="s-extra-content">
+        <div>总分 {{ review.score }} · 完成 {{ review.completed_count }} 项 · 偏离 {{ review.deviation_count }} 次 · 可计算耗时 {{ Math.floor(review.total_duration_seconds / 60) }} 分钟</div>
+        <NAlert v-if="review.incomplete_legacy_items" type="warning">旧日程缺少动作记录，历史积分和耗时未补算。</NAlert>
+        <div v-if="events.length" class="s-events">
+          <div v-for="event in events" :key="event.id">
+            {{ new Date(event.time).toLocaleTimeString() }} · {{ items.find(item => item.id === event.task_id)?.title ?? '日程' }} · {{ actionLabel[event.action] ?? event.action }}<span v-if="event.duration_seconds != null"> · {{ Math.floor(event.duration_seconds / 60) }} 分钟</span><span v-if="event.note"> · {{ event.note }}</span>
+          </div>
+        </div>
+        <div class="s-extra-row">
+          <NInput v-model:value="reviewNote" size="small" placeholder="明天只改一个变量，可留空" maxlength="300" />
+          <NButton size="tiny" :loading="savingReview" @click="saveReview">保存</NButton>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -245,6 +286,7 @@ onUnmounted(() => {
 .s-card--next .s-title { color: #ccc; }
 .s-meta { color: #aaa; }
 .s-extra { padding: 0 4px; }
+.s-review { padding: 0 4px; font-size: 13px; color: #ccc; }
 .s-extra-content { display: grid; gap: 8px; margin-top: 6px; }
 .s-extra-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .s-extra-row .n-input { max-width: 300px; }
