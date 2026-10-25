@@ -188,7 +188,7 @@ func TestExecutionEventsAndRuntimeOrder(t *testing.T) {
 	if day.Items[0].ID != "a" || day.Items[1].ID != "b" || day.Items[2].ID != "c" || day.Items[3].ID != "d" {
 		t.Fatal("runtime reorder changed saved plan order")
 	}
-	if len(day.Events) != 7 || day.Events[1].Action != "early" {
+	if len(day.Events) != 8 || day.Events[1].Action != "early" || day.Events[3].Action != "pause" {
 		t.Fatalf("events=%+v", day.Events)
 	}
 	if day.CurrentID != "c" {
@@ -215,6 +215,58 @@ func TestActionRejectsOutOfOrderCompletion(t *testing.T) {
 	err := ApplyAction(&day, "c", "completed", "", time.Now())
 	if !errors.Is(err, ErrInvalidAction) || len(day.Events) != 0 {
 		t.Fatalf("err=%v events=%+v", err, day.Events)
+	}
+}
+
+func TestJumpAndReturnAccumulateOnlyActiveTime(t *testing.T) {
+	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 30},
+		{ID: "c", Start: "11:00", Title: "C", FocusMinutes: 30},
+	}}
+	base := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	steps := []struct {
+		id, action string
+		minute     int
+	}{
+		{"a", "start", 0}, {"c", "reorder", 10}, {"c", "start", 10},
+		{"c", "completed", 30}, {"a", "start", 40},
+		{"a", "completed", 55},
+	}
+	for _, step := range steps {
+		if err := ApplyAction(&day, step.id, step.action, "", base.Add(time.Duration(step.minute)*time.Minute)); err != nil {
+			t.Fatalf("%s %s: %v", step.id, step.action, err)
+		}
+	}
+	var durations = map[string]int64{}
+	for _, event := range day.Events {
+		if event.Action == "completed" && event.DurationSeconds != nil {
+			durations[event.TaskID] = *event.DurationSeconds
+		}
+	}
+	if durations["a"] != 25*60 || durations["c"] != 20*60 {
+		t.Fatalf("durations=%v", durations)
+	}
+	if got := SummarizeReview(day).TotalDurationSeconds; got != 45*60 {
+		t.Fatalf("total duration=%d", got)
+	}
+}
+
+func TestLeavePausesTimingUntilReturn(t *testing.T) {
+	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30}}}
+	base := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	for _, step := range []struct {
+		action string
+		minute int
+	}{
+		{"start", 0}, {"leave", 5}, {"return", 25}, {"start", 25}, {"completed", 35},
+	} {
+		if err := ApplyAction(&day, "a", step.action, "", base.Add(time.Duration(step.minute)*time.Minute)); err != nil {
+			t.Fatalf("%s: %v", step.action, err)
+		}
+	}
+	if got := SummarizeReview(day).TotalDurationSeconds; got != 15*60 {
+		t.Fatalf("total duration=%d", got)
 	}
 }
 

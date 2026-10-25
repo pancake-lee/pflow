@@ -10,7 +10,7 @@ const source = readFileSync(new URL('../src/components/SchedulePanel.vue', impor
 function panel(fetch) {
   const errors = []
   const context = vm.createContext({
-    ref, computed, fetch, onMounted: () => {}, onUnmounted: () => {},
+    ref, computed, fetch, document: { visibilityState: 'visible' }, onMounted: () => {}, onUnmounted: () => {},
     defineEmits: () => () => {}, useMessage: () => ({ error: message => errors.push(message) }),
     highlightToMarquee: () => ({ visible: false }),
   })
@@ -28,7 +28,11 @@ test('a failed action gives feedback and retains the current item for retry', as
 test('an in-flight action prevents duplicate completion and reloads after success', async () => {
   let release, posts = 0
   const api = panel(async (_, options) => {
-    if (options) { posts++; await new Promise(resolve => { release = resolve }); return { ok: true } }
+    if (options) {
+      posts++
+      if (JSON.parse(options.body).action === 'completed') await new Promise(resolve => { release = resolve })
+      return { ok: true, json: async () => ({ events: [] }) }
+    }
     return { ok: true, json: async () => ({ day: {date:'2026-10-13'}, current:{id:'b',title:'B'}, phase:'focus' }) }
   })
   const first = api.run("act('completed')")
@@ -38,5 +42,28 @@ test('an in-flight action prevents duplicate completion and reloads after succes
   release()
   await first
   assert.equal(api.run('current.value.id'), 'b')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(posts, 2)
   assert.equal(api.run('acting.value'), false)
+})
+
+test('automatic start retries after failure and restarts after a pause', async () => {
+  let posts = 0
+  const api = panel(async (_, options) => {
+    if (options) {
+      posts++
+      return { ok: posts !== 1, json: async () => ({ events: [] }) }
+    }
+    return { ok: true, json: async () => ({ day: { date: '2026-10-13' }, current: { id: 'a', title: 'A' }, phase: 'focus' }) }
+  })
+  api.run('maybeAutoStart()')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(posts, 1)
+  api.run('maybeAutoStart()')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(posts, 2)
+  api.run("events.value = [{ id: 'pause-1', task_id: 'a', action: 'pause', time: '2026-10-13T09:10:00Z', duration_seconds: 600 }]")
+  api.run('maybeAutoStart()')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(posts, 3)
 })

@@ -233,6 +233,7 @@ async function act(action: string, id = current.value?.id, actionNote = '') {
       stopLeaveTimer()
     }
   } catch {
+    if (action === 'start') autoStartAttempted = ''
     message.error('更新日程状态失败，请重试')
   } finally {
     acting.value = false
@@ -243,11 +244,22 @@ async function act(action: string, id = current.value?.id, actionNote = '') {
 function maybeAutoStart() {
   const id = current.value?.id
   if (!id || acting.value || activeLeave.value ||
-      document.visibilityState === 'hidden' || elapsed.value) return
-  const key = `${day.value}:${id}`
+      document.visibilityState === 'hidden' || hasActiveStart(id)) return
+  const lastPause = [...events.value].reverse().find(event => event.task_id === id && event.action === 'pause')
+  const key = `${day.value}:${id}:${lastPause?.id ?? ''}`
   if (autoStartAttempted === key) return
   autoStartAttempted = key
   void act('start', id)
+}
+
+function hasActiveStart(id: string) {
+  for (let i = events.value.length - 1; i >= 0; i--) {
+    const event = events.value[i]
+    if (event.task_id !== id) continue
+    if (event.action === 'start') return true
+    if (['pause', 'completed', 'skipped'].includes(event.action)) return false
+  }
+  return false
 }
 
 function onVisibilityChange() {
@@ -293,20 +305,23 @@ function selectReorder(value: string | null) {
 const elapsed = computed(() => {
   const id = current.value?.id
   if (!id) return ''
-  for (let i = events.value.length - 1; i >= 0; i--) {
-    const event = events.value[i]
+  let seconds = 0
+  let started = ''
+  for (const event of events.value) {
     if (event.task_id !== id) continue
-    if (event.action === 'completed' || event.action === 'skipped') return ''
-    if (event.action === 'start') {
-      const seconds = Math.max(0, Math.floor((now.value - Date.parse(event.time)) / 1000))
-      return `已计时 ${Math.floor(seconds / 60)} 分钟`
+    if (event.action === 'start') started = event.time
+    if (event.action === 'pause') {
+      seconds += event.duration_seconds ?? (started ? Math.max(0, Math.floor((Date.parse(event.time) - Date.parse(started)) / 1000)) : 0)
+      started = ''
     }
   }
-  return ''
+  if (started) seconds += Math.max(0, Math.floor((now.value - Date.parse(started)) / 1000))
+  return seconds || started ? `已计时 ${Math.floor(seconds / 60)} 分钟` : ''
 })
 
 const actionLabel: Record<string, string> = {
   start: '开始', completed: '完成', skipped: '跳过',
+  pause: '暂停计时',
   early: '提前', reorder: '跳转日程', delay: '拖延', note: '备注',
   park: '记下', parking_processed: '处理停车场',
   leave: '暂离', return: '返回',

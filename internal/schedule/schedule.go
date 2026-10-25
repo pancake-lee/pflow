@@ -424,6 +424,7 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		if ActiveLeave(day.Events) != nil {
 			return nil
 		}
+		pauseTiming(day, taskID, now)
 		appendEvent(day, taskID, action, strings.TrimSpace(note), now, nil)
 		return nil
 	}
@@ -457,6 +458,7 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		if position < 0 {
 			return fmt.Errorf("%w: target not pending", ErrInvalidAction)
 		}
+		pauseTiming(day, current.ID, now)
 		reordered := []string{taskID}
 		for _, candidate := range items {
 			if candidate.ID != taskID {
@@ -481,11 +483,7 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		appendEvent(day, taskID, action, "", now, nil)
 	case "completed", "skipped":
 		var duration *int64
-		if started := activeStart(day.Events, taskID); started != nil {
-			seconds := int64(now.Sub(started.Time).Seconds())
-			if seconds < 0 {
-				seconds = 0
-			}
+		if seconds, recorded := accumulatedDuration(day.Events, taskID, now); recorded {
 			duration = &seconds
 		}
 		item.Status = action
@@ -522,7 +520,7 @@ func activeStart(events []Event, taskID string) *Event {
 		if event.TaskID != taskID {
 			continue
 		}
-		if event.Action == "completed" || event.Action == "skipped" {
+		if event.Action == "completed" || event.Action == "skipped" || event.Action == "pause" {
 			return nil
 		}
 		if event.Action == "start" {
@@ -530,6 +528,42 @@ func activeStart(events []Event, taskID string) *Event {
 		}
 	}
 	return nil
+}
+
+func pauseTiming(day *Day, taskID string, now time.Time) {
+	if started := activeStart(day.Events, taskID); started != nil {
+		seconds := max(int64(now.Sub(started.Time).Seconds()), 0)
+		appendEvent(day, taskID, "pause", "", now, &seconds)
+	}
+}
+
+func accumulatedDuration(events []Event, taskID string, now time.Time) (int64, bool) {
+	var seconds int64
+	var started *Event
+	var recorded bool
+	for i := range events {
+		event := &events[i]
+		if event.TaskID != taskID {
+			continue
+		}
+		switch event.Action {
+		case "start":
+			started = event
+			recorded = true
+		case "pause":
+			if event.DurationSeconds != nil {
+				seconds += *event.DurationSeconds
+			} else if started != nil {
+				seconds += max(int64(event.Time.Sub(started.Time).Seconds()), 0)
+			}
+			started = nil
+			recorded = true
+		}
+	}
+	if started != nil {
+		seconds += max(int64(now.Sub(started.Time).Seconds()), 0)
+	}
+	return seconds, recorded
 }
 
 func appendEvent(day *Day, taskID, action, note string, now time.Time, duration *int64) {
