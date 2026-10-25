@@ -898,10 +898,10 @@ function rowProps(row: DashboardEntry) {
 
         <SchedulePanel @edit="emit('openSchedule')" />
 
-        <!-- Main content -->
         <div v-if="loading && !data" class="refresh-hint">正在获取数据…</div>
-          <div v-if="groupedSessions.length > 0" class="groups-container">
-
+        <section v-if="data" class="feature-zone feature-zone--meta">
+          <h2 class="feature-zone-title">元认知</h2>
+          <div class="feature-zone-content">
             <!-- 🎯 今日目标 — standalone goal sentence -->
             <div v-if="todayGoal" class="zone-section">
               <div class="goal-card">
@@ -927,6 +927,12 @@ function rowProps(row: DashboardEntry) {
               <SuggestCard :suggestions="suggestions" />
               <KnowledgeAnchor :suggestions="suggestions" :custom-tips="data?.custom_knowledge_tips ?? []" />
             </div>
+
+          </div>
+        </section>
+        <section v-if="data" class="feature-zone feature-zone--agent">
+          <h2 class="feature-zone-title">Agent</h2>
+          <div v-if="groupedSessions.length > 0" class="groups-container">
 
             <!-- ⭐ 主线项目 — full-width card, always visible (header now inside PrimaryCard) -->
             <div class="zone-section zone-section--primary">
@@ -1037,17 +1043,12 @@ function rowProps(row: DashboardEntry) {
 
           </div>
 
-          <!-- Knowledge remains useful when no sessions match the current filters. -->
-          <div v-if="data && groupedSessions.length === 0" class="suggestion-knowledge-row">
-            <SuggestCard :suggestions="suggestions" />
-            <KnowledgeAnchor :suggestions="suggestions" :custom-tips="data.custom_knowledge_tips ?? []" />
-          </div>
-
           <!-- Empty state -->
-          <div v-if="data && filteredSessions.length === 0" class="empty-state">
+          <div v-if="filteredSessions.length === 0" class="empty-state">
             <p>No active sessions found in the selected time window.</p>
             <p class="hint">Try increasing the window or checking if agents are running.</p>
           </div>
+        </section>
       </div>
     </NLayoutContent>
 
@@ -1168,6 +1169,33 @@ function rowProps(row: DashboardEntry) {
 }
 .suggestion-knowledge-row > * { min-width: 0; }
 @media (max-width: 760px) { .suggestion-knowledge-row { grid-template-columns: 1fr; } }
+
+.feature-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid rgba(94, 163, 240, .28);
+  border-radius: 12px;
+  background: rgba(32, 128, 240, .025);
+}
+
+.feature-zone--agent {
+  border-color: rgba(24, 160, 88, .25);
+  background: rgba(24, 160, 88, .025);
+}
+
+.feature-zone-title {
+  margin: 0;
+  color: #8bbdff;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.feature-zone--agent .feature-zone-title { color: #72c99a; }
+.feature-zone-content { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
 /* ── Header ─────────────────────────────────── */
 

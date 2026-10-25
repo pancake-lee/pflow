@@ -10,7 +10,7 @@ const source = readFileSync(new URL('../src/views/SettingsView.vue', import.meta
   .replace(/^import .*$/gm, '')
 const defaults = {
   version: 1,
-  dashboard: { window: '1d', max_active: 1, max_inactive: 1, refresh_seconds: 30, daily_boot_enabled: true },
+  dashboard: { window: '1d', max_active: 1, max_inactive: 1, agent_filter: 'all', refresh_seconds: 30, daily_boot_enabled: true },
   attention: { protect_minutes: 5, focus_add_minutes: 15, mask_strength: 1 },
   time_estimate: { minutes_per_message: 3, fallback_ratio: .3 },
   custom_knowledge_tips: [],
