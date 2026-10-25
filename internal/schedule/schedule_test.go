@@ -165,6 +165,68 @@ func TestAdvanceFallsBackToFreeAfterLastItem(t *testing.T) {
 	}
 }
 
+func TestExecutionEventsAndRuntimeOrder(t *testing.T) {
+	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 30},
+		{ID: "c", Start: "11:00", Title: "C", FocusMinutes: 30},
+		{ID: "d", Start: "12:00", Title: "D", FocusMinutes: 30},
+	}}
+	now := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	for _, step := range []struct{ id, action string }{
+		{"a", "start"}, {"b", "completed"}, {"d", "reorder"},
+		{"d", "delay"}, {"d", "completed"}, {"a", "skipped"},
+	} {
+		if err := ApplyAction(&day, step.id, step.action, "", now); err != nil {
+			t.Fatalf("%s %s: %v", step.id, step.action, err)
+		}
+		now = now.Add(time.Minute)
+	}
+	if got := Score(day.Events); got != 14 {
+		t.Fatalf("score=%d, want 14", got)
+	}
+	if day.Items[0].ID != "a" || day.Items[1].ID != "b" || day.Items[2].ID != "c" || day.Items[3].ID != "d" {
+		t.Fatal("runtime reorder changed saved plan order")
+	}
+	if len(day.Events) != 7 || day.Events[1].Action != "early" {
+		t.Fatalf("events=%+v", day.Events)
+	}
+	if day.CurrentID != "c" {
+		t.Fatalf("current=%s, want c", day.CurrentID)
+	}
+	count := len(day.Events)
+	if err := ApplyAction(&day, "a", "skipped", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if len(day.Events) != count || Score(day.Events) != 14 {
+		t.Fatal("duplicate action changed events or score")
+	}
+}
+
+func TestActionRejectsOutOfOrderCompletion(t *testing.T) {
+	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 30},
+		{ID: "c", Start: "11:00", Title: "C", FocusMinutes: 30},
+	}}
+	err := ApplyAction(&day, "c", "completed", "", time.Now())
+	if !errors.Is(err, ErrInvalidAction) || len(day.Events) != 0 {
+		t.Fatalf("err=%v events=%+v", err, day.Events)
+	}
+}
+
+func TestPlanEditPreservesExecutionEvents(t *testing.T) {
+	previous := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30},
+	}}
+	previous.Events = []Event{{ID: "one", TaskID: "a", Action: "start"}}
+	next := Day{Date: previous.Date, Items: append([]Item(nil), previous.Items...)}
+	prepared, err := PrepareDaySave(previous, next, false)
+	if err != nil || len(prepared.Events) != 1 || prepared.Events[0].ID != "one" {
+		t.Fatalf("prepared=%+v err=%v", prepared, err)
+	}
+}
+
 func TestPrepareDaySavePreservesUnchangedRecordAndRequiresReplacementConfirmation(t *testing.T) {
 	completedAt := time.Date(2026, 9, 11, 9, 50, 0, 0, time.UTC)
 	previous := Day{Date: "2026-09-11", CurrentID: "b", Items: []Item{

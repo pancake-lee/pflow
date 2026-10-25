@@ -222,7 +222,7 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 		fog = 1 - reminder/100
 	}
-	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates})
+	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events)})
 }
 
 func (s *Server) handlePutSchedule(w http.ResponseWriter, r *http.Request) {
@@ -337,13 +337,10 @@ func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
 		Date   string `json:"date"`
 		ID     string `json:"id"`
 		Action string `json:"action"`
+		Note   string `json:"note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
-		return
-	}
-	if req.Action != "completed" && req.Action != "skipped" {
-		writeJSON(w, 400, map[string]string{"error": "action must be completed or skipped"})
 		return
 	}
 	updated, err := s.scheduleMgr.Update(func(file *schedule.File) error {
@@ -351,19 +348,11 @@ func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			return fmt.Errorf("schedule not found: %w", errScheduleNotFound)
 		}
-		found := false
-		for i := range day.Items {
-			if day.Items[i].ID == req.ID {
-				day.Items[i].Status = req.Action
-				day.Items[i].CompletedAt = time.Now()
-				found = true
-			}
-		}
-		if !found {
-			return fmt.Errorf("item not found: %w", errScheduleNotFound)
-		}
-		if day.CurrentID == req.ID {
-			schedule.Advance(&day, req.ID)
+		actionErr := schedule.ApplyAction(
+			&day, req.ID, req.Action, req.Note, time.Now(),
+		)
+		if actionErr != nil {
+			return actionErr
 		}
 		file.Days[req.Date] = day
 		return nil
@@ -390,6 +379,8 @@ func writeScheduleError(w http.ResponseWriter, err error) {
 		payload["code"] = "template_name_conflict"
 	case errors.Is(err, schedule.ErrInvalidSchedule):
 		status = http.StatusBadRequest
+	case errors.Is(err, schedule.ErrInvalidAction):
+		status = http.StatusConflict
 	case errors.Is(err, errScheduleNotFound):
 		status = http.StatusNotFound
 	}

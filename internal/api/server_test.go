@@ -85,6 +85,46 @@ func TestTemplateRenameCannotBypassNameConflictWithAnExistingID(t *testing.T) {
 	}
 }
 
+func TestScheduleActionPersistsOnceAndRejectsDistantCompletion(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	day := schedule.Day{Date: "2026-10-25", CurrentID: "a", Items: []schedule.Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 30},
+		{ID: "c", Start: "11:00", Title: "C", FocusMinutes: 30},
+	}}
+	file := schedule.File{Days: map[string]schedule.Day{day.Date: day}}
+	if err := server.scheduleMgr.Save(file); err != nil {
+		t.Fatal(err)
+	}
+	requestBody := `{"date":"2026-10-25","id":"c","action":"completed"}`
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodPost, "/api/v1/schedules/action", bytes.NewBufferString(requestBody),
+	))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("distant status=%d body=%s", response.Code, response.Body.String())
+	}
+	requestBody = `{"date":"2026-10-25","id":"a","action":"completed"}`
+	for i := 0; i < 2; i++ {
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(
+			http.MethodPost, "/api/v1/schedules/action", bytes.NewBufferString(requestBody),
+		))
+		if response.Code != http.StatusOK {
+			t.Fatalf("completion status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	loaded, err := server.scheduleMgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := loaded.Days[day.Date]
+	if len(saved.Events) != 1 || schedule.Score(saved.Events) != 10 || saved.CurrentID != "b" {
+		t.Fatalf("saved=%+v", saved)
+	}
+}
+
 func TestConcurrentScheduleAndTemplateUpdatesDoNotOverwrite(t *testing.T) {
 	server := NewServer(nil, nil)
 	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))

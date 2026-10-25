@@ -30,9 +30,21 @@ type Item struct {
 	CompletedAt  time.Time `json:"completed_at,omitempty"`
 }
 type Day struct {
-	Date      string `json:"date"`
-	Items     []Item `json:"items"`
-	CurrentID string `json:"current_id,omitempty"`
+	Date         string   `json:"date"`
+	Items        []Item   `json:"items"`
+	CurrentID    string   `json:"current_id,omitempty"`
+	RuntimeOrder []string `json:"runtime_order,omitempty"`
+	Events       []Event  `json:"events,omitempty"`
+}
+
+// Event is one immutable action in a day's execution history.
+type Event struct {
+	ID              string    `json:"id"`
+	TaskID          string    `json:"task_id,omitempty"`
+	Time            time.Time `json:"time"`
+	Action          string    `json:"action"`
+	DurationSeconds *int64    `json:"duration_seconds,omitempty"`
+	Note            string    `json:"note,omitempty"`
 }
 type Template struct {
 	ID    string `json:"id"`
@@ -170,6 +182,8 @@ func PrepareDaySave(previous Day, next Day, replaceRecorded bool) (Day, error) {
 	if prepared.CurrentID == "" && containsItem(prepared.Items, previous.CurrentID) {
 		prepared.CurrentID = previous.CurrentID
 	}
+	prepared.RuntimeOrder = append([]string(nil), previous.RuntimeOrder...)
+	prepared.Events = append([]Event(nil), previous.Events...)
 	return prepared, nil
 }
 
@@ -249,7 +263,7 @@ func Current(day Day, now time.Time) (Item, *Item) {
 	if len(day.Items) == 0 {
 		return free, nil
 	}
-	sortItems(day.Items)
+	day.Items = orderedItems(day)
 	current := free
 	if day.CurrentID != "" {
 		for _, item := range day.Items {
@@ -325,6 +339,165 @@ func sortItems(itemList []Item) {
 	})
 }
 
+func orderedItems(day Day) []Item {
+	items := append([]Item(nil), day.Items...)
+	sortItems(items)
+	if len(day.RuntimeOrder) == 0 {
+		return items
+	}
+	byID := make(map[string]Item, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	ordered := make([]Item, 0, len(items))
+	seen := make(map[string]bool, len(items))
+	for _, id := range day.RuntimeOrder {
+		if item, ok := byID[id]; ok && !seen[id] {
+			ordered = append(ordered, item)
+			seen[id] = true
+		}
+	}
+	for _, item := range items {
+		if !seen[item.ID] {
+			ordered = append(ordered, item)
+		}
+	}
+	return ordered
+}
+
+// ErrInvalidAction means an action cannot be applied to the current day state.
+var ErrInvalidAction = errors.New("invalid schedule action")
+
+// ApplyAction records a validated execution action and updates runtime position.
+// It leaves the saved plan order and item definitions unchanged.
+func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
+	items := orderedItems(*day)
+	current, next := Current(*day, now)
+	index := -1
+	for i := range day.Items {
+		if day.Items[i].ID == taskID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return fmt.Errorf("%w: item not found", ErrInvalidAction)
+	}
+	item := &day.Items[index]
+	if action == "note" {
+		if strings.TrimSpace(note) == "" {
+			return fmt.Errorf("%w: note is empty", ErrInvalidAction)
+		}
+		appendEvent(day, taskID, action, strings.TrimSpace(note), now, nil)
+		return nil
+	}
+	if item.Status != "" {
+		if action == "completed" || action == "skipped" {
+			return nil
+		}
+		return fmt.Errorf("%w: item already handled", ErrInvalidAction)
+	}
+	if action == "reorder" {
+		if current.ID == "" || taskID == current.ID {
+			return fmt.Errorf("%w: no reorder target", ErrInvalidAction)
+		}
+		if next != nil && taskID == next.ID {
+			return fmt.Errorf("%w: complete next item early instead", ErrInvalidAction)
+		}
+		position := -1
+		for i, candidate := range items {
+			if candidate.ID == taskID {
+				position = i
+				break
+			}
+		}
+		if position < 0 {
+			return fmt.Errorf("%w: target not pending", ErrInvalidAction)
+		}
+		reordered := []string{taskID}
+		for _, candidate := range items {
+			if candidate.ID != taskID {
+				reordered = append(reordered, candidate.ID)
+			}
+		}
+		day.RuntimeOrder = reordered
+		day.CurrentID = taskID
+		appendEvent(day, taskID, action, "", now, nil)
+		return nil
+	}
+	if current.ID != taskID && !(action == "completed" && next != nil && next.ID == taskID) {
+		return fmt.Errorf("%w: item is not current", ErrInvalidAction)
+	}
+	switch action {
+	case "start":
+		if activeStart(day.Events, taskID) != nil {
+			return nil
+		}
+		appendEvent(day, taskID, action, "", now, nil)
+	case "delay":
+		appendEvent(day, taskID, action, "", now, nil)
+	case "completed", "skipped":
+		var duration *int64
+		if started := activeStart(day.Events, taskID); started != nil {
+			seconds := int64(now.Sub(started.Time).Seconds())
+			if seconds < 0 {
+				seconds = 0
+			}
+			duration = &seconds
+		}
+		item.Status = action
+		item.CompletedAt = now
+		if action == "completed" && current.ID != taskID {
+			appendEvent(day, taskID, "early", "", now, nil)
+		}
+		appendEvent(day, taskID, action, "", now, duration)
+		if current.ID == taskID {
+			Advance(day, taskID)
+		}
+	default:
+		return fmt.Errorf("%w: unknown action", ErrInvalidAction)
+	}
+	return nil
+}
+
+func activeStart(events []Event, taskID string) *Event {
+	for i := len(events) - 1; i >= 0; i-- {
+		event := &events[i]
+		if event.TaskID != taskID {
+			continue
+		}
+		if event.Action == "completed" || event.Action == "skipped" {
+			return nil
+		}
+		if event.Action == "start" {
+			return event
+		}
+	}
+	return nil
+}
+
+func appendEvent(day *Day, taskID, action, note string, now time.Time, duration *int64) {
+	day.Events = append(day.Events, Event{
+		ID:     fmt.Sprintf("%d-%d", now.UnixNano(), len(day.Events)),
+		TaskID: taskID, Time: now, Action: action, Note: note,
+		DurationSeconds: duration,
+	})
+}
+
+// Score totals event points without storing a second mutable score.
+func Score(events []Event) int {
+	score := 0
+	for _, event := range events {
+		switch event.Action {
+		case "completed":
+			score += 10
+		case "skipped", "reorder":
+			score -= 3
+		}
+	}
+	return score
+}
+
 func timelineMinute(item Item) int {
 	parsed, err := time.Parse("15:04", item.Start)
 	if err != nil {
@@ -351,13 +524,14 @@ func nextItem(items []Item, currentID string) *Item {
 // user complete/skip immediately promotes it regardless of wall time. When no
 // pending item remains it clears the pin and falls back to the free schedule.
 func Advance(day *Day, fromID string) (Item, *Item) {
-	next := nextItem(day.Items, fromID)
+	items := orderedItems(*day)
+	next := nextItem(items, fromID)
 	if next == nil {
 		day.CurrentID = ""
 		return Item{Title: "自由日程"}, nil
 	}
 	day.CurrentID = next.ID
-	return *next, nextItem(day.Items, next.ID)
+	return *next, nextItem(items, next.ID)
 }
 
 func SetCurrent(day *Day, now time.Time) (Item, *Item) {
