@@ -37,3 +37,6 @@ bin/
 .local
 logs
 .pids
+docs/backlog.md
+
+temp.*
