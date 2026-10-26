@@ -49,11 +49,13 @@ type ParkingItem struct {
 
 // ReviewSummary is derived from recorded actions, never from guessed history.
 type ReviewSummary struct {
-	Score                 int   `json:"score"`
-	CompletedCount        int   `json:"completed_count"`
-	DeviationCount        int   `json:"deviation_count"`
-	TotalDurationSeconds  int64 `json:"total_duration_seconds"`
-	IncompleteLegacyItems bool  `json:"incomplete_legacy_items"`
+	Score                 int      `json:"score"`
+	MaxScore              int      `json:"max_score"`
+	StandardScore         *float64 `json:"standard_score"`
+	CompletedCount        int      `json:"completed_count"`
+	DeviationCount        int      `json:"deviation_count"`
+	TotalDurationSeconds  int64    `json:"total_duration_seconds"`
+	IncompleteLegacyItems bool     `json:"incomplete_legacy_items"`
 }
 
 // Event is one immutable action in a day's execution history.
@@ -62,6 +64,7 @@ type Event struct {
 	TaskID          string    `json:"task_id,omitempty"`
 	Time            time.Time `json:"time"`
 	Action          string    `json:"action"`
+	Points          *int      `json:"points,omitempty"`
 	DurationSeconds *int64    `json:"duration_seconds,omitempty"`
 	Note            string    `json:"note,omitempty"`
 }
@@ -445,9 +448,6 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		if current.ID == "" || taskID == current.ID {
 			return fmt.Errorf("%w: no reorder target", ErrInvalidAction)
 		}
-		if next != nil && taskID == next.ID {
-			return fmt.Errorf("%w: complete next item early instead", ErrInvalidAction)
-		}
 		position := -1
 		for i, candidate := range items {
 			if candidate.ID == taskID {
@@ -468,6 +468,8 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		day.RuntimeOrder = reordered
 		day.CurrentID = taskID
 		appendEvent(day, taskID, action, "", now, nil)
+		points := JumpPoints(*day, taskID, now)
+		day.Events[len(day.Events)-1].Points = &points
 		return nil
 	}
 	if current.ID != taskID && !(action == "completed" && next != nil && next.ID == taskID) {
@@ -499,6 +501,22 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		return fmt.Errorf("%w: unknown action", ErrInvalidAction)
 	}
 	return nil
+}
+
+// JumpPoints returns zero when the target's planned focus or break interval owns now.
+// The result is stored on the event so later plan edits cannot rewrite history.
+func JumpPoints(day Day, taskID string, now time.Time) int {
+	for _, item := range day.Items {
+		if item.ID != taskID {
+			continue
+		}
+		start, err := ItemStart(day.Date, item, now.Location())
+		if err == nil && !now.Before(start) && now.Before(start.Add(time.Duration(item.FocusMinutes+item.BreakMinutes)*time.Minute)) {
+			return 0
+		}
+		break
+	}
+	return -3
 }
 
 // ActiveLeave returns the unmatched leave event, if the user has not returned.
@@ -578,19 +596,33 @@ func appendEvent(day *Day, taskID, action, note string, now time.Time, duration 
 func Score(events []Event) int {
 	score := 0
 	for _, event := range events {
-		switch event.Action {
-		case "completed":
-			score += 10
-		case "skipped", "reorder":
-			score -= 3
-		}
+		score += EventPoints(event)
 	}
 	return score
 }
 
+// EventPoints preserves explicit results for new events and old fixed rules for legacy events.
+func EventPoints(event Event) int {
+	if event.Points != nil {
+		return *event.Points
+	}
+	switch event.Action {
+	case "completed":
+		return 10
+	case "skipped", "reorder":
+		return -3
+	default:
+		return 0
+	}
+}
+
 // SummarizeReview calculates the daily review from stored execution events.
 func SummarizeReview(day Day) ReviewSummary {
-	summary := ReviewSummary{Score: Score(day.Events)}
+	summary := ReviewSummary{Score: Score(day.Events), MaxScore: 10 * len(day.Items)}
+	if summary.MaxScore > 0 {
+		standard := 100 * float64(summary.Score) / float64(summary.MaxScore)
+		summary.StandardScore = &standard
+	}
 	handled := make(map[string]bool, len(day.Events))
 	for _, event := range day.Events {
 		switch event.Action {
@@ -601,7 +633,9 @@ func SummarizeReview(day Day) ReviewSummary {
 			summary.DeviationCount++
 			handled[event.TaskID] = true
 		case "reorder":
-			summary.DeviationCount++
+			if EventPoints(event) < 0 {
+				summary.DeviationCount++
+			}
 		}
 		if event.DurationSeconds != nil &&
 			(event.Action == "completed" || event.Action == "skipped") {

@@ -251,7 +251,15 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 		fog = 1 - reminder/100
 	}
-	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events), "review": schedule.SummarizeReview(day), "active_leave": schedule.ActiveLeave(day.Events)})
+	jumpPoints := make(map[string]int)
+	if current.ID != "" {
+		for _, item := range day.Items {
+			if item.Status == "" && item.ID != current.ID {
+				jumpPoints[item.ID] = schedule.JumpPoints(day, item.ID, now)
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events), "review": schedule.SummarizeReview(day), "jump_points": jumpPoints, "active_leave": schedule.ActiveLeave(day.Events)})
 }
 
 func (s *Server) handleGetScheduleReview(w http.ResponseWriter, r *http.Request) {

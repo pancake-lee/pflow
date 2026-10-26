@@ -252,6 +252,70 @@ func TestJumpAndReturnAccumulateOnlyActiveTime(t *testing.T) {
 	}
 }
 
+func TestJumpBackToPlannedIntervalDoesNotCostPoints(t *testing.T) {
+	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 20, BreakMinutes: 10},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 20, BreakMinutes: 10},
+		{ID: "c", Start: "11:00", Title: "C", FocusMinutes: 20, BreakMinutes: 10},
+	}}
+	base := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	if err := ApplyAction(&day, "c", "reorder", "", base.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyAction(&day, "a", "reorder", "", base.Add(25*time.Minute)); err != nil {
+		t.Fatalf("jumping back to the next displayed item: %v", err)
+	}
+	if day.CurrentID != "a" || Score(day.Events) != -3 || EventPoints(day.Events[1]) != 0 {
+		t.Fatalf("return to plan: current=%q events=%+v score=%d", day.CurrentID, day.Events, Score(day.Events))
+	}
+	if summary := SummarizeReview(day); summary.DeviationCount != 1 || summary.MaxScore != 30 || summary.StandardScore == nil || *summary.StandardScore != -10 {
+		t.Fatalf("summary=%+v", summary)
+	}
+	day.Items[0].Start = "08:00" // A later plan edit must not change the recorded jump result.
+	if Score(day.Events) != -3 || EventPoints(day.Events[1]) != 0 {
+		t.Fatalf("plan edit changed historical points: %+v", day.Events)
+	}
+	manager := NewManagerAt(filepath.Join(t.TempDir(), "schedule.json"))
+	if err := manager.Save(File{Days: map[string]Day{day.Date: day}}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := manager.Load()
+	if err != nil || Score(reloaded.Days[day.Date].Events) != -3 || EventPoints(reloaded.Days[day.Date].Events[1]) != 0 {
+		t.Fatalf("reloaded points=%+v err=%v", reloaded.Days[day.Date].Events, err)
+	}
+}
+
+func TestJumpPointsUsesFocusAndBreakInterval(t *testing.T) {
+	day := Day{Date: "2026-10-25", Items: []Item{{ID: "a", Start: "09:00", FocusMinutes: 20, BreakMinutes: 10}}}
+	base := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		minute int
+		want   int
+	}{
+		{-1, -3}, {0, 0}, {19, 0}, {29, 0}, {30, -3}, {45, -3},
+	} {
+		if got := JumpPoints(day, "a", base.Add(time.Duration(tc.minute)*time.Minute)); got != tc.want {
+			t.Fatalf("minute %d: points=%d want %d", tc.minute, got, tc.want)
+		}
+	}
+}
+
+func TestStandardScoreForVariableAndEmptyPlans(t *testing.T) {
+	completed := Event{Action: "completed"}
+	legacyJump := Event{Action: "reorder"}
+	zero := 0
+	freeJump := Event{Action: "reorder", Points: &zero}
+	day := Day{Items: []Item{{ID: "a"}, {ID: "b"}}, Events: []Event{completed, legacyJump, freeJump}}
+	summary := SummarizeReview(day)
+	if summary.Score != 7 || summary.MaxScore != 20 || summary.StandardScore == nil || *summary.StandardScore != 35 || summary.DeviationCount != 1 {
+		t.Fatalf("summary=%+v", summary)
+	}
+	empty := SummarizeReview(Day{})
+	if empty.MaxScore != 0 || empty.StandardScore != nil {
+		t.Fatalf("empty plan standard score=%+v", empty)
+	}
+}
+
 func TestLeavePausesTimingUntilReturn(t *testing.T) {
 	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30}}}
 	base := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)

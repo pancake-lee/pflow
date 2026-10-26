@@ -4,8 +4,8 @@ import { NAlert, NButton, NInput, NModal, NSelect, useMessage } from 'naive-ui'
 import { highlightToMarquee } from '../composables/useReminderScores'
 
 type Item = { id: string; start: string; day_offset?: number; title: string; focus_minutes: number; break_minutes: number; status?: string }
-type Event = { id: string; task_id?: string; time: string; action: string; duration_seconds?: number; note?: string }
-type ReviewSummary = { score: number; completed_count: number; deviation_count: number; total_duration_seconds: number; incomplete_legacy_items: boolean }
+type Event = { id: string; task_id?: string; time: string; action: string; points?: number; duration_seconds?: number; note?: string }
+type ReviewSummary = { score: number; max_score: number; standard_score: number | null; completed_count: number; deviation_count: number; total_duration_seconds: number; incomplete_legacy_items: boolean }
 type ParkingItem = { id: string; content: string; created_at: string; processed_at?: string | null }
 
 const day = ref('')
@@ -20,8 +20,10 @@ const acting = ref(false)
 const items = ref<Item[]>([])
 const events = ref<Event[]>([])
 const runtimeOrder = ref<string[]>([])
+const jumpPoints = ref<Record<string, number>>({})
 const now = ref(Date.now())
 const review = ref<ReviewSummary | null>(null)
+const todayReview = ref<ReviewSummary | null>(null)
 const reviewDate = ref('')
 const reviewItems = ref<Item[]>([])
 const reviewEvents = ref<Event[]>([])
@@ -67,6 +69,8 @@ async function load() {
     items.value = payload.day.items ?? []
     events.value = payload.day.events ?? []
     runtimeOrder.value = payload.day.runtime_order ?? []
+    jumpPoints.value = payload.jump_points ?? {}
+    todayReview.value = payload.review ?? null
     parking.value = payload.day.parking ?? []
     activeLeave.value = payload.active_leave ?? null
     loadError.value = ''
@@ -292,11 +296,26 @@ const pending = computed(() => {
   const ordered = runtimeOrder.value.length
     ? [...runtimeOrder.value.map(id => byID.get(id)).filter((item): item is Item => !!item), ...items.value.filter(item => !runtimeOrder.value.includes(item.id))]
     : items.value
-  return ordered.filter(item => !item.status && item.id !== current.value?.id && item.id !== next.value?.id)
+  return ordered.filter(item => !item.status && item.id !== current.value?.id)
 })
 const reorderOptions = computed(() => pending.value.map(item => ({
-  label: item.title, value: item.id,
+  label: `${item.title} · ${formatPoints(jumpPoints.value[item.id] ?? -3)} 分`, value: item.id,
 })))
+
+function formatPoints(points: number) {
+  return points > 0 ? `+${points}` : points < 0 ? `−${Math.abs(points)}` : '0'
+}
+
+function formatStandardScore(score: number | null | undefined) {
+  return score == null ? '—' : `${Number(score.toFixed(1))}/100`
+}
+
+function eventPoints(event: Event) {
+  if (event.points != null) return event.points
+  if (event.action === 'completed') return 10
+  if (event.action === 'skipped' || event.action === 'reorder') return -3
+  return 0
+}
 
 function selectReorder(value: string | null) {
   if (value) void act('reorder', value)
@@ -375,7 +394,10 @@ onUnmounted(() => {
   <section v-if="current || loadError" class="schedule">
     <NAlert v-if="loadError" type="error">{{ loadError }}</NAlert>
     <div class="s-toolbar">
-      <strong>今日日程</strong>
+      <div class="s-heading">
+        <strong>今日日程</strong>
+        <span v-if="todayReview" class="s-score">今日积分 {{ formatPoints(todayReview.score) }}<template v-if="todayReview.max_score > 0"> / {{ todayReview.max_score }}</template> · 标准分 {{ formatStandardScore(todayReview.standard_score) }}<template v-if="todayReview.incomplete_legacy_items"> · 旧记录未计入</template></span>
+      </div>
       <div class="s-toolbar-actions">
         <NSelect
           v-if="items.length"
@@ -384,7 +406,7 @@ onUnmounted(() => {
           size="small"
           placeholder="跳转日程"
           class="s-reorder"
-          :disabled="!reorderOptions.length || acting || !!activeLeave || !!loadError"
+          :disabled="!current?.id || !reorderOptions.length || acting || !!activeLeave || !!loadError"
           @update:value="selectReorder"
         />
         <NButton size="small" quaternary @click="emit('edit')">编辑</NButton>
@@ -402,8 +424,8 @@ onUnmounted(() => {
         <span class="s-label">当前日程</span>
         <div class="s-actions">
           <template v-if="current.id">
-            <NButton size="small" :loading="acting" :disabled="!!loadError || !!activeLeave" @click="act('completed')">完成</NButton>
-            <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="act('skipped')">跳过</NButton>
+            <NButton size="small" :loading="acting" :disabled="!!loadError || !!activeLeave" @click="act('completed')">完成 +10</NButton>
+            <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="act('skipped')">跳过 −3</NButton>
             <NButton size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="openLeave">暂离</NButton>
           </template>
         </div>
@@ -417,7 +439,7 @@ onUnmounted(() => {
     <div v-if="next" class="s-card s-card--next" :style="nextStyle">
       <div class="s-head">
         <span class="s-label">下一项</span>
-        <NButton v-if="current?.id" size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="act('completed', next.id)">提前完成</NButton>
+        <NButton v-if="current?.id" size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="act('completed', next.id)">提前完成 +10</NButton>
       </div>
       <div class="s-body">
         <span class="s-title">{{ next.title }}</span>
@@ -496,11 +518,11 @@ onUnmounted(() => {
       <NAlert v-if="reviewError" type="error">{{ reviewError }}</NAlert>
       <div v-else-if="loadingReview">正在读取日对账…</div>
       <div v-else-if="review" class="s-review-content">
-        <div>总分 {{ review.score }} · 完成 {{ review.completed_count }} 项 · 偏离 {{ review.deviation_count }} 次 · 累计计时 {{ Math.floor(review.total_duration_seconds / 60) }} 分钟</div>
+        <div>原始积分 {{ formatPoints(review.score) }}<template v-if="review.max_score > 0"> / {{ review.max_score }}</template> · 标准分 {{ formatStandardScore(review.standard_score) }} · 完成 {{ review.completed_count }} 项 · 偏离 {{ review.deviation_count }} 次 · 累计计时 {{ Math.floor(review.total_duration_seconds / 60) }} 分钟</div>
         <NAlert v-if="review.incomplete_legacy_items" type="warning">旧日程缺少动作记录，历史积分和耗时未补算。</NAlert>
         <div v-if="reviewEvents.length" class="s-events">
           <div v-for="event in reviewEvents" :key="event.id">
-            {{ new Date(event.time).toLocaleTimeString() }} · {{ reviewItems.find(item => item.id === event.task_id)?.title ?? '日程' }} · {{ actionLabel[event.action] ?? event.action }}<span v-if="event.duration_seconds != null"> · {{ Math.floor(event.duration_seconds / 60) }} 分钟</span><span v-if="event.note"> · {{ event.note }}</span>
+            {{ new Date(event.time).toLocaleTimeString() }} · {{ reviewItems.find(item => item.id === event.task_id)?.title ?? '日程' }} · {{ event.action === 'reorder' && eventPoints(event) === 0 ? '跳回计划' : (actionLabel[event.action] ?? event.action) }} · {{ formatPoints(eventPoints(event)) }} 分<span v-if="event.duration_seconds != null"> · {{ Math.floor(event.duration_seconds / 60) }} 分钟</span><span v-if="event.note"> · {{ event.note }}</span>
           </div>
         </div>
         <div v-else class="s-meta">这一天没有日程动作记录。</div>
@@ -517,6 +539,8 @@ onUnmounted(() => {
 .schedule { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; padding: 14px; border: 1px solid rgba(94, 163, 240, .28); border-radius: 12px; background: rgba(32, 128, 240, .025); }
 .s-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .s-toolbar strong { color: #8bbdff; font-size: 14px; }
+.s-heading { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.s-score { color: var(--n-text-color-2); font-size: 12px; }
 .s-toolbar-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .s-reorder { width: 150px; }
 .s-card { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border: 1px solid rgba(94, 163, 240, .35); border-radius: 10px; background: rgba(32, 128, 240, .08); }

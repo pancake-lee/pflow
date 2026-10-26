@@ -153,3 +153,13 @@ test('leave remains active after reload until the return action succeeds', async
   await api.run("act('return', 'a')")
   assert.equal(api.run('activeLeave.value'), null)
 })
+
+test('jump choices include the next item and display their live point cost', () => {
+  const api = panel(async () => ({ ok: true }))
+  api.run("items.value = [{id:'a',title:'A'}, {id:'b',title:'B'}, {id:'c',title:'C'}]; current.value = {id:'c',title:'C'}; next.value = {id:'a',title:'A'}; jumpPoints.value = {a:0,b:-3}")
+  assert.deepEqual(Array.from(api.run('reorderOptions.value'), option => option.label), ['A · 0 分', 'B · −3 分'])
+  assert.equal(api.run('formatStandardScore(35)'), '35/100')
+  assert.equal(api.run('formatStandardScore(null)'), '—')
+  assert.equal(api.run("eventPoints({action:'reorder',points:0})"), 0)
+  assert.equal(api.run("eventPoints({action:'reorder'})"), -3)
+})
