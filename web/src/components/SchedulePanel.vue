@@ -21,6 +21,7 @@ const items = ref<Item[]>([])
 const events = ref<Event[]>([])
 const runtimeOrder = ref<string[]>([])
 const jumpPoints = ref<Record<string, number>>({})
+const completionWindow = ref<{ start: string; end: string } | null>(null)
 const now = ref(Date.now())
 const review = ref<ReviewSummary | null>(null)
 const todayReview = ref<ReviewSummary | null>(null)
@@ -70,6 +71,7 @@ async function load() {
     events.value = payload.day.events ?? []
     runtimeOrder.value = payload.day.runtime_order ?? []
     jumpPoints.value = payload.jump_points ?? {}
+    completionWindow.value = payload.completion_window ?? null
     todayReview.value = payload.review ?? null
     parking.value = payload.day.parking ?? []
     activeLeave.value = payload.active_leave ?? null
@@ -301,6 +303,12 @@ const pending = computed(() => {
 const reorderOptions = computed(() => pending.value.map(item => ({
   label: `${item.title} · ${formatPoints(jumpPoints.value[item.id] ?? -3)} 分`, value: item.id,
 })))
+const completionPoints = computed(() => {
+  if (!completionWindow.value) return -3
+  const start = Date.parse(completionWindow.value.start)
+  const end = Date.parse(completionWindow.value.end)
+  return now.value >= start && now.value < end ? 10 : -3
+})
 
 function formatPoints(points: number) {
   return points > 0 ? `+${points}` : points < 0 ? `−${Math.abs(points)}` : '0'
@@ -424,7 +432,7 @@ onUnmounted(() => {
         <span class="s-label">当前日程</span>
         <div class="s-actions">
           <template v-if="current.id">
-            <NButton size="small" :loading="acting" :disabled="!!loadError || !!activeLeave" @click="act('completed')">完成 +10</NButton>
+            <NButton size="small" :loading="acting" :disabled="!!loadError || !!activeLeave" @click="act('completed')">完成 {{ formatPoints(completionPoints) }}</NButton>
             <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="act('skipped')">跳过 −3</NButton>
             <NButton size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="openLeave">暂离</NButton>
           </template>
@@ -439,7 +447,6 @@ onUnmounted(() => {
     <div v-if="next" class="s-card s-card--next" :style="nextStyle">
       <div class="s-head">
         <span class="s-label">下一项</span>
-        <NButton v-if="current?.id" size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="act('completed', next.id)">提前完成 +10</NButton>
       </div>
       <div class="s-body">
         <span class="s-title">{{ next.title }}</span>

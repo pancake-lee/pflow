@@ -173,8 +173,11 @@ func TestExecutionEventsAndRuntimeOrder(t *testing.T) {
 		{ID: "d", Start: "12:00", Title: "D", FocusMinutes: 30},
 	}}
 	now := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	if err := ApplyAction(&day, "b", "completed", "", now); !errors.Is(err, ErrInvalidAction) {
+		t.Fatalf("next item completed without jump: %v", err)
+	}
 	for _, step := range []struct{ id, action string }{
-		{"a", "start"}, {"b", "completed"}, {"d", "reorder"},
+		{"a", "start"}, {"d", "reorder"},
 		{"d", "delay"}, {"d", "completed"}, {"a", "skipped"},
 	} {
 		if err := ApplyAction(&day, step.id, step.action, "", now); err != nil {
@@ -182,23 +185,23 @@ func TestExecutionEventsAndRuntimeOrder(t *testing.T) {
 		}
 		now = now.Add(time.Minute)
 	}
-	if got := Score(day.Events); got != 14 {
-		t.Fatalf("score=%d, want 14", got)
+	if got := Score(day.Events); got != -9 {
+		t.Fatalf("score=%d, want -9", got)
 	}
 	if day.Items[0].ID != "a" || day.Items[1].ID != "b" || day.Items[2].ID != "c" || day.Items[3].ID != "d" {
 		t.Fatal("runtime reorder changed saved plan order")
 	}
-	if len(day.Events) != 8 || day.Events[1].Action != "early" || day.Events[3].Action != "pause" {
+	if len(day.Events) != 6 || day.Events[1].Action != "pause" || EventPoints(day.Events[4]) != -3 {
 		t.Fatalf("events=%+v", day.Events)
 	}
-	if day.CurrentID != "c" {
-		t.Fatalf("current=%s, want c", day.CurrentID)
+	if day.CurrentID != "b" {
+		t.Fatalf("current=%s, want b", day.CurrentID)
 	}
 	count := len(day.Events)
 	if err := ApplyAction(&day, "a", "skipped", "", now); err != nil {
 		t.Fatal(err)
 	}
-	if len(day.Events) != count || Score(day.Events) != 14 {
+	if len(day.Events) != count || Score(day.Events) != -9 {
 		t.Fatal("duplicate action changed events or score")
 	}
 	if err := ApplyAction(&day, "a", "completed", "", now); !errors.Is(err, ErrInvalidAction) {
@@ -297,6 +300,47 @@ func TestJumpPointsUsesFocusAndBreakInterval(t *testing.T) {
 		if got := JumpPoints(day, "a", base.Add(time.Duration(tc.minute)*time.Minute)); got != tc.want {
 			t.Fatalf("minute %d: points=%d want %d", tc.minute, got, tc.want)
 		}
+	}
+}
+
+func TestCompletionPointsUsePlannedFocusAndBreakInterval(t *testing.T) {
+	base := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		minute int
+		want   int
+	}{
+		{-1, -3}, {0, 10}, {20, 10}, {29, 10}, {30, -3},
+	} {
+		day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{{
+			ID: "a", Start: "09:00", FocusMinutes: 20, BreakMinutes: 10,
+		}}}
+		now := base.Add(time.Duration(tc.minute) * time.Minute)
+		if err := ApplyAction(&day, "a", "completed", "", now); err != nil {
+			t.Fatalf("minute %d: %v", tc.minute, err)
+		}
+		if got := Score(day.Events); got != tc.want {
+			t.Fatalf("minute %d: score=%d want %d", tc.minute, got, tc.want)
+		}
+		wantDeviation := 0
+		if tc.want < 0 {
+			wantDeviation = 1
+		}
+		if summary := SummarizeReview(day); summary.DeviationCount != wantDeviation {
+			t.Fatalf("minute %d: summary=%+v", tc.minute, summary)
+		}
+		day.Items[0].Start = "12:00"
+		if got := Score(day.Events); got != tc.want {
+			t.Fatalf("minute %d: plan edit changed score to %d", tc.minute, got)
+		}
+	}
+	crossMidnight := Day{Date: "2026-10-25", Items: []Item{{
+		ID: "night", Start: "23:50", FocusMinutes: 20, BreakMinutes: 10,
+	}}}
+	if got := CompletionPoints(crossMidnight, "night", time.Date(2026, 10, 26, 0, 10, 0, 0, time.UTC)); got != 10 {
+		t.Fatalf("cross-midnight break points=%d", got)
+	}
+	if got := CompletionPoints(crossMidnight, "night", time.Date(2026, 10, 26, 0, 20, 0, 0, time.UTC)); got != -3 {
+		t.Fatalf("cross-midnight end points=%d", got)
 	}
 }
 

@@ -163,3 +163,19 @@ test('jump choices include the next item and display their live point cost', () 
   assert.equal(api.run("eventPoints({action:'reorder',points:0})"), 0)
   assert.equal(api.run("eventPoints({action:'reorder'})"), -3)
 })
+
+test('completion preview changes at the plan boundary and the next card has no completion action', () => {
+  const api = panel(async () => ({ ok: true }))
+  api.run("completionWindow.value = {start:'2026-10-25T09:00:00Z',end:'2026-10-25T09:30:00Z'}")
+  for (const [clock, points] of [
+    ['2026-10-25T08:59:59Z', -3],
+    ['2026-10-25T09:00:00Z', 10],
+    ['2026-10-25T09:20:00Z', 10],
+    ['2026-10-25T09:29:59Z', 10],
+    ['2026-10-25T09:30:00Z', -3],
+  ]) {
+    api.run(`now.value = Date.parse('${clock}')`)
+    assert.equal(api.run('completionPoints.value'), points)
+  }
+  assert.equal(readFileSync(new URL('../src/components/SchedulePanel.vue', import.meta.url), 'utf8').includes('提前完成'), false)
+})

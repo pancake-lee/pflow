@@ -397,7 +397,7 @@ var ErrInvalidAction = errors.New("invalid schedule action")
 // It leaves the saved plan order and item definitions unchanged.
 func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 	items := orderedItems(*day)
-	current, next := Current(*day, now)
+	current, _ := Current(*day, now)
 	if action == "return" {
 		leave := ActiveLeave(day.Events)
 		if leave == nil {
@@ -472,7 +472,7 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		day.Events[len(day.Events)-1].Points = &points
 		return nil
 	}
-	if current.ID != taskID && !(action == "completed" && next != nil && next.ID == taskID) {
+	if current.ID != taskID {
 		return fmt.Errorf("%w: item is not current", ErrInvalidAction)
 	}
 	switch action {
@@ -490,13 +490,12 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		}
 		item.Status = action
 		item.CompletedAt = now
-		if action == "completed" && current.ID != taskID {
-			appendEvent(day, taskID, "early", "", now, nil)
-		}
 		appendEvent(day, taskID, action, "", now, duration)
-		if current.ID == taskID {
-			Advance(day, taskID)
+		if action == "completed" {
+			points := CompletionPoints(*day, taskID, now)
+			day.Events[len(day.Events)-1].Points = &points
 		}
+		Advance(day, taskID)
 	default:
 		return fmt.Errorf("%w: unknown action", ErrInvalidAction)
 	}
@@ -506,17 +505,32 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 // JumpPoints returns zero when the target's planned focus or break interval owns now.
 // The result is stored on the event so later plan edits cannot rewrite history.
 func JumpPoints(day Day, taskID string, now time.Time) int {
+	if plannedIntervalContains(day, taskID, now) {
+		return 0
+	}
+	return -3
+}
+
+// CompletionPoints awards a timely completion and charges one that misses its slot.
+func CompletionPoints(day Day, taskID string, now time.Time) int {
+	if plannedIntervalContains(day, taskID, now) {
+		return 10
+	}
+	return -3
+}
+
+func plannedIntervalContains(day Day, taskID string, now time.Time) bool {
 	for _, item := range day.Items {
 		if item.ID != taskID {
 			continue
 		}
 		start, err := ItemStart(day.Date, item, now.Location())
 		if err == nil && !now.Before(start) && now.Before(start.Add(time.Duration(item.FocusMinutes+item.BreakMinutes)*time.Minute)) {
-			return 0
+			return true
 		}
 		break
 	}
-	return -3
+	return false
 }
 
 // ActiveLeave returns the unmatched leave event, if the user has not returned.
@@ -628,6 +642,9 @@ func SummarizeReview(day Day) ReviewSummary {
 		switch event.Action {
 		case "completed":
 			summary.CompletedCount++
+			if EventPoints(event) < 0 {
+				summary.DeviationCount++
+			}
 			handled[event.TaskID] = true
 		case "skipped":
 			summary.DeviationCount++

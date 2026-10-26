@@ -259,7 +259,17 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events), "review": schedule.SummarizeReview(day), "jump_points": jumpPoints, "active_leave": schedule.ActiveLeave(day.Events)})
+	var completionWindow map[string]time.Time
+	if current.ID != "" {
+		start, startErr := schedule.ItemStart(day.Date, current, now.Location())
+		if startErr == nil {
+			completionWindow = map[string]time.Time{
+				"start": start,
+				"end":   start.Add(time.Duration(current.FocusMinutes+current.BreakMinutes) * time.Minute),
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{"day": day, "current": current, "next": next, "phase": phase, "break_remaining_minutes": breakRemainingMinutes, "reminder_score": reminder, "fog": fog, "templates": f.Templates, "score": schedule.Score(day.Events), "review": schedule.SummarizeReview(day), "jump_points": jumpPoints, "completion_window": completionWindow, "active_leave": schedule.ActiveLeave(day.Events)})
 }
 
 func (s *Server) handleGetScheduleReview(w http.ResponseWriter, r *http.Request) {

@@ -109,10 +109,11 @@ func TestTemplateRenameCannotBypassNameConflictWithAnExistingID(t *testing.T) {
 	}
 }
 
-func TestScheduleActionPersistsOnceAndRejectsDistantCompletion(t *testing.T) {
+func TestScheduleActionPersistsOnceAndRejectsCompletionWithoutJump(t *testing.T) {
 	server := NewServer(nil, nil)
 	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
-	day := schedule.Day{Date: "2026-10-25", CurrentID: "a", Items: []schedule.Item{
+	date := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	day := schedule.Day{Date: date, CurrentID: "a", Items: []schedule.Item{
 		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30},
 		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 30},
 		{ID: "c", Start: "11:00", Title: "C", FocusMinutes: 30},
@@ -121,7 +122,7 @@ func TestScheduleActionPersistsOnceAndRejectsDistantCompletion(t *testing.T) {
 	if err := server.scheduleMgr.Save(file); err != nil {
 		t.Fatal(err)
 	}
-	requestBody := `{"date":"2026-10-25","id":"c","action":"completed"}`
+	requestBody := fmt.Sprintf(`{"date":%q,"id":"c","action":"completed"}`, date)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, httptest.NewRequest(
 		http.MethodPost, "/api/v1/schedules/action", bytes.NewBufferString(requestBody),
@@ -129,7 +130,15 @@ func TestScheduleActionPersistsOnceAndRejectsDistantCompletion(t *testing.T) {
 	if response.Code != http.StatusConflict {
 		t.Fatalf("distant status=%d body=%s", response.Code, response.Body.String())
 	}
-	requestBody = `{"date":"2026-10-25","id":"a","action":"completed"}`
+	requestBody = fmt.Sprintf(`{"date":%q,"id":"b","action":"completed"}`, date)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodPost, "/api/v1/schedules/action", bytes.NewBufferString(requestBody),
+	))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("next status=%d body=%s", response.Code, response.Body.String())
+	}
+	requestBody = fmt.Sprintf(`{"date":%q,"id":"a","action":"completed"}`, date)
 	for i := 0; i < 2; i++ {
 		response = httptest.NewRecorder()
 		server.ServeHTTP(response, httptest.NewRequest(
@@ -144,7 +153,7 @@ func TestScheduleActionPersistsOnceAndRejectsDistantCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved := loaded.Days[day.Date]
-	if len(saved.Events) != 1 || schedule.Score(saved.Events) != 10 || saved.CurrentID != "b" {
+	if len(saved.Events) != 1 || schedule.Score(saved.Events) != -3 || saved.CurrentID != "b" {
 		t.Fatalf("saved=%+v", saved)
 	}
 }
