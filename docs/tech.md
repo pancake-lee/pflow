@@ -357,6 +357,8 @@ pflow 以 MIT License 发布，`LICENSE` 文件已就位。
 
 **定位**：辅助功能，非主要交互路径。用户的主要操作在自有终端/VSCode 中进行，Web 终端仅作为便捷备选。
 
+`pflow serve` 同时监听 HTTP 10002 和 HTTPS 10003。HTTPS 从 `.local/https/` 读取本机自签证书和私钥；HTTPS 页面收到同源 `/terminal/{name}/` 地址，服务端只为正在管理的 ttyd 会话代理 HTTP 与 WebSocket。HTTP 页面继续使用本机 ttyd 地址。Vite 开发端口为 10005。
+
 托管会话在新建、重连及 Web 终端接入时启用运行时鼠标策略，应用开启鼠标接收时透传滚轮，否则使用 tmux 历史滚动。策略使用专用键表，并保留启动时既有 root 快捷键和前缀键；本地 tmux 配置文件与非托管会话的键表保持原样。
 
 **核心思路**：`pflow claude` 以稳定的会话名称启动 Claude。随后从 `~/.claude/sessions/` 扫描与该名称匹配的会话元数据，建立 **tmux session ↔ Claude session** 的关联。该方式使用 Claude 的本地结构化数据，不依赖终端 UI 渲染。

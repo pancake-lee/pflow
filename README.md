@@ -21,7 +21,7 @@ pflow 把这些 AI 会话的状态汇聚到一张仪表盘上，让你像将军�
 ## 快速开始
 
 ```bash
-# 打开 Web Dashboard（浏览器访问 http://localhost:10002）
+# 打开 Web Dashboard（HTTP :10002，HTTPS :10003）
 pflow serve
 
 # 在当前项目启动 Claude 托管会话（tmux 自动配置）
@@ -35,6 +35,31 @@ pflow suggest
 ```
 
 pflow 托管会话会在运行时配置鼠标滚动：应用自行处理鼠标时透传滚轮，否则使用 tmux 历史滚动。无需修改 `~/.tmux.conf`，其他 tmux 会话沿用原有设置。旧托管会话可先按 `Ctrl+B`、`D` 分离，再用新版 pflow 的原启动命令接入，无需退出 Agent。
+
+### 手机安装
+
+`pflow serve` 默认监听 HTTPS 10003，读取 `.local/https/pflow.crt` 和 `.local/https/pflow.key`；
+首次使用或服务器 IP 变化时，使用以下命令在项目根目录生成证书，将命令中的 `192.168.3.18` 换成实际 IP：
+
+```bash
+mkdir -p .local/https && chmod 700 .local/https
+openssl req -x509 -newkey rsa:3072 -sha256 -days 365 -nodes \
+  -keyout .local/https/pflow.key -out .local/https/pflow.crt \
+  -subj '/CN=pflow local' \
+  -addext 'subjectAltName=IP:192.168.3.18,IP:127.0.0.1,DNS:localhost' \
+  -addext 'basicConstraints=critical,CA:TRUE' \
+  -addext 'keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign' \
+  -addext 'extendedKeyUsage=serverAuth'
+chmod 600 .local/https/pflow.key
+openssl x509 -in .local/https/pflow.crt -outform DER -out .local/https/pflow.cer
+```
+
+将公开证书 `.local/https/pflow.cer` 复制到手机「下载」目录，**不要复制私钥**。
+在 Android「设置」中搜索「安装证书」，选择「CA 证书」，导入 `pflow.cer`；
+删除时，在「设置 → 加密与凭据 → 用户凭据」中找到 pflow 证书并移除，菜单名称因手机而异。
+PS：浏览器的「继续访问」不会安装证书。
+
+用手机 Chrome 打开 `https://<服务器 IP>:10003/`，确认没有证书警告，再从菜单选择「安装应用」。
 
 ## Windows 桌面版
 
