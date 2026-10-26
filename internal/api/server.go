@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"math"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -141,6 +143,7 @@ func NewServerWithOptions(staticFS fs.FS, sessionMgr *session.Manager, options S
 	s.HandleFunc("POST /api/v1/terminal/stop", s.handleTerminalStop)
 	s.HandleFunc("GET /api/v1/terminal/list", s.handleTerminalList)
 	s.HandleFunc("GET /api/v1/terminal/lookup", s.handleTerminalLookup)
+	s.HandleFunc("GET /terminal/{name}/{path...}", s.handleTerminalProxy)
 
 	// Project root management endpoints
 	s.HandleFunc("GET /api/v1/project-roots", s.handleGetProjectRoots)
@@ -1234,6 +1237,35 @@ type terminalResponse struct {
 	TtydURL  string `json:"ttyd_url,omitempty"`
 }
 
+func (s *Server) handleTerminalProxy(w http.ResponseWriter, r *http.Request) {
+	if r.TLS == nil {
+		http.Error(w, "terminal proxy requires HTTPS", http.StatusForbidden)
+		return
+	}
+	if s.sessionMgr == nil {
+		http.NotFound(w, r)
+		return
+	}
+	sess := s.sessionMgr.Get(r.PathValue("name"))
+	if sess == nil {
+		http.NotFound(w, r)
+		return
+	}
+	target := &url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", sess.TtydPort)}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		http.Error(w, "terminal unavailable", http.StatusBadGateway)
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+func terminalURL(r *http.Request, sess *session.Session) string {
+	if r.TLS == nil {
+		return sess.TtydURL
+	}
+	return "/terminal/" + url.PathEscape(sess.Name) + "/"
+}
+
 // handleTerminalStart handles POST /api/v1/terminal/start.
 func (s *Server) handleTerminalStart(w http.ResponseWriter, r *http.Request) {
 	if s.sessionMgr == nil {
@@ -1270,7 +1302,7 @@ func (s *Server) handleTerminalStart(w http.ResponseWriter, r *http.Request) {
 		Name:     sess.Name,
 		WorkDir:  sess.WorkDir,
 		TtydPort: sess.TtydPort,
-		TtydURL:  sess.TtydURL,
+		TtydURL:  terminalURL(r, sess),
 	})
 }
 
@@ -1316,7 +1348,7 @@ func (s *Server) handleTerminalList(w http.ResponseWriter, r *http.Request) {
 			Name:     sess.Name,
 			WorkDir:  sess.WorkDir,
 			TtydPort: sess.TtydPort,
-			TtydURL:  sess.TtydURL,
+			TtydURL:  terminalURL(r, sess),
 		})
 	}
 
@@ -1383,7 +1415,7 @@ func (s *Server) handleTerminalLookup(w http.ResponseWriter, r *http.Request) {
 		TmuxName: result.Session.Name,
 		WorkDir:  result.Session.WorkDir,
 		TtydPort: result.Session.TtydPort,
-		TtydURL:  result.Session.TtydURL,
+		TtydURL:  terminalURL(r, result.Session),
 		Warning:  result.Warning,
 	}
 

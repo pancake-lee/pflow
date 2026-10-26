@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -95,7 +99,7 @@ Global Flags:
 Commands:
   status   Show agent activity dashboard (default if no command given)
   probe    Probe a single session's detailed state
-  serve    Start HTTP Dashboard API server
+  serve    Start HTTP and HTTPS Dashboard API servers
   claude   Start a managed Claude Code session in tmux
   hermes   Start a managed Hermes Agent session in tmux
   codex    Start a managed Codex CLI session in tmux
@@ -393,9 +397,23 @@ func printHermesProbe(s hermes.SessionSummary, gatewayAlive bool) {
 func runServeCmd(args []string) {
 	flagSet := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := flagSet.Int("port", 10002, "HTTP server port")
+	httpsPort := flagSet.Int("https-port", 10003, "HTTPS server port (0 disables HTTPS)")
+	certPath := flagSet.String("tls-cert", ".local/https/pflow.crt", "HTTPS certificate path")
+	keyPath := flagSet.String("tls-key", ".local/https/pflow.key", "HTTPS private key path")
 	ttydBasePort := flagSet.Int("ttyd-base-port", 10000, "Base port for ttyd terminal processes")
 	debugAttention := flagSet.Bool("debug-attention", false, "Log per-project attention score calculation details")
 	flagSet.Parse(args)
+	if *port < 1 || *port > 65535 || *httpsPort < 0 || *httpsPort > 65535 || *port == *httpsPort {
+		log.Fatal("server: HTTP and HTTPS ports must be distinct and within 1-65535")
+	}
+	var certificate *tls.Certificate
+	if *httpsPort > 0 {
+		loaded, err := tls.LoadX509KeyPair(*certPath, *keyPath)
+		if err != nil {
+			log.Fatalf("server: load HTTPS certificate from %s and %s: %v", *certPath, *keyPath, err)
+		}
+		certificate = &loaded
+	}
 
 	// Clean up orphan tmux sessions (pflow-* without mappings)
 	if cleaned, err := session.CleanOrphanSessions(); err != nil {
@@ -420,23 +438,6 @@ func runServeCmd(args []string) {
 		AttentionDiagnostics: *debugAttention,
 	})
 
-	addr := fmt.Sprintf(":%d", *port)
-	fmt.Printf("pflow server listening on http://localhost%s\n", addr)
-	fmt.Printf("Endpoints:\n")
-	fmt.Printf("  Web UI:  http://localhost%s/\n", addr)
-	fmt.Printf("  API:     GET /api/v1/dashboard?window=1d&max_inactive=1\n")
-	fmt.Printf("  Terminal: POST /api/v1/terminal/start  (ttyd base port: %d)\n", *ttydBasePort)
-
-	// Graceful shutdown on SIGINT/SIGTERM
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		fmt.Println("\nShutting down...")
-		session.TeardownFocusHooks()
-		os.Exit(0)
-	}()
-
 	// Background mapping sync: periodically refresh tmux↔agent session
 	// mappings to detect session ID changes (Claude's /clear, /resume, etc.)
 	// by scanning ~/.claude/sessions/ directory (every 5s).
@@ -457,9 +458,78 @@ func runServeCmd(args []string) {
 		}
 	}()
 
-	if err := http.ListenAndServe(addr, server); err != nil {
+	if err := serveDashboard(server, *port, *httpsPort, certificate, *ttydBasePort); err != nil {
 		log.Fatalf("server: %v", err)
 	}
+}
+
+func serveDashboard(
+	handler http.Handler,
+	httpPort, httpsPort int,
+	certificate *tls.Certificate,
+	ttydBasePort int,
+) error {
+	httpListener, err := net.Listen("tcp", fmt.Sprintf(":%d", httpPort))
+	if err != nil {
+		return fmt.Errorf("listen HTTP port %d: %w", httpPort, err)
+	}
+	httpServer := &http.Server{Handler: handler}
+	servers := []*http.Server{httpServer}
+	listeners := []net.Listener{httpListener}
+	if httpsPort > 0 {
+		httpsListener, listenErr := net.Listen("tcp", fmt.Sprintf(":%d", httpsPort))
+		if listenErr != nil {
+			httpListener.Close()
+			return fmt.Errorf("listen HTTPS port %d: %w", httpsPort, listenErr)
+		}
+		httpsServer := &http.Server{
+			Handler: handler,
+			TLSConfig: &tls.Config{
+				MinVersion:   tls.VersionTLS12,
+				Certificates: []tls.Certificate{*certificate},
+			},
+		}
+		servers = append(servers, httpsServer)
+		listeners = append(listeners, httpsListener)
+	}
+
+	fmt.Printf("pflow Web UI: http://localhost:%d/\n", httpPort)
+	if httpsPort > 0 {
+		fmt.Printf("pflow Web UI: https://localhost:%d/\n", httpsPort)
+	}
+	fmt.Printf("Terminal: POST /api/v1/terminal/start (ttyd base port: %d)\n", ttydBasePort)
+
+	errCh := make(chan error, len(servers))
+	for i, currentServer := range servers {
+		currentListener := listeners[i]
+		go func() {
+			if currentServer.TLSConfig != nil {
+				errCh <- currentServer.ServeTLS(currentListener, "", "")
+				return
+			}
+			errCh <- currentServer.Serve(currentListener)
+		}()
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	var serveErr error
+	select {
+	case serveErr = <-errCh:
+	case <-sigCh:
+		fmt.Println("\nShutting down...")
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, currentServer := range servers {
+		_ = currentServer.Shutdown(shutdownCtx)
+	}
+	session.TeardownFocusHooks()
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		return serveErr
+	}
+	return nil
 }
 
 // ── claude ────────────────────────────────────────────────────────────

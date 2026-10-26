@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,8 +15,31 @@ import (
 
 	"github.com/pancake-lee/pflow/internal/config"
 	"github.com/pancake-lee/pflow/internal/schedule"
+	"github.com/pancake-lee/pflow/internal/session"
 	"github.com/pancake-lee/pflow/internal/settings"
 )
+
+func TestTerminalURLUsesSameOriginOnHTTPS(t *testing.T) {
+	sess := &session.Session{Name: "agent one", TtydURL: "http://127.0.0.1:10000/terminal/agent%20one/"}
+	httpRequest := httptest.NewRequest(http.MethodGet, "/api/v1/terminal/list", nil)
+	if got := terminalURL(httpRequest, sess); got != sess.TtydURL {
+		t.Fatalf("HTTP terminal URL = %q", got)
+	}
+	httpsRequest := httptest.NewRequest(http.MethodGet, "https://localhost/api/v1/terminal/list", nil)
+	httpsRequest.TLS = &tls.ConnectionState{}
+	if got := terminalURL(httpsRequest, sess); got != "/terminal/agent%20one/" {
+		t.Fatalf("HTTPS terminal URL = %q", got)
+	}
+}
+
+func TestTerminalProxyRejectsHTTP(t *testing.T) {
+	server := NewServer(nil, nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/terminal/example/", nil))
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("HTTP terminal proxy status = %d", response.Code)
+	}
+}
 
 func TestSettingsAPIExposesDefaultsAndSavedRevision(t *testing.T) {
 	server := NewServer(nil, nil)

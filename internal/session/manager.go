@@ -4,6 +4,7 @@ package session
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,7 +101,7 @@ func (m *Manager) Start(workDir string) (*Session, error) {
 		Name:     name,
 		WorkDir:  absDir,
 		TtydPort: port,
-		TtydURL:  fmt.Sprintf("http://%s:%d", m.host, port),
+		TtydURL:  fmt.Sprintf("http://%s:%d%s/", m.host, port, terminalBasePath(name)),
 		cmd:      cmd,
 		started:  time.Now(),
 	}
@@ -166,7 +167,7 @@ func (m *Manager) StartExisting(tmuxName, workDir string) (*Session, error) {
 		Name:     tmuxName,
 		WorkDir:  absDir,
 		TtydPort: port,
-		TtydURL:  fmt.Sprintf("http://%s:%d", m.host, port),
+		TtydURL:  fmt.Sprintf("http://%s:%d%s/", m.host, port, terminalBasePath(tmuxName)),
 		cmd:      cmd,
 		started:  time.Now(),
 	}
@@ -356,13 +357,14 @@ bind-key -T %s WheelDownPane if-shell -F -t = "#{||:#{pane_in_mode},#{mouse_any_
 }
 
 // startTtyd starts a ttyd process bound to the given port.
-// Command: ttyd -W -p <port> -i <host> tmux attach -t <name>
+// Command: ttyd -W -p <port> -i <host> -b <path> tmux attach -t <name>
 // -W enables writable mode explicitly (default in most versions, added for safety).
 func startTtyd(port int, sessionName, host string) (*exec.Cmd, error) {
 	args := []string{
 		"-W", // explicitly writable
 		"-p", strconv.Itoa(port),
 		"-i", host,
+		"-b", terminalBasePath(sessionName),
 		"tmux", "attach", "-t", sessionName,
 	}
 	plogger.Debugf("ttyd: starting: ttyd %v", args)
@@ -380,6 +382,10 @@ func startTtyd(port int, sessionName, host string) (*exec.Cmd, error) {
 
 	plogger.Infof("ttyd: started on port %d for tmux session %s", port, sessionName)
 	return cmd, nil
+}
+
+func terminalBasePath(name string) string {
+	return "/terminal/" + url.PathEscape(name)
 }
 
 // tmuxSessionExists returns true if a tmux session with the given name exists.
