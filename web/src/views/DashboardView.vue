@@ -237,9 +237,14 @@ const showDetail = ref(false)
 const selectedSession = ref<DashboardEntry | null>(null)
 
 // Resizable drawer
-const drawerWidth = ref(Math.max(480, Math.floor(window.innerWidth / 4)))
+const viewportWidth = ref(window.innerWidth)
+const drawerWidth = ref(Math.max(480, Math.floor(viewportWidth.value / 4)))
+const detailDrawerWidth = computed(() => viewportWidth.value <= 760 ? viewportWidth.value : drawerWidth.value)
 const minDrawerWidth = computed(() => Math.floor(window.innerWidth / 4))
 const maxDrawerWidth = computed(() => Math.floor(window.innerWidth * 3 / 4))
+function updateViewportWidth() { viewportWidth.value = window.innerWidth }
+onMounted(() => window.addEventListener('resize', updateViewportWidth))
+onUnmounted(() => window.removeEventListener('resize', updateViewportWidth))
 
 function startResize(e: MouseEvent) {
   e.preventDefault()
@@ -697,19 +702,6 @@ function refresh() {
   fetchDashboard(scanOpts.value)
 }
 
-// ── Stats ────────────────────────────────────────────────────────
-
-const stats = computed(() => {
-  const sessions = data.value?.sessions ?? []
-  return {
-    total: sessions.length,
-    active: sessions.filter((s) => s.is_active).length,
-    waiting: sessions.filter((s) => s.status === 'waiting').length,
-    idle: sessions.filter((s) => s.status === 'idle').length,
-    groups: groupedSessions.value.length,
-  }
-})
-
 // ── Agent icon helper ────────────────────────────────────────────
 
 function agentIcon(agentType: string): Component {
@@ -830,55 +822,35 @@ function rowProps(row: DashboardEntry) {
 <template>
   <div class="app-shell" :class="{ 'focus-mode': focusActive }">
     <NLayout class="layout">
-    <!-- Header with inline stats -->
     <NLayoutHeader bordered>
       <div class="header">
         <div class="header-left">
           <h1 class="title">⚔️ pflow</h1>
         </div>
 
-        <!-- Stats in header -->
-        <div class="header-stats">
-          <div v-if="focusActive" class="focus-overlay" :style="{ opacity: focusDimOpacity }"></div>
-          <div class="header-stat">
-            <span class="header-stat-value">{{ stats.total }}</span>
-            <span class="header-stat-label">Total</span>
-          </div>
-          <div class="header-stat header-stat--active">
-            <span class="header-stat-value">{{ stats.active }}</span>
-            <span class="header-stat-label">Active</span>
-          </div>
-          <div class="header-stat header-stat--waiting">
-            <span class="header-stat-value">{{ stats.waiting }}</span>
-            <span class="header-stat-label">Waiting</span>
-          </div>
-          <div class="header-stat header-stat--idle">
-            <span class="header-stat-value">{{ stats.idle }}</span>
-            <span class="header-stat-label">Idle</span>
-          </div>
-        </div>
-
         <div class="header-right">
           <NButton
             size="small"
             quaternary
+            aria-label="刷新"
             @click="refresh"
           >
             <template #icon>
               <NIcon><RefreshOutline /></NIcon>
             </template>
-            Refresh
+            <span class="header-action-label">Refresh</span>
           </NButton>
-          <span v-if="data" class="header-updated">Last updated: {{ new Date(data.now).toLocaleTimeString() }}</span>
+          <span v-if="data" class="header-updated"><span class="header-updated-label">Last updated: </span>{{ new Date(data.now).toLocaleTimeString() }}</span>
           <NButton
             size="small"
             quaternary
+            aria-label="设置"
             @click="emit('openSettings')"
           >
             <template #icon>
               <NIcon><SettingsOutline /></NIcon>
             </template>
-            设置
+            <span class="header-action-label">设置</span>
           </NButton>
         </div>
       </div>
@@ -1004,6 +976,7 @@ function rowProps(row: DashboardEntry) {
                   :highlight="getGroupScore(group.key)?.highlight ?? 0"
                   :fog-pct="getGroupScore(group.key)?.fog_pct ?? 0"
                   @check="handleCheckChange"
+                  @row-click="openDetail"
                 />
               </NCollapseItem>
             </NCollapse>
@@ -1028,6 +1001,7 @@ function rowProps(row: DashboardEntry) {
                   :highlight="getGroupScore(group.key)?.highlight ?? 0"
                   :fog-pct="getGroupScore(group.key)?.fog_pct ?? 0"
                   @check="handleCheckChange"
+                  @row-click="openDetail"
                 />
               </NCollapseItem>
             </NCollapse>
@@ -1053,7 +1027,7 @@ function rowProps(row: DashboardEntry) {
     </NLayoutContent>
 
     <!-- Session Detail Drawer -->
-    <NDrawer v-model:show="showDetail" :width="drawerWidth" placement="right">
+    <NDrawer v-model:show="showDetail" :width="detailDrawerWidth" placement="right">
       <NDrawerContent v-if="selectedSession" title="Session Detail" closable>
         <div class="resize-handle" @mousedown="startResize"></div>
         <NDescriptions label-placement="left" :column="1" bordered size="small" label-style="width: 100px; min-width: 100px; white-space: nowrap">
@@ -1226,54 +1200,6 @@ function rowProps(row: DashboardEntry) {
   margin: 0;
   font-size: 20px;
   font-weight: 700;
-}
-
-/* Stats in header */
-.header-stats {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--n-border-color);
-}
-
-.header-stat {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  background: var(--n-color-target);
-  border-right: 1px solid var(--n-border-color);
-}
-
-.header-stat:last-child {
-  border-right: none;
-}
-
-.header-stat-value {
-  font-size: 16px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.header-stat-label {
-  font-size: 11px;
-  color: var(--n-text-color-4);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.header-stat--active .header-stat-value {
-  color: #18a058;
-}
-
-.header-stat--waiting .header-stat-value {
-  color: #f0a020;
-}
-
-.header-stat--idle .header-stat-value {
-  color: #999;
 }
 
 .header-right {
@@ -1547,6 +1473,26 @@ function rowProps(row: DashboardEntry) {
   color: var(--n-text-color-3);
 }
 
+@media (max-width: 760px) {
+  .header {
+    gap: 8px;
+    height: auto;
+    padding: 8px 12px;
+  }
+  .header-left { min-width: 0; }
+  .title { font-size: 18px; white-space: nowrap; }
+  .header-right { gap: 2px; min-width: 0; }
+  .header-right :deep(.n-button) { min-width: 32px; padding: 0 4px; }
+  .header-action-label, .header-updated-label { display: none; }
+  .header-updated { font-size: 11px; }
+  .content { padding: 4px 10px 24px; min-width: 0; }
+  .feature-zone { margin: 12px 0; padding: 12px; }
+  .groups-container { gap: 12px; }
+  .goal-card { padding: 12px; }
+  .goal-card-text, .goal-card-input { font-size: 15px; }
+  .resize-handle { display: none; }
+}
+
 /* ── Focus mode dimming ──────────────────────── */
 
 .focus-overlay {
@@ -1559,7 +1505,6 @@ function rowProps(row: DashboardEntry) {
 }
 
 /* Containers that hold focus overlays need positioning */
-.header-stats,
 .zone-collapse-wrap {
   position: relative;
 }

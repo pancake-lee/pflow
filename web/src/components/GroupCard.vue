@@ -34,6 +34,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   check: [group: SessionGroup, checked: boolean]
+  rowClick: [row: DashboardEntry]
 }>()
 
 function onCheckChange(checked: boolean) {
@@ -131,15 +132,24 @@ const fogStyle = computed(() => {
     <div v-if="group.sessions.length === 0" class="card-empty">
       <span>没有活动session</span>
     </div>
-    <NDataTable
-      v-else
-      :columns="columns"
-      :data="tableData"
-      :row-props="wrappedRowProps"
-      :bordered="false"
-      :single-line="false"
-      size="small"
-    />
+    <template v-else>
+      <div class="desktop-session-table">
+        <NDataTable
+          :columns="columns"
+          :data="tableData"
+          :row-props="wrappedRowProps"
+          :bordered="false"
+          :single-line="false"
+          size="small"
+        />
+      </div>
+      <div class="mobile-session-list">
+        <button v-for="session in group.sessions" :key="session.session_id" type="button" class="mobile-session" @click="emit('rowClick', session)">
+          <span class="mobile-session-name">{{ session.name || session.session_id }}</span>
+          <span class="mobile-session-meta">{{ session.traffic_light }} {{ session.status }} · {{ session.agent_type }} · {{ session.session_id }}</span>
+        </button>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -151,6 +161,19 @@ const fogStyle = computed(() => {
   overflow: hidden;
   border: 1px solid var(--n-border-color);
   transition: border-color 0.2s;
+}
+
+.mobile-session-list { display: none; }
+
+@media (max-width: 760px) {
+  .group-header { align-items: flex-start; flex-wrap: wrap; }
+  .group-header-left, .group-header-right { min-width: 0; }
+  .group-path-hint { display: none; }
+  .desktop-session-table { display: none; }
+  .mobile-session-list { display: flex; flex-direction: column; }
+  .mobile-session { display: flex; flex-direction: column; gap: 3px; min-height: 44px; width: 100%; padding: 9px 12px; border: 0; border-top: 1px solid rgba(255, 255, 255, .08); color: inherit; background: none; text-align: left; }
+  .mobile-session-name { font-size: 12px; overflow-wrap: anywhere; }
+  .mobile-session-meta { color: var(--n-text-color-3); font-size: 11px; overflow-wrap: anywhere; }
 }
 
 /* ── Fog overlay (::before) ──────────────────── */

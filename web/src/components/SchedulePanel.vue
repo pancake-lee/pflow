@@ -42,7 +42,6 @@ const activeLeave = ref<Event | null>(null)
 const leaveOpen = ref(false)
 const leaveIntent = ref('')
 const leaveRemaining = ref(10)
-const mobileIntent = ref('')
 const emit = defineEmits<{ edit: [] }>()
 const message = useMessage()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -235,7 +234,6 @@ async function act(action: string, id = current.value?.id, actionNote = '') {
     if (action === 'leave' && activeLeave.value) {
       leaveOpen.value = false
       leaveIntent.value = ''
-      mobileIntent.value = ''
       stopLeaveTimer()
     }
   } catch {
@@ -404,8 +402,9 @@ onUnmounted(() => {
     <div class="s-toolbar">
       <div class="s-heading">
         <strong>今日日程</strong>
-        <span v-if="todayReview" class="s-score">今日积分 {{ formatPoints(todayReview.score) }}<template v-if="todayReview.max_score > 0"> / {{ todayReview.max_score }}</template> · 标准分 {{ formatStandardScore(todayReview.standard_score) }}<template v-if="todayReview.incomplete_legacy_items"> · 旧记录未计入</template></span>
+        <span v-if="todayReview" class="s-score">积分 {{ formatPoints(todayReview.score) }}<template v-if="todayReview.max_score > 0">/{{ todayReview.max_score }}</template> · 标准分 {{ formatStandardScore(todayReview.standard_score) }}</span>
       </div>
+      <small v-if="todayReview?.incomplete_legacy_items" class="s-legacy">旧记录未计入</small>
       <div class="s-toolbar-actions">
         <NSelect
           v-if="items.length"
@@ -430,18 +429,16 @@ onUnmounted(() => {
     >
       <div class="s-head">
         <span class="s-label">当前日程</span>
-        <div class="s-actions">
-          <template v-if="current.id">
-            <NButton size="small" :loading="acting" :disabled="!!loadError || !!activeLeave" @click="act('completed')">完成 {{ formatPoints(completionPoints) }}</NButton>
-            <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="act('skipped')">跳过 −3</NButton>
-            <NButton size="small" quaternary :disabled="acting || !!loadError || !!activeLeave" @click="openLeave">暂离</NButton>
-          </template>
-        </div>
       </div>
       <div class="s-body">
         <span class="s-title">{{ phase === 'break' ? `☕ 休息中（约 ${breakRemainingMinutes} 分钟）：` : '' }}{{ current.title }}</span>
         <small class="s-meta">{{ current.id ? `${itemTime(current)} · ${current.focus_minutes} 分钟` : '自由安排时间' }}</small>
         <small v-if="elapsed" class="s-meta">{{ elapsed }}</small>
+      </div>
+      <div v-if="current.id" class="s-actions">
+        <NButton size="small" :loading="acting" :disabled="!!loadError || !!activeLeave" @click="act('completed')">完成 {{ formatPoints(completionPoints) }}</NButton>
+        <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="act('skipped')">跳过 −3</NButton>
+        <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="openLeave">暂离</NButton>
       </div>
     </div>
     <div v-if="next" class="s-card s-card--next" :style="nextStyle">
@@ -479,10 +476,6 @@ onUnmounted(() => {
         </template>
       </div>
     </NModal>
-    <div v-if="current?.id && !activeLeave" class="s-mobile-cue">
-      <NInput v-model:value="mobileIntent" size="small" placeholder="记下当前意图或返回线索" maxlength="200" />
-      <NButton size="small" :disabled="!mobileIntent.trim() || acting" @click="act('leave', current?.id, mobileIntent)">记录并暂离</NButton>
-    </div>
     <NModal
       v-model:show="parkingOpen"
       preset="card"
@@ -546,8 +539,10 @@ onUnmounted(() => {
 .schedule { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; padding: 14px; border: 1px solid rgba(94, 163, 240, .28); border-radius: 12px; background: rgba(32, 128, 240, .025); }
 .s-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .s-toolbar strong { color: #8bbdff; font-size: 14px; }
-.s-heading { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-.s-score { color: var(--n-text-color-2); font-size: 12px; }
+.s-heading { display: flex; align-items: baseline; gap: 12px; flex-wrap: nowrap; min-width: 0; }
+.s-heading strong { flex-shrink: 0; }
+.s-score { color: var(--n-text-color-2); font-size: 12px; white-space: nowrap; }
+.s-legacy { color: var(--n-text-color-3); }
 .s-toolbar-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .s-reorder { width: 150px; }
 .s-card { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border: 1px solid rgba(94, 163, 240, .35); border-radius: 10px; background: rgba(32, 128, 240, .08); }
@@ -593,7 +588,7 @@ onUnmounted(() => {
 /* ── Card content ─────────────────────────────── */
 .s-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .s-label { font-size: 11px; color: #8bbdff; letter-spacing: .5px; }
-.s-actions { display: flex; gap: 8px; align-items: center; }
+.s-actions { display: flex; justify-content: center; gap: 8px; align-items: center; margin-top: 8px; }
 .s-body { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .s-title { color: #8bbdff; font-weight: 600; }
 .s-card--next .s-title { color: #ccc; }
@@ -617,7 +612,6 @@ onUnmounted(() => {
 .s-parking-actions button:hover:not(:disabled) { background: rgba(0, 0, 0, .2); }
 .s-parking-actions button:disabled { opacity: .5; cursor: default; }
 .s-leave { display: grid; gap: 8px; font-size: 13px; }
-.s-mobile-cue { display: none; }
 .s-extra-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .s-extra-row .n-input { max-width: 300px; }
 .s-events { max-height: 320px; overflow: auto; font-size: 12px; color: #aaa; }
@@ -635,9 +629,24 @@ onUnmounted(() => {
 }
 
 @media (max-width: 760px) {
+  .schedule { padding: 12px; min-width: 0; }
+  .s-toolbar { align-items: stretch; }
+  .s-heading { gap: 8px; }
+  .s-score { font-size: 11px; line-height: 1.4; }
+  .s-toolbar-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    gap: 4px;
+  }
+  .s-reorder { width: 100%; grid-column: 1 / -1; }
+  .s-toolbar-actions :deep(.n-button) { width: 100%; min-width: 0; min-height: 36px; padding: 0 4px; }
+  .s-card { min-width: 0; padding: 10px 12px; }
   .s-head { flex-direction: column; align-items: flex-start; }
-  .s-actions { flex-wrap: wrap; }
-  .s-mobile-cue { display: flex; gap: 8px; align-items: center; }
-  .s-mobile-cue .n-input { flex: 1; min-width: 0; }
+  .s-actions { flex-wrap: nowrap; gap: 6px; }
+  .s-actions :deep(.n-button) { min-width: 0; min-height: 36px; padding: 0 8px; }
+  .s-body { align-items: flex-start; flex-direction: column; gap: 2px; min-width: 0; }
+  .s-title { overflow-wrap: anywhere; }
+  .s-card--next .s-body { filter: none; opacity: 1; }
 }
 </style>

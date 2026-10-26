@@ -316,14 +316,27 @@ function rowProps(row: DashboardEntry) {
       <!-- Other sessions table -->
       <div v-if="!compactSessions" class="other-sessions">
         <div class="other-header">{{ otherSessions.length > 0 ? `${otherSessions.length} more` : 'Other sessions' }}</div>
-        <NDataTable
-          :columns="tableColumns"
-          :data="tableData"
-          :row-props="rowProps"
-          :bordered="false"
-          :single-line="false"
-          size="small"
-        />
+        <div class="desktop-session-table">
+          <NDataTable
+            :columns="tableColumns"
+            :data="tableData"
+            :row-props="rowProps"
+            :bordered="false"
+            :single-line="false"
+            size="small"
+          />
+        </div>
+        <div class="mobile-session-list">
+          <div v-for="session in otherSessions" :key="session.session_id" class="mobile-session">
+            <button type="button" class="mobile-session-main" @click="emit('rowClick', session)">
+              <span class="mobile-session-name">{{ session.name || session.session_id }}</span>
+              <span class="mobile-session-meta">{{ session.traffic_light }} {{ session.status }} · {{ formatSince(session.last_active) }} · {{ formatMinutes(session.today_minutes) }}</span>
+            </button>
+            <NButton size="small" quaternary :aria-label="session.session_id === starredSessionId ? '取消星标' : '星标会话'" @click="emit('starSession', session.session_id)">{{ session.session_id === starredSessionId ? '🌟' : '⭐' }}</NButton>
+            <NButton v-if="session.has_terminal" size="small" quaternary aria-label="打开终端" @click="emit('openTerminal', session)">🖥</NButton>
+          </div>
+          <div v-if="!otherSessions.length" class="mobile-session-empty">没有其他会话</div>
+        </div>
       </div>
     </template>
 
@@ -341,7 +354,7 @@ function rowProps(row: DashboardEntry) {
         <div class="ms-req-label">Last Request</div>
         <div class="ms-req-text">—</div>
       </div>
-      <div v-if="!compactSessions" class="other-sessions">
+      <div v-if="!compactSessions" class="other-sessions desktop-session-table">
         <div class="other-header">Other sessions (0)</div>
         <NDataTable
           :columns="tableColumns"
@@ -607,6 +620,27 @@ function rowProps(row: DashboardEntry) {
   text-align: center;
   color: var(--n-text-color-4);
   font-size: 12px;
+}
+
+.mobile-session-list { display: none; }
+
+@media (max-width: 760px) {
+  .card-header { padding: 10px; }
+  .card-header-content { gap: 6px; }
+  .project-summary { flex: 1 1 100%; min-width: 0; flex-wrap: wrap; }
+  .project-summary :deep(.n-select) { flex: 1 1 150px; width: auto !important; min-width: 0; }
+  .project-summary .h-sep, .session-meta .h-sep, .card-header-content > .h-sep { display: none; }
+  .session-flow { flex: 1 1 100%; }
+  .session-meta { flex-wrap: wrap; min-width: 0; white-space: normal; }
+  .h-sid { overflow: hidden; text-overflow: ellipsis; max-width: 86px; }
+  .desktop-session-table { display: none; }
+  .mobile-session-list { display: flex; flex-direction: column; }
+  .mobile-session { display: flex; align-items: center; gap: 2px; min-height: 44px; padding: 8px 10px; border-top: 1px solid rgba(255, 255, 255, .08); min-width: 0; }
+  .mobile-session :deep(.n-button) { min-width: 36px; min-height: 36px; }
+  .mobile-session-main { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; padding: 0; border: 0; color: inherit; background: none; text-align: left; }
+  .mobile-session-name { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .mobile-session-meta, .mobile-session-empty { color: var(--n-text-color-3); font-size: 11px; }
+  .mobile-session-empty { padding: 8px 10px; }
 }
 
 /* ── Focus mode overlay ─────────────────────── */
