@@ -261,7 +261,7 @@ function hasActiveStart(id: string) {
     const event = events.value[i]
     if (event.task_id !== id) continue
     if (event.action === 'start') return true
-    if (['pause', 'completed', 'skipped'].includes(event.action)) return false
+    if (['pause', 'completed', 'makeup_completed', 'skipped'].includes(event.action)) return false
   }
   return false
 }
@@ -318,7 +318,7 @@ function formatStandardScore(score: number | null | undefined) {
 
 function eventPoints(event: Event) {
   if (event.points != null) return event.points
-  if (event.action === 'completed') return 10
+  if (event.action === 'completed' || event.action === 'makeup_completed') return 10
   if (event.action === 'skipped' || event.action === 'reorder') return -3
   return 0
 }
@@ -345,7 +345,7 @@ const elapsed = computed(() => {
 })
 
 const actionLabel: Record<string, string> = {
-  start: '开始', completed: '完成', skipped: '跳过',
+  start: '开始', completed: '完成', makeup_completed: '补卡完成', skipped: '跳过',
   pause: '暂停计时',
   early: '提前', reorder: '跳转日程', delay: '拖延', note: '备注',
   park: '记下', parking_processed: '处理停车场',
@@ -439,6 +439,7 @@ onUnmounted(() => {
         <NButton size="small" :loading="acting" :disabled="!!loadError || !!activeLeave" @click="act('completed')">完成 {{ formatPoints(completionPoints) }}</NButton>
         <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="act('skipped')">跳过 −3</NButton>
         <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="openLeave">暂离</NButton>
+        <NButton size="small" :disabled="acting || !!loadError || !!activeLeave" @click="act('makeup_completed')">补卡 +10</NButton>
       </div>
     </div>
     <div v-if="next" class="s-card s-card--next" :style="nextStyle">
@@ -643,8 +644,8 @@ onUnmounted(() => {
   .s-toolbar-actions :deep(.n-button) { width: 100%; min-width: 0; min-height: 36px; padding: 0 4px; }
   .s-card { min-width: 0; padding: 10px 12px; }
   .s-head { flex-direction: column; align-items: flex-start; }
-  .s-actions { flex-wrap: nowrap; gap: 6px; }
-  .s-actions :deep(.n-button) { min-width: 0; min-height: 36px; padding: 0 8px; }
+  .s-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+  .s-actions :deep(.n-button) { width: 100%; min-width: 0; min-height: 36px; padding: 0 2px; font-size: 12px; }
   .s-body { align-items: flex-start; flex-direction: column; gap: 2px; min-width: 0; }
   .s-title { overflow-wrap: anywhere; }
   .s-card--next .s-body { filter: none; opacity: 1; }

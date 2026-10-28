@@ -442,6 +442,13 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		if action == item.Status {
 			return nil
 		}
+		if action == "makeup_completed" && item.Status == "completed" {
+			for _, event := range day.Events {
+				if event.TaskID == taskID && event.Action == action {
+					return nil
+				}
+			}
+		}
 		return fmt.Errorf("%w: item already handled", ErrInvalidAction)
 	}
 	if action == "reorder" {
@@ -483,16 +490,23 @@ func ApplyAction(day *Day, taskID, action, note string, now time.Time) error {
 		appendEvent(day, taskID, action, "", now, nil)
 	case "delay":
 		appendEvent(day, taskID, action, "", now, nil)
-	case "completed", "skipped":
+	case "completed", "makeup_completed", "skipped":
 		var duration *int64
 		if seconds, recorded := accumulatedDuration(day.Events, taskID, now); recorded {
 			duration = &seconds
 		}
-		item.Status = action
+		if action == "skipped" {
+			item.Status = "skipped"
+		} else {
+			item.Status = "completed"
+		}
 		item.CompletedAt = now
 		appendEvent(day, taskID, action, "", now, duration)
 		if action == "completed" {
 			points := CompletionPoints(*day, taskID, now)
+			day.Events[len(day.Events)-1].Points = &points
+		} else if action == "makeup_completed" {
+			points := 10
 			day.Events[len(day.Events)-1].Points = &points
 		}
 		Advance(day, taskID)
@@ -552,7 +566,8 @@ func activeStart(events []Event, taskID string) *Event {
 		if event.TaskID != taskID {
 			continue
 		}
-		if event.Action == "completed" || event.Action == "skipped" || event.Action == "pause" {
+		switch event.Action {
+		case "completed", "makeup_completed", "skipped", "pause":
 			return nil
 		}
 		if event.Action == "start" {
@@ -621,7 +636,7 @@ func EventPoints(event Event) int {
 		return *event.Points
 	}
 	switch event.Action {
-	case "completed":
+	case "completed", "makeup_completed":
 		return 10
 	case "skipped", "reorder":
 		return -3
@@ -640,7 +655,7 @@ func SummarizeReview(day Day) ReviewSummary {
 	handled := make(map[string]bool, len(day.Events))
 	for _, event := range day.Events {
 		switch event.Action {
-		case "completed":
+		case "completed", "makeup_completed":
 			summary.CompletedCount++
 			if EventPoints(event) < 0 {
 				summary.DeviationCount++
@@ -655,7 +670,9 @@ func SummarizeReview(day Day) ReviewSummary {
 			}
 		}
 		if event.DurationSeconds != nil &&
-			(event.Action == "completed" || event.Action == "skipped") {
+			(event.Action == "completed" ||
+				event.Action == "makeup_completed" ||
+				event.Action == "skipped") {
 			summary.TotalDurationSeconds += *event.DurationSeconds
 		}
 	}

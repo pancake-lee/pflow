@@ -344,6 +344,65 @@ func TestCompletionPointsUsePlannedFocusAndBreakInterval(t *testing.T) {
 	}
 }
 
+func TestMakeupCompletionRecordsTenPointsAfterPlannedEnd(t *testing.T) {
+	start := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{
+		{ID: "a", Start: "09:00", FocusMinutes: 30},
+		{ID: "b", Start: "12:00", FocusMinutes: 30},
+	}}
+	err := ApplyAction(&day, "a", "start", "", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ApplyAction(&day, "a", "makeup_completed", "", start.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if day.Items[0].Status != "completed" || day.CurrentID != "b" {
+		t.Fatalf("makeup did not complete and advance: %+v", day)
+	}
+	if len(day.Events) != 2 || day.Events[1].Action != "makeup_completed" ||
+		EventPoints(day.Events[1]) != 10 || day.Events[1].DurationSeconds == nil ||
+		*day.Events[1].DurationSeconds != 7200 {
+		t.Fatalf("makeup event=%+v", day.Events)
+	}
+	summary := SummarizeReview(day)
+	if summary.Score != 10 || summary.CompletedCount != 1 ||
+		summary.DeviationCount != 0 || summary.TotalDurationSeconds != 7200 {
+		t.Fatalf("makeup review=%+v", summary)
+	}
+	err = ApplyAction(&day, "a", "makeup_completed", "", start.Add(3*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(day.Events) != 2 || Score(day.Events) != 10 {
+		t.Fatalf("duplicate makeup changed score: %+v", day.Events)
+	}
+}
+
+func TestMakeupCompletionDoesNotChangeAnEarlierCompletion(t *testing.T) {
+	now := time.Date(2026, 10, 25, 11, 0, 0, 0, time.UTC)
+	day := Day{Date: "2026-10-25", CurrentID: "a", Items: []Item{
+		{ID: "a", Start: "09:00", FocusMinutes: 30},
+		{ID: "b", Start: "12:00", FocusMinutes: 30},
+	}}
+	err := ApplyAction(&day, "b", "makeup_completed", "", now)
+	if !errors.Is(err, ErrInvalidAction) {
+		t.Fatalf("next item makeup without jump: %v", err)
+	}
+	err = ApplyAction(&day, "a", "completed", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ApplyAction(&day, "a", "makeup_completed", "", now.Add(time.Minute))
+	if !errors.Is(err, ErrInvalidAction) {
+		t.Fatalf("changed an existing completion: %v", err)
+	}
+	if len(day.Events) != 1 || Score(day.Events) != -3 {
+		t.Fatalf("earlier completion changed: %+v", day.Events)
+	}
+}
+
 func TestStandardScoreForVariableAndEmptyPlans(t *testing.T) {
 	completed := Event{Action: "completed"}
 	legacyJump := Event{Action: "reorder"}

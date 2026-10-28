@@ -179,3 +179,19 @@ test('completion preview changes at the plan boundary and the next card has no c
   }
   assert.equal(readFileSync(new URL('../src/components/SchedulePanel.vue', import.meta.url), 'utf8').includes('提前完成'), false)
 })
+
+test('makeup completion sends its own action and labels the review event', async () => {
+  const actions = []
+  const api = panel(async (_, options) => {
+    if (options) {
+      actions.push(JSON.parse(options.body).action)
+      return { ok: true, json: async () => ({ events: [] }) }
+    }
+    return { ok: true, json: async () => ({ day: { date: '2026-10-13' }, current: { id: 'b', title: 'B' }, phase: 'focus' }) }
+  })
+  await api.run("act('makeup_completed')")
+  assert.equal(actions[0], 'makeup_completed')
+  assert.equal(api.run('current.value.id'), 'b')
+  assert.equal(api.run("actionLabel.makeup_completed"), '补卡完成')
+  assert.equal(api.run("eventPoints({action:'makeup_completed'})"), 10)
+})

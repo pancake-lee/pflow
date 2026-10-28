@@ -182,6 +182,51 @@ func TestScheduleActionPersistsOnceAndRejectsCompletionWithoutJump(t *testing.T)
 	}
 }
 
+func TestScheduleMakeupCompletionPersistsOnce(t *testing.T) {
+	server := NewServer(nil, nil)
+	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
+	date := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	day := schedule.Day{Date: date, CurrentID: "a", Items: []schedule.Item{
+		{ID: "a", Start: "09:00", Title: "A", FocusMinutes: 30},
+		{ID: "b", Start: "10:00", Title: "B", FocusMinutes: 30},
+	}}
+	err := server.scheduleMgr.Save(schedule.File{
+		Days: map[string]schedule.Day{date: day},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestBody := fmt.Sprintf(`{"date":%q,"id":"a","action":"makeup_completed"}`, date)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodPost, "/api/v1/schedules/action", bytes.NewBufferString(requestBody),
+	))
+	if response.Code != http.StatusOK {
+		t.Fatalf("makeup status=%d body=%s", response.Code, response.Body.String())
+	}
+	loaded, err := server.scheduleMgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := loaded.Days[date]
+	if saved.Items[0].Status != "completed" || saved.CurrentID != "b" ||
+		len(saved.Events) != 1 || saved.Events[0].Action != "makeup_completed" ||
+		schedule.Score(saved.Events) != 10 {
+		t.Fatalf("saved makeup=%+v", saved)
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(
+		http.MethodPost, "/api/v1/schedules/action", bytes.NewBufferString(requestBody),
+	))
+	if response.Code != http.StatusOK {
+		t.Fatalf("repeated makeup status=%d body=%s", response.Code, response.Body.String())
+	}
+	loaded, err = server.scheduleMgr.Load()
+	if err != nil || len(loaded.Days[date].Events) != 1 {
+		t.Fatalf("repeated makeup changed history: err=%v day=%+v", err, loaded.Days[date])
+	}
+}
+
 func TestActiveLeaveRemainsVisibleAfterScheduleDateChanges(t *testing.T) {
 	server := NewServer(nil, nil)
 	server.scheduleMgr = schedule.NewManagerAt(filepath.Join(t.TempDir(), "schedules.json"))
